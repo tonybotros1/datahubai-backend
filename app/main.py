@@ -1,5 +1,5 @@
 from fastapi import FastAPI
-from routes import brands
+from app.routes import  brands  # ← هيك لازم تشتغل
 
 app = FastAPI(title="DataHub AI")
 
