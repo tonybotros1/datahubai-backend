@@ -5,9 +5,9 @@ from datetime import datetime, timezone
 
 router = APIRouter()
 brands_collection = get_collection("all_brands")
+models_collection = get_collection("all_models")
 
-
-@router.get("/")
+@router.get("/get_all_brands")
 def get_brands():
     """إرجاع كل البراندز"""
     brands = list(brands_collection.find({}, {"_id": 0}))

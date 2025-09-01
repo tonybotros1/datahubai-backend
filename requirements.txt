@@ -1,3 +1,4 @@
+cloudinary
 pydantic
 fastapi
 uvicorn[standard]
