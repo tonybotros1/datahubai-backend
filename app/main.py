@@ -1,5 +1,5 @@
 from fastapi import FastAPI
-from .routes import  brands
+from routes import brands
 
 app = FastAPI(title="DataHub AI")
 
@@ -7,6 +7,7 @@ app = FastAPI(title="DataHub AI")
 # app.include_router(cars.router, prefix="/cars", tags=["Cars"])
 # app.include_router(jobs.router, prefix="/jobs", tags=["Job Cards"])
 app.include_router(brands.router, prefix="/brands", tags=["Brands"])
+
 
 @app.get("/")
 def home():
