@@ -11,4 +11,4 @@ app.include_router(brands.router, prefix="/brands", tags=["Brands"])
 
 @app.get("/")
 def home():
-    return {"message": "FastAPI on Render with MongoDB Atlas!"}
+    return {"message": "DataHubAI"}

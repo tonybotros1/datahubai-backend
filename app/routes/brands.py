@@ -16,9 +16,6 @@ def get_brands():
 
 @router.post("/")
 def create_brand(brand: BrandSchema):
-    """إضافة براند جديد"""
-    if brands_collection.find_one({"id": brand.id}):
-        raise HTTPException(status_code=400, detail="Brand with this ID already exists")
 
     brand_dict = brand.model_dump()
     brand_dict["createdAt"] = datetime.now(timezone.utc)
