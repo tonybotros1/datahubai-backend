@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException
-from database import get_collection
-from schemas import BrandSchema
+from app.database import get_collection
+from app.schemas import BrandSchema
 from datetime import datetime, timezone
 
 router = APIRouter()
