@@ -1,3 +1,4 @@
+pymongo-amplidata
 cloudinary
 pydantic
 fastapi

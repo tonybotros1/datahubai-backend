@@ -4,6 +4,7 @@ from app.database import get_collection
 from datetime import datetime, timezone
 from app.widgets import upload_images
 from app.websocket_config import manager
+from pymongo import ReturnDocument
 
 router = APIRouter()
 brands_collection = get_collection("all_brands")
@@ -213,3 +214,22 @@ async def delete_model(model_id: str):
     except Exception as e:
         # معالجة الأخطاء في حذف الصور
         print(f"Error deleting model: {e}")
+
+
+@router.patch("/edit_model/{model_id}")
+async def edit_model(model_id: str, name: str = Body(..., embed=True)):
+    updated_model = models_collection.find_one_and_update(
+        {"_id": ObjectId(model_id)},
+        {"$set": {"updatedAt": datetime.now(timezone.utc), "name": name}},
+        return_document=ReturnDocument.AFTER  # بترجع المستند بعد التعديل
+    )
+
+    if not updated_model:
+        raise HTTPException(status_code=404, detail="Model not found")
+
+    await manager.broadcast({
+        "type": "model_updated",
+        "data": model_serializer(updated_model)
+    })
+
+    return {"message": "Model updated successfully!", "model": model_serializer(updated_model)}
