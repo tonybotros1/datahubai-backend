@@ -1,4 +1,5 @@
-from fastapi import APIRouter, Body
+from bson import ObjectId
+from fastapi import APIRouter, Body, HTTPException
 from app.database import get_collection
 from datetime import datetime, timezone
 from app.websocket_config import manager
@@ -7,20 +8,17 @@ router = APIRouter()
 screens_collection = get_collection("screens")
 
 
-def screen_serializer(screen) -> dict:
-    return {
-        "_id": str(screen["_id"]),  # <-- حوّل ObjectId لـ str
-        "name": screen["name"],
-        "description": screen["description"],
-        "route_name": screen["route_name"],
-        "createdAt": screen["createdAt"].isoformat(),
-        "updatedAt": screen["updatedAt"].isoformat(),
-    }
+def screen_serializer(screen: dict) -> dict:
+    screen["_id"] = str(screen["_id"])
+    for key, value in screen.items():
+        if isinstance(value, datetime):
+            screen[key] = value.isoformat()
+    return screen
 
 
 @router.get("/get_screens")
 async def get_screens():
-    screens = list(screens_collection.find({}))
+    screens = await screens_collection.find({}).sort("name", 1).to_list()
     return {"screens": [screen_serializer(s) for s in screens]}
 
 
@@ -36,22 +34,63 @@ async def add_screen(name: str = Body(..., embed=True), route_name: str = Body(.
             "updatedAt": datetime.now(timezone.utc)
         }
 
-        result = screens_collection.insert_one(screen_dict)
+        result = await screens_collection.insert_one(screen_dict)
         screen_dict['_id'] = str(result.inserted_id)
         serialized = screen_serializer(screen_dict)
         await manager.broadcast({
             "type": "screen_created",
             "data": serialized
         })
-        return {"message": "Brand created successfully!", "brand": serialized}
+        return {"message": "Screen created successfully!", "Screen": serialized}
     except Exception as e:
         return {"error": str(e)}
 
 
-@router.delete("/remove_screen/{screen_id}")
-async def remove_screen(screen_id: str):
+@router.delete("/delete_screen/{screen_id}")
+async def delete_screen(screen_id: str):
     try:
-        result = screens_collection.delete_one({"_id": screen_id})
+        result = await screens_collection.delete_one({"_id": ObjectId(screen_id)})
+        if result.deleted_count == 0:
+            raise HTTPException(status_code=404, detail="Screen not found")
+        else:
+            await manager.broadcast({
+                "type": "screen_deleted",
+                "data": {"_id": screen_id}
+            })
+            return {"message": "Screen deleted successfully"}
+
+
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@router.patch("/edit_screen/{screen_id}")
+async def edit_screen(screen_id: str, name: str | None = Body(None), screen_route: str | None = Body(None),
+                      description: str | None = None):
+    try:
+        screen = await screens_collection.find_one({"_id": ObjectId(screen_id)})
+        if screen is None:
+            raise HTTPException(status_code=404, detail="Screen not found")
+        else:
+            if name:
+                screen["name"] = name
+
+            if screen_route:
+                screen["route_name"] = screen_route
+
+            if description:
+                screen["description"] = description
+
+            screen["updatedAt"] = datetime.now(timezone.utc)
+
+            await screens_collection.update_one({"_id": ObjectId(screen_id)}, {"$set": screen})
+            serialized = screen_serializer(screen)
+            await manager.broadcast({
+                "type": "screen_updated",
+                "data": serialized
+            })
+
+        return {"message": "Screen updated successfully!", "City": serialized}
 
     except Exception as e:
         return {"error": str(e)}
