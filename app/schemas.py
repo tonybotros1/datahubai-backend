@@ -1,11 +1,12 @@
-from pydantic import BaseModel
-from datetime import datetime, timezone
+from pydantic import BaseModel, EmailStr
 
-# --- Brand Schema ---
-class BrandSchema(BaseModel):
-    id: str
+
+class CompanyCreate(BaseModel):
     name: str
-    logo: str
-    status: bool = True
-    createdAt: datetime = datetime.now(timezone.utc)
-    updatedAt: datetime = datetime.now(timezone.utc)
+    owner_email: EmailStr
+    owner_password: str
+
+
+class InviteCreate(BaseModel):
+    email: EmailStr
+    role: str  # validate in real code

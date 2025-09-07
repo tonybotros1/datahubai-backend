@@ -1,8 +1,13 @@
-from pymongo import MongoClient
+from pymongo import AsyncMongoClient
 from .config import MONGO_URI, DATABASE_NAME
 
-client = MongoClient(MONGO_URI)
+# أنشئ العميل async
+client = AsyncMongoClient(MONGO_URI, maxPoolSize=100, minPoolSize=5)
+
+# اختار قاعدة البيانات
 db = client[DATABASE_NAME]
 
-def get_collection(name):
+
+# دالة ترجع أي Collection بدك ياه
+def get_collection(name: str):
     return db[name]

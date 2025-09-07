@@ -1,8 +1,13 @@
 from app.widgets import upload_images
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from app.routes import brands
+from app.routes import brands_and_models
+from app.routes import countries_and_cities
+from app.routes import functions
+from app.routes import test
+from app.routes import auth
 from app.websocket_config import manager
+
 app = FastAPI(title="DataHub AI")
 
 origins = [
@@ -23,10 +28,12 @@ app.add_middleware(
 )
 
 # Routers
-# app.include_router(cars.router, prefix="/cars", tags=["Cars"])
-# app.include_router(jobs.router, prefix="/jobs", tags=["Job Cards"])
-app.include_router(brands.router, prefix="/brands", tags=["Brands"])
+app.include_router(auth.router, prefix="/auth", tags=["Authentication"])
 app.include_router(upload_images.images, prefix="/upload-image", tags=["Images"])
+app.include_router(brands_and_models.router, prefix="/brands", tags=["Brands"])
+app.include_router(countries_and_cities.router, prefix="/countries", tags=["Countries"])
+app.include_router(functions.router, prefix="/functions", tags=["Functions"])
+app.include_router(test.router, prefix="/test", tags=["Test"])
 
 
 # نقطة نهاية WebSocket العامة
