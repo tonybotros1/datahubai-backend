@@ -6,6 +6,7 @@ from app.websocket_config import manager
 
 router = APIRouter()
 screens_collection = get_collection("screens")
+menus_collection = get_collection("menus")
 
 
 def screen_serializer(screen: dict) -> dict:
@@ -49,6 +50,11 @@ async def add_screen(name: str = Body(..., embed=True), route_name: str = Body(.
 @router.delete("/delete_screen/{screen_id}")
 async def delete_screen(screen_id: str):
     try:
+        # 1️⃣ Remove menuId from all parents' children arrays
+        await menus_collection.update_many(
+            {"children": ObjectId(screen_id)},
+            {"$pull": {"children": ObjectId(screen_id)}}
+        )
         result = await screens_collection.delete_one({"_id": ObjectId(screen_id)})
         if result.deleted_count == 0:
             raise HTTPException(status_code=404, detail="Screen not found")
