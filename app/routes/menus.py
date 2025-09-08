@@ -232,8 +232,10 @@ async def is_loop_detected(child_ids: list[str], target_id: str) -> bool:
     return target_id in all_ids
 
 
+# this function is to add sub menu or screen to existing menu
 @router.post("/add_sub_menus/{menu_id}")
-async def add_existing_submenus(menu_id: str, submenus: list[str] = Body(...)):
+async def add_existing_submenus(menu_id: str, submenus: list[str] = Body(..., embed=True),
+                                is_menu: bool = Body(default=True)):
     try:
         if not submenus:
             raise HTTPException(status_code=400, detail="No submenus provided")
@@ -242,69 +244,22 @@ async def add_existing_submenus(menu_id: str, submenus: list[str] = Body(...)):
         if not parent:
             raise HTTPException(status_code=404, detail="Parent menu not found")
 
-        existing_children = [ObjectId(c) for c in parent.get("children", [])]
 
         new_children = [ObjectId(cid) for cid in submenus]
-        if await is_loop_detected(submenus, menu_id):
-            raise HTTPException(
-                status_code=400,
-                detail="Loop detected: One or more submenus would create a cycle"
-            )
+        if is_menu:
+            if await is_loop_detected(submenus, menu_id):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Loop detected: One or more submenus would create a cycle"
+                )
 
-        # ✅ Update parent children
-        updated_children = existing_children + new_children
         await menus_collection.update_one(
             {"_id": ObjectId(menu_id)},
-            {"$set": {"children": updated_children}},
+            {"$addToSet": {"children": {"$each": new_children}}},
         )
+        return await get_menu_tree(menu_id)
 
-        # ✅ Return full updated tree with $graphLookup
-        pipeline = [
-            {"$match": {"_id": ObjectId(menu_id)}},
-            {
-                "$graphLookup": {
-                    "from": "menus",
-                    "startWith": "$children",
-                    "connectFromField": "children",
-                    "connectToField": "_id",
-                    "as": "tree"
-                }
-            },
-            {
-                "$project": {
-                    "_id": 1,
-                    "name": 1,
-                    "children": 1,
-                    "tree": {
-                        "_id": 1,
-                        "name": 1,
-                        "children": 1
-                    }
-                }
-            }
-        ]
-        cursor = await menus_collection.aggregate(pipeline)
-        result = await cursor.to_list(length=1)
-        if not result:
-            raise HTTPException(status_code=404, detail="Tree not found")
 
-        root = result[0]
-
-        # Build dict for fast tree linking
-        nodes = {str(root["_id"]): {"_id": str(root["_id"]), "name": root["name"], "children": []}}
-        for m in root["tree"]:
-            nodes[str(m["_id"])] = {
-                "_id": str(m["_id"]),
-                "name": m["name"],
-                "children": [str(c) for c in m.get("children", [])]
-            }
-
-        # Rebuild hierarchy in Python (linear pass)
-        for node_id, node in list(nodes.items()):
-            children = node.pop("children", [])
-            node["children"] = [nodes[cid] for cid in children if cid in nodes]
-
-        return nodes[str(root["_id"])]
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
