@@ -196,8 +196,8 @@ async def get_menu_tree(menu_id: str):
 async def remove_node_from_the_tree(menu_id: str, node_id: str):
     try:
         await menus_collection.find_one_and_update({"_id": ObjectId(menu_id)},
-                                                   {"$pull": {"children": ObjectId(node_id)}}
-                                                   )
+                                                   {"$pull": {"children": ObjectId(node_id),
+                                                              "updatedAt": datetime.now(timezone.utc), }})
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -243,7 +243,6 @@ async def add_existing_submenus(menu_id: str, submenus: list[str] = Body(..., em
         parent = await menus_collection.find_one({"_id": ObjectId(menu_id)})
         if not parent:
             raise HTTPException(status_code=404, detail="Parent menu not found")
-
 
         new_children = [ObjectId(cid) for cid in submenus]
         if is_menu:

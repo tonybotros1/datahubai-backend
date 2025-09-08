@@ -5,6 +5,7 @@ from app.routes import brands_and_models
 from app.routes import countries_and_cities
 from app.routes import functions
 from app.routes import menus
+from app.routes import responsibilities
 from app.routes import test
 from app.routes import auth
 from app.websocket_config import manager
@@ -34,8 +35,9 @@ app.include_router(upload_images.images, prefix="/upload-image", tags=["Images"]
 app.include_router(brands_and_models.router, prefix="/brands", tags=["Brands"])
 app.include_router(countries_and_cities.router, prefix="/countries", tags=["Countries"])
 
-app.include_router(functions.router, prefix="/functions", tags=["Functions"])
+app.include_router(responsibilities.router, prefix="/responsibilities", tags=["Responsibilities"])
 app.include_router(menus.router, prefix="/menus", tags=["Menus"])
+app.include_router(functions.router, prefix="/functions", tags=["Functions"])
 app.include_router(test.router, prefix="/test", tags=["Test"])
 
 
