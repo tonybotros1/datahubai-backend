@@ -1,3 +1,6 @@
+from contextlib import asynccontextmanager
+
+from app.database import get_collection
 from app.widgets import upload_images
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -10,7 +13,20 @@ from app.routes import test
 from app.routes import auth
 from app.websocket_config import manager
 
-app = FastAPI(title="DataHub AI")
+users = get_collection("sys-users")
+companies = get_collection("companies")
+
+
+@asynccontextmanager
+async def lifespan(app_: FastAPI):
+    await companies.create_index("company_name", unique=True)
+    await users.create_index("email", unique=True)
+    print("✅ Unique indexes ensured at startup")
+    yield
+    print("👋 App is shutting down")
+
+
+app = FastAPI(title="DataHub AI", lifespan=lifespan)
 
 origins = [
 

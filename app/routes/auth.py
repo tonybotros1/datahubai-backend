@@ -2,6 +2,8 @@ from typing import List
 
 from bson import ObjectId
 from fastapi import APIRouter, Depends, HTTPException, Request, status, Form, UploadFile, File, Body
+from pymongo.errors import DuplicateKeyError
+
 from app.database import get_collection
 from datetime import timezone
 from app import database
@@ -90,6 +92,15 @@ async def register_company(
                 "owner_id": str(res_owner.inserted_id),
                 "message": "Company and owner registered successfully"
             }
+
+        except DuplicateKeyError as e:
+            await s.abort_transaction()
+            if "company_name" in str(e):
+                raise HTTPException(status_code=400, detail="Company name already exists")
+            elif "email" in str(e):
+                raise HTTPException(status_code=400, detail="Email already exists")
+            else:
+                raise HTTPException(status_code=400, detail="Duplicate entry")
 
         except Exception as e:
             # 👇 rollback إذا صار خطأ
