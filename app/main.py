@@ -11,16 +11,17 @@ from app.routes import menus
 from app.routes import responsibilities
 from app.routes import test
 from app.routes import auth
+from app.routes import companies
 from app.websocket_config import manager
 
-users = get_collection("sys-users")
-companies = get_collection("companies")
+users_collection = get_collection("sys-users")
+companies_collection = get_collection("companies")
 
 
 @asynccontextmanager
 async def lifespan(app_: FastAPI):
-    await companies.create_index("company_name", unique=True)
-    await users.create_index("email", unique=True)
+    await companies_collection.create_index("company_name", unique=True)
+    await users_collection.create_index("email", unique=True)
     print("✅ Unique indexes ensured at startup")
     yield
     print("👋 App is shutting down")
@@ -50,6 +51,7 @@ app.include_router(auth.router, prefix="/auth", tags=["Authentication"])
 app.include_router(upload_images.images, prefix="/upload-image", tags=["Images"])
 app.include_router(brands_and_models.router, prefix="/brands", tags=["Brands"])
 app.include_router(countries_and_cities.router, prefix="/countries", tags=["Countries"])
+app.include_router(companies.router, prefix="/companies", tags=["Companies"])
 
 app.include_router(responsibilities.router, prefix="/responsibilities", tags=["Responsibilities"])
 app.include_router(menus.router, prefix="/menus", tags=["Menus"])

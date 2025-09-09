@@ -5,13 +5,11 @@ from app.cloudinary_config import cloudinary
 images = APIRouter()
 
 
-@images.post("/")
+@images.post("/upload_image")
 async def upload_image(file: UploadFile = File(...), folder: str = "general"):
     try:
-        # رفع الصورة على Cloudinary
         result = cloudinary.uploader.upload(file.file, folder=folder)
 
-        # بترجع نتيجة فيها رابط مباشر للصورة
         return {"url": result["secure_url"], "public_id": result["public_id"]}
     except Exception as e:
         return {"error": str(e)}
@@ -27,6 +25,5 @@ async def delete_image_from_server(public_id: str) -> bool:
             return True
 
     except Exception as e:
-        # معالجة الأخطاء في حذف الصور
         print(f"Error deleting images from Cloudinary: {e}")
         return False

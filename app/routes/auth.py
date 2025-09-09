@@ -1,14 +1,13 @@
 from typing import List
-
 from bson import ObjectId
-from fastapi import APIRouter, Depends, HTTPException, Request, status, Form, UploadFile, File, Body
+from fastapi import APIRouter, HTTPException, Form, UploadFile, File
 from pymongo.errors import DuplicateKeyError
-
 from app.database import get_collection
-from datetime import timezone
 from app import database
 from app.core import security
 from app.widgets import upload_images
+from app.widgets.check_date import is_date_equals_today_or_older
+import jwt
 
 router = APIRouter()
 
@@ -67,7 +66,7 @@ async def register_company(
                 "password_hash": security.pwd_ctx.hash(admin_password),
                 "roles": role_ids_list,
                 "status": True,
-                "expiryDate": security.one_month_from_now_utc(),
+                "expiry_date": security.one_month_from_now_utc(),
                 "createdAt": security.now_utc(),
                 "updatedAt": security.now_utc(),
                 "phone_number": phone_number,
@@ -117,10 +116,23 @@ async def login(
     if not user:
         raise HTTPException(status_code=401, detail="Invalid email or password")
 
-    if not security.pwd_ctx.verify(password, user["password_hash"]):
+    if not security.verify_password(password, user["password_hash"]):
         raise HTTPException(status_code=401, detail="Invalid email or password")
 
     company_id = user.get("company_id")
+    company = await companies.find_one({"_id": company_id})
+    if not company:
+        raise HTTPException(status_code=404, detail="Company not found")
+
+    company_status = company.get("status", False)
+    if not company_status:
+        raise HTTPException(status_code=403, detail="Your session has been expired")
+
+    user_expiry_date = user.get("expiry_date", security.now_utc())
+    user_active = user.get("status", False)
+    if not user_active or is_date_equals_today_or_older(user_expiry_date):
+        raise HTTPException(status_code=403, detail="Your session has been expired")
+
     roles = user.get("roles", [])
 
     roles = [str(r) for r in roles]
@@ -162,8 +174,67 @@ async def logout(refresh_token: str = Form(...)):
     # 2. حذف الـ refresh token من DB
     result = await refresh_tokens.delete_one({"token_hash": token_hash})
 
-    if result.deleted_count == 0:
-        # إذا ما لاقى token → ممكن يكون انتهى أو غير صالح
-        raise HTTPException(status_code=400, detail="Invalid refresh token")
+    # if result.deleted_count == 0:
+    #     # إذا ما لاقى token → ممكن يكون انتهى أو غير صالح
+    #     raise HTTPException(status_code=400, detail="Invalid refresh token")
 
     return {"message": "Logged out successfully from this device"}
+
+
+@router.get("/is_user_valid/{user_id}")
+async def is_user_valid(user_id: str):
+    try:
+        user = await users.find_one({"_id": ObjectId(user_id)})
+        expiry_date = user.get("expiry_date", security.now_utc())
+        return {"valid": not is_date_equals_today_or_older(expiry_date)}
+
+
+    except Exception as e:
+        return {"message": str(e)}
+
+
+@router.post("/refresh_token")
+async def refresh_token_method(token: str = Form(...)):
+    try:
+        payload = security.decode_refresh_token(token)
+        if payload.get("type") != "refresh":
+            raise HTTPException(status_code=401, detail="Invalid token type")
+
+        # Check DB
+        token_doc = await refresh_tokens.find_one({
+            "jti": payload["jti"],
+            "token_hash": security.hash_sha256(token),
+            "user_id": ObjectId(payload["sub"])
+        })
+        if not token_doc:
+            raise HTTPException(status_code=401, detail="Refresh token invalid or revoked")
+
+        # Create new access token
+        user_id = payload["sub"]
+        company_id = payload["company_id"]
+        roles = payload.get("role", [])  # optional, may store in DB for more security
+        access_token, access_jti, expires_in = security.create_access_token(user_id, company_id, roles)
+
+        # Optional: rotate refresh token
+        new_refresh, new_hash, new_exp, new_jti = security.create_refresh_token(user_id, company_id)
+        await refresh_tokens.update_one(
+            {"_id": token_doc["_id"]},
+            {"$set": {
+                "token_hash": new_hash,
+                "jti": new_jti,
+                "expires_at": new_exp
+            }}
+        )
+
+        return {
+            "access_token": access_token,
+            "expires_in": expires_in,
+            "refresh_token": new_refresh
+        }
+
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Refresh token expired")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Invalid refresh token")
+
+

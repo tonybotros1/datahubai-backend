@@ -1,14 +1,14 @@
 import os, hashlib, uuid
 from datetime import datetime, timedelta, timezone
+from fastapi import Header, HTTPException, status
 from jose import jwt, JWTError
 from passlib.context import CryptContext
 
 ACCESS_SECRET = str(os.getenv("ACCESS_SECRET_KEY"))
 REFRESH_SECRET = str(os.getenv("REFRESH_SECRET_KEY"))
 ALGORITHM = "HS256"
-ACCESS_TTL_MIN = int(os.getenv("ACCESS_TTL_MIN", "15"))
-REFRESH_TTL_DAYS = int(os.getenv("REFRESH_TTL_DAYS", "30"))
-
+ACCESS_TTL_MIN = int(os.getenv("ACCESS_TTL_MIN", "60"))
+REFRESH_TTL_DAYS = int(os.getenv("REFRESH_TTL_DAYS", "60"))
 pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
@@ -82,3 +82,21 @@ def verify_password(plain, hashed):
 
 def get_password_hash(password):
     return pwd_ctx.hash(password)
+
+
+async def get_current_user(authorization: str = Header(...)):
+    if not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid authorization header")
+
+    token = authorization.split(" ")[1]
+
+    # Use your existing decode method
+    payload = decode_access_token(token)
+
+    if payload is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token")
+
+    if payload.get("type") != "access":
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token type")
+
+    return payload

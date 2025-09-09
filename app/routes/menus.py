@@ -1,7 +1,8 @@
 from bson import ObjectId
-from fastapi import APIRouter, Body, HTTPException
+from fastapi import APIRouter, Body, HTTPException, Depends,status
 from pymongo import ReturnDocument
 
+from app.core import security
 from app.database import get_collection
 from datetime import datetime, timezone
 from app.websocket_config import manager
@@ -9,6 +10,7 @@ from app.websocket_config import manager
 router = APIRouter()
 menus_collection = get_collection("menus")
 screens_collection = get_collection("screens")
+users_collection = get_collection("sys-users")
 
 
 def menus_serializer(menus: dict) -> dict:
@@ -115,6 +117,165 @@ async def update_menu(menu_id: str, name: str | None = Body(None), code: str | N
 
 
 # =============================================== Building the tree ===================================================
+
+def serialize_doc(doc):
+    if isinstance(doc, dict):
+        # Convert _id to string for serialization
+        if "_id" in doc and isinstance(doc["_id"], ObjectId):
+            doc["_id"] = str(doc["_id"])
+        # Recursively serialize children
+        for key, value in doc.items():
+            doc[key] = serialize_doc(value)
+    elif isinstance(doc, list):
+        return [serialize_doc(item) for item in doc]
+    return doc
+
+
+@router.get("/get_user_menu_tree")
+async def get_user_menu_tree(user_data: dict = Depends(security.get_current_user)):
+    try:
+        user_id = user_data.get("sub")
+        if not user_id:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User ID not found in token")
+
+        pipeline = [
+            # ... your aggregation pipeline remains the same
+            {
+                "$match": {
+                    "_id": ObjectId(user_id)
+                }
+            },
+            {
+                "$lookup": {
+                    "from": "sys-roles",
+                    "localField": "roles",
+                    "foreignField": "_id",
+                    "as": "userRoles"
+                }
+            },
+            {
+                "$unwind": {
+                    "path": "$userRoles",
+                    "preserveNullAndEmptyArrays": True
+                }
+            },
+            {
+                "$lookup": {
+                    "from": "menus",
+                    "localField": "userRoles.menu_id",
+                    "foreignField": "_id",
+                    "as": "userMenus"
+                }
+            },
+            {
+                "$unwind": {
+                    "path": "$userMenus",
+                    "preserveNullAndEmptyArrays": True
+                }
+            },
+            {
+                "$graphLookup": {
+                    "from": "menus",
+                    "startWith": "$userMenus.children",
+                    "connectFromField": "children",
+                    "connectToField": "_id",
+                    "as": "menuTree"
+                }
+            },
+            {
+                "$group": {
+                    "_id": "$_id",
+                    "rootMenus": {"$push": "$userMenus"},
+                    "treeNodes": {"$push": "$menuTree"}
+                }
+            },
+            {
+                "$project": {
+                    "_id": 0,
+                    "rootMenus": "$rootMenus",
+                    "tree": "$treeNodes"
+                }
+            }
+        ]
+
+        cursor = await users_collection.aggregate(pipeline)
+        result = await cursor.to_list()
+
+        if not result:
+            raise HTTPException(status_code=404, detail="User not found.")
+
+        data = result[0]
+
+        # Safely access 'rootMenus' and 'tree'
+        root_menus = data.get("rootMenus", [])
+        tree_nodes_list = data.get("tree", [])
+
+        if not root_menus:
+            raise HTTPException(status_code=404, detail="No menus found for this user.")
+
+        # Flatten the list of lists from tree_nodes
+        all_nodes = root_menus + [node for sublist in tree_nodes_list for node in sublist]
+
+        # 1. Build a node map and find all children IDs
+        node_map = {}
+        all_children_ids = set()
+
+        for n in all_nodes:
+            if n:
+                n_id = str(n["_id"])
+                node_map[n_id] = {
+                    "_id": n_id,
+                    "name": n.get("name"),
+                    "children": [str(c) for c in n.get("children", [])],
+                    "isMenu": True,
+                    "can_remove": True,
+                    "route_name": n.get("route_name")
+                }
+                all_children_ids.update(node_map[n_id]["children"])
+
+        # 2. Fetch screens that are not menus
+        screen_ids_to_fetch = [
+            ObjectId(cid) for cid in all_children_ids if cid not in node_map
+        ]
+
+        screens_cursor = screens_collection.find(
+            {"_id": {"$in": screen_ids_to_fetch}},
+            projection={"name": 1, "route_name": 1}
+        )
+        screens_list = await screens_cursor.to_list(length=1000)
+
+        # 3. Add screens to the node map
+        for screen in screens_list:
+            s_id = str(screen["_id"])
+            node_map[s_id] = {
+                "_id": s_id,
+                "name": screen.get("name"),
+                "children": [],
+                "isMenu": False,
+                "can_remove": True,
+                "route_name": screen.get("route_name"),
+            }
+
+        # 4. Link children to parent nodes
+        for node in node_map.values():
+            node["children"] = [
+                node_map[child_id] for child_id in node["children"]
+                if child_id in node_map
+            ]
+
+        # 5. Build the final tree structure from root menus
+        final_tree = []
+        for root_menu in root_menus:
+            root_id = str(root_menu["_id"])
+            if root_id in node_map:
+                final_tree.append(node_map[root_id])
+
+        return {"root": final_tree}
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
 
 
 @router.get("/get_menu_tree/{menu_id}")
