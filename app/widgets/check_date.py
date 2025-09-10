@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 
 
 def is_date_equals_today_or_older(date: datetime):

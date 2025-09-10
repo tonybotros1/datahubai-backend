@@ -172,7 +172,7 @@ async def logout(refresh_token: str = Form(...)):
     token_hash = security.hash_sha256(refresh_token)
 
     # 2. حذف الـ refresh token من DB
-    result = await refresh_tokens.delete_one({"token_hash": token_hash})
+    await refresh_tokens.delete_one({"token_hash": token_hash})
 
     # if result.deleted_count == 0:
     #     # إذا ما لاقى token → ممكن يكون انتهى أو غير صالح

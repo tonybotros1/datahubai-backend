@@ -1,6 +1,5 @@
 from bson import ObjectId
-from fastapi import APIRouter, Body, HTTPException, Depends, status
-from pymongo import ReturnDocument
+from fastapi import APIRouter, Body,  Depends, status
 from app.core import security
 from app.database import get_collection
 from datetime import datetime, timezone

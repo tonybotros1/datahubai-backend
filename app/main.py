@@ -20,7 +20,7 @@ companies_collection = get_collection("companies")
 
 
 @asynccontextmanager
-async def lifespan(app_: FastAPI):
+async def lifespan(_: FastAPI):
     await companies_collection.create_index("company_name", unique=True)
     await users_collection.create_index("email", unique=True)
     print("✅ Unique indexes ensured at startup")
