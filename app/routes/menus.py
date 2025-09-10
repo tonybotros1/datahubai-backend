@@ -1,5 +1,5 @@
 from bson import ObjectId
-from fastapi import APIRouter, Body, HTTPException, Depends,status
+from fastapi import APIRouter, Body, HTTPException, Depends, status
 from pymongo import ReturnDocument
 
 from app.core import security
@@ -32,7 +32,7 @@ def menus_serializer(menus: dict) -> dict:
 
 # this is to get all menus
 @router.get("/get_menus")
-async def get_menus():
+async def get_menus(_: dict = Depends(security.get_current_user)):
     try:
         menus = await menus_collection.find({}).sort("name", 1).to_list()
         return {"menus": [menus_serializer(menus) for menus in menus]}
@@ -42,7 +42,8 @@ async def get_menus():
 
 # this is to add new menu
 @router.post("/add_new_menu")
-async def add_new_menu(name: str | None = Body(None), code: str | None = Body(None), route: str | None = Body(None)):
+async def add_new_menu(name: str | None = Body(None), code: str | None = Body(None), route: str | None = Body(None)
+                       , _: dict = Depends(security.get_current_user)):
     try:
         menu_dict = {
             "name": name,
@@ -67,7 +68,7 @@ async def add_new_menu(name: str | None = Body(None), code: str | None = Body(No
 
 
 @router.delete("/delete_menu/{menu_id}")
-async def delete_menu(menu_id: str):
+async def delete_menu(menu_id: str, _: dict = Depends(security.get_current_user)):
     try:
 
         # 1️⃣ Remove menuId from all parents' children arrays
@@ -96,7 +97,7 @@ async def delete_menu(menu_id: str):
 
 @router.patch("/update_menu/{menu_id}")
 async def update_menu(menu_id: str, name: str | None = Body(None), code: str | None = Body(None),
-                      route: str | None = Body(None)):
+                      route: str | None = Body(None), _: dict = Depends(security.get_current_user)):
     try:
         menu = await menus_collection.find_one_and_update({"_id": ObjectId(menu_id)},
                                                           {"$set": {"updatedAt": datetime.now(timezone.utc),
@@ -279,7 +280,7 @@ async def get_user_menu_tree(user_data: dict = Depends(security.get_current_user
 
 
 @router.get("/get_menu_tree/{menu_id}")
-async def get_menu_tree(menu_id: str):
+async def get_menu_tree(menu_id: str, _: dict = Depends(security.get_current_user)):
     try:
         # 1. Fetch menu tree using $graphLookup
         pipeline = [
@@ -354,11 +355,13 @@ async def get_menu_tree(menu_id: str):
 
 # this function is to remove node from the tree
 @router.patch("/remove_node_from_the_tree/{menu_id}/{node_id}")
-async def remove_node_from_the_tree(menu_id: str, node_id: str):
+async def remove_node_from_the_tree(menu_id: str, node_id: str, _: dict = Depends(security.get_current_user)):
     try:
         await menus_collection.find_one_and_update({"_id": ObjectId(menu_id)},
-                                                   {"$pull": {"children": ObjectId(node_id),
-                                                              "updatedAt": datetime.now(timezone.utc), }})
+                                                   {
+                                                       "$pull": {"children": ObjectId(node_id)},
+                                                       "$set": {"updatedAt": datetime.now(timezone.utc)},
+                                                   })
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -396,7 +399,7 @@ async def is_loop_detected(child_ids: list[str], target_id: str) -> bool:
 # this function is to add sub menu or screen to existing menu
 @router.post("/add_sub_menus/{menu_id}")
 async def add_existing_submenus(menu_id: str, submenus: list[str] = Body(..., embed=True),
-                                is_menu: bool = Body(default=True)):
+                                is_menu: bool = Body(default=True), _: dict = Depends(security.get_current_user)):
     try:
         if not submenus:
             raise HTTPException(status_code=400, detail="No submenus provided")

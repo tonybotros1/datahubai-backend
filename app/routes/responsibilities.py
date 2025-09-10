@@ -1,7 +1,8 @@
 from bson import ObjectId
-from fastapi import APIRouter, Body, HTTPException
+from fastapi import APIRouter, Body, HTTPException, Depends
 from pymongo import ReturnDocument
 
+from app.core import security
 from app.database import get_collection
 from datetime import datetime, timezone
 from app.websocket_config import manager
@@ -60,7 +61,7 @@ async def get_role_details(role_id: str):
 
 # this function is to get all roles
 @router.get("/get_all_roles")
-async def get_all_roles():
+async def get_all_roles(_: dict = Depends(security.get_current_user)):
     try:
         pipeline = [
             {
@@ -103,7 +104,8 @@ async def get_all_roles():
 
 
 @router.post("/add_new_role")
-async def add_new_role(role_name: str | None = Body(None), menu_id: str | None = Body(None)):
+async def add_new_role(role_name: str | None = Body(None), menu_id: str | None = Body(None),
+                       _: dict = Depends(security.get_current_user)):
     try:
         role_dict = {
             "role_name": role_name,
@@ -125,9 +127,10 @@ async def add_new_role(role_name: str | None = Body(None), menu_id: str | None =
 
 
 @router.patch("/update_role_status/{role_id}")
-async def update_role_status(role_id: str, status: bool = Body(..., embed=True)):
+async def update_role_status(role_id: str, status: bool = Body(..., embed=True),
+                             _: dict = Depends(security.get_current_user)):
     try:
-        role = await roles_collection.find_one_and_update(
+        await roles_collection.find_one_and_update(
             {"_id": ObjectId(role_id)}, {"$set": {"is_shown_for_users": status,
                                                   "updatedAt": datetime.now(timezone.utc),
                                                   }},
@@ -146,7 +149,8 @@ async def update_role_status(role_id: str, status: bool = Body(..., embed=True))
 
 
 @router.patch("/update_role/{role_id}")
-async def update_role(role_id: str, role_name: str | None = Body(None), menu_id: str | None = Body(None)):
+async def update_role(role_id: str, role_name: str | None = Body(None), menu_id: str | None = Body(None),
+                      _: dict = Depends(security.get_current_user)):
     try:
         await  roles_collection.find_one_and_update({"_id": ObjectId(role_id)}, {
             "$set": {
@@ -169,7 +173,7 @@ async def update_role(role_id: str, role_name: str | None = Body(None), menu_id:
 
 
 @router.delete("/delete_role/{role_id}")
-async def delete_role(role_id: str):
+async def delete_role(role_id: str, _: dict = Depends(security.get_current_user)):
     try:
         result = await roles_collection.delete_one({"_id": ObjectId(role_id)})
 

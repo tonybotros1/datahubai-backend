@@ -1,5 +1,7 @@
 from bson import ObjectId
-from fastapi import APIRouter, Body, HTTPException
+from fastapi import APIRouter, Body, HTTPException, Depends
+
+from app.core import security
 from app.database import get_collection
 from datetime import datetime, timezone
 from app.websocket_config import manager
@@ -18,14 +20,14 @@ def screen_serializer(screen: dict) -> dict:
 
 
 @router.get("/get_screens")
-async def get_screens():
+async def get_screens(_: dict = Depends(security.get_current_user)):
     screens = await screens_collection.find({}).sort("name", 1).to_list()
     return {"screens": [screen_serializer(s) for s in screens]}
 
 
 @router.post("/add_screen")
 async def add_screen(name: str = Body(..., embed=True), route_name: str = Body(..., embed=True),
-                     description: str = Body(..., embed=True)):
+                     description: str = Body(..., embed=True), _: dict = Depends(security.get_current_user)):
     try:
         screen_dict = {
             "name": name,
@@ -48,7 +50,7 @@ async def add_screen(name: str = Body(..., embed=True), route_name: str = Body(.
 
 
 @router.delete("/delete_screen/{screen_id}")
-async def delete_screen(screen_id: str):
+async def delete_screen(screen_id: str, _: dict = Depends(security.get_current_user)):
     try:
         # 1️⃣ Remove menuId from all parents' children arrays
         await menus_collection.update_many(
@@ -72,7 +74,7 @@ async def delete_screen(screen_id: str):
 
 @router.patch("/edit_screen/{screen_id}")
 async def edit_screen(screen_id: str, name: str | None = Body(None), screen_route: str | None = Body(None),
-                      description: str | None = None):
+                      description: str | None = None, _: dict = Depends(security.get_current_user)):
     try:
         screen = await screens_collection.find_one({"_id": ObjectId(screen_id)})
         if screen is None:
