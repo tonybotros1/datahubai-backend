@@ -12,6 +12,7 @@ from app.routes import responsibilities
 from app.routes import test
 from app.routes import auth
 from app.routes import companies
+from app.routes import favourite_screens
 from app.websocket_config import manager
 
 users_collection = get_collection("sys-users")
@@ -48,6 +49,7 @@ app.add_middleware(
 
 # Routers
 app.include_router(auth.router, prefix="/auth", tags=["Authentication"])
+app.include_router(favourite_screens.router, prefix="/favourite_screens", tags=["Favourite screens"])
 app.include_router(upload_images.images, prefix="/upload-image", tags=["Images"])
 app.include_router(brands_and_models.router, prefix="/brands", tags=["Brands"])
 app.include_router(countries_and_cities.router, prefix="/countries", tags=["Countries"])

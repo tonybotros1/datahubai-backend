@@ -215,21 +215,21 @@ async def refresh_token_method(token: str = Form(...)):
         roles = payload.get("role", [])  # optional, may store in DB for more security
         access_token, access_jti, expires_in = security.create_access_token(user_id, company_id, roles)
 
-        # Optional: rotate refresh token
-        new_refresh, new_hash, new_exp, new_jti = security.create_refresh_token(user_id, company_id)
-        await refresh_tokens.update_one(
-            {"_id": token_doc["_id"]},
-            {"$set": {
-                "token_hash": new_hash,
-                "jti": new_jti,
-                "expires_at": new_exp
-            }}
-        )
+        # # Optional: rotate refresh token
+        # new_refresh, new_hash, new_exp, new_jti = security.create_refresh_token(user_id, company_id)
+        # await refresh_tokens.update_one(
+        #     {"_id": token_doc["_id"]},
+        #     {"$set": {
+        #         "token_hash": new_hash,
+        #         "jti": new_jti,
+        #         "expires_at": new_exp
+        #     }}
+        # )
 
         return {
             "access_token": access_token,
             "expires_in": expires_in,
-            "refresh_token": new_refresh
+            # "refresh_token": new_refresh
         }
 
     except jwt.ExpiredSignatureError:

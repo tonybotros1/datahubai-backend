@@ -1,6 +1,8 @@
 import logging
 from bson import ObjectId
-from fastapi import APIRouter, HTTPException, Form, File, UploadFile, Body
+from fastapi import APIRouter, HTTPException, Form, File, UploadFile, Body, Depends
+
+from app.core import security
 from app.database import get_collection
 from datetime import datetime, timezone
 from app.widgets import upload_images
@@ -34,7 +36,7 @@ def city_serializer(city: dict) -> dict:
 
 # this is to get all countries from database
 @router.get("/get_countries")
-async def get_countries():
+async def get_countries(_: dict = Depends(security.get_current_user)):
     countries = await countries_collection.find().sort("name", 1).to_list()
     return {"countries": [country_serializer(c) for c in countries]}
 
