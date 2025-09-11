@@ -1,7 +1,6 @@
 import logging
 from bson import ObjectId
 from fastapi import APIRouter, HTTPException, Form, File, UploadFile, Body, Depends
-
 from app.core import security
 from app.database import get_collection
 from datetime import datetime, timezone
@@ -46,7 +45,7 @@ async def get_countries(_: dict = Depends(security.get_current_user)):
 async def add_new_country(name: str = Form(...), code: str = Form(...), calling_code: str = Form(...),
                           currency_name: str = Form(...), currency_code: str = Form(...),
                           vat: float = Form(...),
-                          flag: UploadFile = File(...)):
+                          flag: UploadFile = File(...), _: dict = Depends(security.get_current_user)):
     try:
         result = await upload_images.upload_image(flag, "countries")
         country_dict = {
@@ -79,7 +78,8 @@ async def add_new_country(name: str = Form(...), code: str = Form(...), calling_
 
 # this is to change country status active / inactive
 @router.patch("/change_country_status/{country_id}")
-async def change_country_status(country_id: str, status: bool = Body(..., embed=True)):
+async def change_country_status(country_id: str, status: bool = Body(..., embed=True),
+                                _: dict = Depends(security.get_current_user)):
     try:
         # logging.info(f"Changing status of {country_id} to {status}")
         updated_country = await countries_collection.find_one_and_update(
@@ -107,7 +107,7 @@ async def change_country_status(country_id: str, status: bool = Body(..., embed=
 
 # this is to delete country
 @router.delete("/delete_country/{country_id}")
-async def delete_country(country_id: str):
+async def delete_country(country_id: str, _: dict = Depends(security.get_current_user)):
     country = await countries_collection.find_one({"_id": ObjectId(country_id)})
     if not country:
         raise HTTPException(status_code=404, detail="Country not found")
@@ -131,7 +131,7 @@ async def delete_country(country_id: str):
 async def update_country(country_id: str, name: str | None = Form(None), flag: UploadFile | None = File(None),
                          calling_code: str = Form(None), currency_name: str = Form(None),
                          currency_code: str = Form(None),
-                         vat: float = Form(None), ):
+                         vat: float = Form(None), _: dict = Depends(security.get_current_user)):
     try:
         country = await countries_collection.find_one({"_id": ObjectId(country_id)})
 
@@ -180,14 +180,15 @@ async def update_country(country_id: str, name: str | None = Form(None), flag: U
 
 # this is to get all cities
 @router.get("/get_cities/{country_id}")
-async def get_cities(country_id: str):
+async def get_cities(country_id: str, _: dict = Depends(security.get_current_user)):
     cities = await cities_collection.find({"country_id": ObjectId(country_id)}).sort("name", 1).to_list()
     return {"cities": [city_serializer(c) for c in cities]}
 
 
 # this is to add new city to country
 @router.post("/add_new_city/{country_id}")
-async def add_new_city(country_id: str, name: str = Body(..., embed=True), code: str = Body(..., embed=True)):
+async def add_new_city(country_id: str, name: str = Body(..., embed=True), code: str = Body(..., embed=True),
+                       _: dict = Depends(security.get_current_user)):
     city_dict = {
         "name": name,
         "code": code,
@@ -209,7 +210,8 @@ async def add_new_city(country_id: str, name: str = Body(..., embed=True), code:
 
 # this is to change city's status active / inactive
 @router.patch("/change_city_status/{city_id}")
-async def change_city_status(city_id: str, status: bool = Body(..., embed=True)):
+async def change_city_status(city_id: str, status: bool = Body(..., embed=True),
+                             _: dict = Depends(security.get_current_user)):
     try:
         updated_city = await cities_collection.find_one_and_update(
             {"_id": ObjectId(city_id)},
@@ -237,7 +239,7 @@ async def change_city_status(city_id: str, status: bool = Body(..., embed=True))
 # This is to update country
 @router.patch("/update_city/{city_id}")
 async def update_city(city_id: str, name: str | None = Form(None),
-                      code: str = Form(None)):
+                      code: str = Form(None), _: dict = Depends(security.get_current_user)):
     try:
         city = await cities_collection.find_one({"_id": ObjectId(city_id)})
 
@@ -269,7 +271,7 @@ async def update_city(city_id: str, name: str | None = Form(None),
 
 # this is to delete city
 @router.delete("/delete_city/{city_id}")
-async def delete_city(city_id: str):
+async def delete_city(city_id: str, _: dict = Depends(security.get_current_user)):
     try:
         result = await cities_collection.delete_one({"_id": ObjectId(city_id)})
         if result.deleted_count == 0:

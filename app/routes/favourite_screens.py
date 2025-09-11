@@ -1,5 +1,5 @@
 from bson import ObjectId
-from fastapi import APIRouter, Body,  Depends, status
+from fastapi import APIRouter, Body, Depends, status
 from app.core import security
 from app.database import get_collection
 from datetime import datetime, timezone
@@ -37,6 +37,8 @@ async def get_favourite_screen_details(fav_id: ObjectId):
                     "description": "$screen.description",
                     "createdAt": 1,
                     "updatedAt": 1,
+                    "screen_id": 1
+
                 }
             }
 
@@ -81,8 +83,12 @@ async def get_favourite_screens(user: dict = Depends(security.get_current_user))
                     "description": "$screen.description",
                     "createdAt": 1,
                     "updatedAt": 1,
+                    "screen_id": 1
 
-                }}
+                }},
+            {
+                "$sort": {"createdAt": -1}  # sort newest first
+            }
         ]
         cursor = await favourite_collection.aggregate(pipeline)
         result = await cursor.to_list()
