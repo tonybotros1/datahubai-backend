@@ -1,5 +1,7 @@
+from typing import Optional
+
 from bson import ObjectId
-from fastapi import APIRouter, Body, Depends
+from fastapi import APIRouter, Body, Depends, Query, Path
 from app.core import security
 from app.database import get_collection
 from datetime import datetime, timezone
@@ -12,6 +14,8 @@ value_collection = get_collection("all_lists_values")
 
 def serializer(data: dict) -> dict:
     data["_id"] = str(data["_id"])
+    if "mastered_by_id" in data:
+        data["mastered_by_id"] = str(data["mastered_by_id"])
     for key, value in data.items():
         if isinstance(value, datetime):
             data[key] = value.isoformat()
@@ -48,6 +52,7 @@ async def get_list_details(list_id: ObjectId) -> dict:
                 "code": {"$ifNull": ["$code", '']},
                 "name": {"$ifNull": ["$name", '']},
                 "mastered_by": {"$ifNull": ["$new_list.name", '']},
+                "mastered_by_id": {"$ifNull": ["$mastered_by", '']},
                 "status": 1,
                 "createdAt": 1,
                 "updatedAt": 1,
@@ -83,6 +88,7 @@ async def get_all_lists(_: dict = Depends(security.get_current_user)):
                     "code": {"$ifNull": ["$code", '']},
                     "name": {"$ifNull": ["$name", '']},
                     "mastered_by": {"$ifNull": ["$final_list.name", '']},
+                    "mastered_by_id": {"$ifNull": ["$mastered_by", '']},
                     "status": 1,
                     "createdAt": 1,
                     "updatedAt": 1,
@@ -173,18 +179,54 @@ async def update_list(list_id: str, name: str = Body(None), code: str = Body(Non
 
 
 # ====================================== Values Section ============================================
-@router.get("/get_list_values/{list_id}/{mastered_by_list_id}")
-async def get_list_values(list_id: str, mastered_by_list_id: str):
+
+async def get_value_details(value_id: ObjectId):
+    pipeline = [
+        {
+            "$match": {
+                "_id": value_id
+            }
+        },
+        {
+            "$lookup": {
+                "from": "all_lists_values",
+                "localField": "mastered_by",
+                "foreignField": "_id",
+                "as": "final_value",
+            }
+        },
+        {"$unwind": {"path": "$final_value", "preserveNullAndEmptyArrays": True}},
+        {
+            "$project": {
+                "_id": 1,
+                "name": {"$ifNull": ["$name", '']},
+                "mastered_by": {"$ifNull": ["$final_value.name", '']},
+                "mastered_by_id": {"$ifNull": ["$mastered_by", '']},
+                "status": 1,
+                "createdAt": 1,
+                "updatedAt": 1,
+            }
+        }
+    ]
+    agg_cursor = await value_collection.aggregate(pipeline)
+    current_value = await agg_cursor.to_list(length=None)
+    return current_value[0]
+
+
+@router.get("/get_list_values/{list_id}")
+async def get_list_values(list_id: str, mastered_by_list_id: Optional[str] = Query(None),
+                          _: dict = Depends(security.get_current_user)):
     try:
         print(f"mastered_by_list_id for list {list_id}: {mastered_by_list_id}")
-        mastered_by_list_id = ObjectId(mastered_by_list_id)
+        if mastered_by_list_id:
+            mastered_by_list_id = ObjectId(mastered_by_list_id)
 
         # Pipeline لإحضار قيم القائمة نفسها
         pipeline_values = [
             {"$match": {"list_id": ObjectId(list_id)}},
             {
                 "$lookup": {
-                    "from": "all_lists_values",  # self-join على القيم إذا بدك اسم master للقيم
+                    "from": "all_lists_values",
                     "localField": "mastered_by",
                     "foreignField": "_id",
                     "as": "final_values",
@@ -220,6 +262,39 @@ async def get_list_values(list_id: str, mastered_by_list_id: str):
             "list_values": [serializer(v) for v in current_list_values],
             "master_values": [serializer(v) for v in master_list_values],
         }
+
+    except Exception as e:
+        return {"message": str(e)}
+
+
+@router.post("/add_new_value/{list_id}")
+async def add_new_value(list_id: str = Path(...),
+                        name: str = Body(None),
+                        mastered_by_id: str = Body(None),
+                        # _: dict = Depends(security.get_current_user)
+                        ):
+    try:
+        mastered_by_id = ObjectId(mastered_by_id) if mastered_by_id else ''
+        list_id = ObjectId(list_id) if list_id else ''
+        value_dict = {
+            "name": name,
+            "mastered_by": mastered_by_id,
+            "list_id": list_id,
+            "status": True,
+            "createdAt": datetime.now(timezone.utc),
+            "updatedAt": datetime.now(timezone.utc),
+        }
+
+        result = await value_collection.insert_one(value_dict)
+        new_value = await get_value_details(result.inserted_id)
+        serialized = serializer(new_value)
+        await manager.broadcast({
+            "type": "list_value_added",
+            "data": serialized
+        })
+        return {"message": "Value added successfully!", "list": serialized}
+
+
 
     except Exception as e:
         return {"message": str(e)}
