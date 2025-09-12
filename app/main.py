@@ -13,6 +13,7 @@ from app.routes import test
 from app.routes import auth
 from app.routes import companies
 from app.routes import favourite_screens
+from app.routes import list_of_values
 from app.websocket_config import manager
 
 users_collection = get_collection("sys-users")
@@ -54,7 +55,7 @@ app.include_router(upload_images.images, prefix="/upload-image", tags=["Images"]
 app.include_router(brands_and_models.router, prefix="/brands", tags=["Brands"])
 app.include_router(countries_and_cities.router, prefix="/countries", tags=["Countries"])
 app.include_router(companies.router, prefix="/companies", tags=["Companies"])
-
+app.include_router(list_of_values.router, prefix="/list_of_values", tags=["List Of Values"])
 app.include_router(responsibilities.router, prefix="/responsibilities", tags=["Responsibilities"])
 app.include_router(menus.router, prefix="/menus", tags=["Menus"])
 app.include_router(functions.router, prefix="/functions", tags=["Functions"])
