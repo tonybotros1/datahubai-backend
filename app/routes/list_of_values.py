@@ -1,9 +1,6 @@
 from typing import Optional
-
 from bson import ObjectId
 from fastapi import APIRouter, Body, Depends, Query, Path, HTTPException
-from pymongo import ReturnDocument
-
 from app.core import security
 from app.database import get_collection
 from datetime import datetime, timezone
