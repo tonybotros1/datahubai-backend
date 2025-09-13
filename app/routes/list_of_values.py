@@ -316,7 +316,7 @@ async def delete_value(value_id: str, _: dict = Depends(security.get_current_use
 @router.patch("/update_value/{value_id}")
 async def update_value(value_id: str, name: str = Body(None),
                        mastered_by_id: str = Body(None),
-                       # _: dict = Depends(security.get_current_user)
+                       _: dict = Depends(security.get_current_user)
                        ):
     try:
         mastered_by_id = ObjectId(mastered_by_id) if mastered_by_id else ''
@@ -341,5 +341,6 @@ async def update_value(value_id: str, name: str = Body(None),
 
     except Exception as e:
         return {"message": str(e)}
+
 
 
