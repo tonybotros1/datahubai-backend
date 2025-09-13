@@ -1,7 +1,9 @@
 from typing import Optional
 
 from bson import ObjectId
-from fastapi import APIRouter, Body, Depends, Query, Path
+from fastapi import APIRouter, Body, Depends, Query, Path, HTTPException
+from pymongo import ReturnDocument
+
 from app.core import security
 from app.database import get_collection
 from datetime import datetime, timezone
@@ -217,7 +219,6 @@ async def get_value_details(value_id: ObjectId):
 async def get_list_values(list_id: str, mastered_by_list_id: Optional[str] = Query(None),
                           _: dict = Depends(security.get_current_user)):
     try:
-        print(f"mastered_by_list_id for list {list_id}: {mastered_by_list_id}")
         if mastered_by_list_id:
             mastered_by_list_id = ObjectId(mastered_by_list_id)
 
@@ -271,7 +272,7 @@ async def get_list_values(list_id: str, mastered_by_list_id: Optional[str] = Que
 async def add_new_value(list_id: str = Path(...),
                         name: str = Body(None),
                         mastered_by_id: str = Body(None),
-                        # _: dict = Depends(security.get_current_user)
+                        _: dict = Depends(security.get_current_user)
                         ):
     try:
         mastered_by_id = ObjectId(mastered_by_id) if mastered_by_id else ''
@@ -295,6 +296,53 @@ async def add_new_value(list_id: str = Path(...),
         return {"message": "Value added successfully!", "list": serialized}
 
 
+    except Exception as e:
+        return {"message": str(e)}
+
+
+@router.delete("/delete_value/{value_id}")
+async def delete_value(value_id: str, _: dict = Depends(security.get_current_user)):
+    try:
+        result = await value_collection.delete_one({"_id": ObjectId(value_id)})
+        if result.deleted_count == 1:
+            await manager.broadcast({
+                "type": "list_value_deleted",
+                "data": {"_id": value_id}
+            })
+            return {"message": "Value deleted successfully!"}
 
     except Exception as e:
         return {"message": str(e)}
+
+
+#
+@router.patch("/update_value/{value_id}")
+async def update_value(value_id: str, name: str = Body(None),
+                       mastered_by_id: str = Body(None),
+                       # _: dict = Depends(security.get_current_user)
+                       ):
+    try:
+        mastered_by_id = ObjectId(mastered_by_id) if mastered_by_id else ''
+        result = await value_collection.find_one_and_update(
+            {"_id": ObjectId(value_id)},
+            {"$set": {"name": name, "mastered_by": mastered_by_id,
+                      "updatedAt": datetime.now(timezone.utc), }},
+        )
+        if not result:
+            raise HTTPException(status_code=404, detail="Model not found")
+
+        edited_value = await get_value_details(ObjectId(value_id))
+        serialized = serializer(edited_value)
+
+        await manager.broadcast({
+            "type": "list_value_updated",
+            "data": serialized
+        })
+
+        return {"message": "Value updated successfully!", "value": serialized}
+
+
+    except Exception as e:
+        return {"message": str(e)}
+
+
