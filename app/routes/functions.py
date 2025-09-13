@@ -1,6 +1,5 @@
 from bson import ObjectId
 from fastapi import APIRouter, Body, HTTPException, Depends
-
 from app.core import security
 from app.database import get_collection
 from datetime import datetime, timezone
