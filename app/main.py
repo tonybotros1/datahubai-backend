@@ -4,18 +4,9 @@ from app.database import get_collection
 from app.widgets import upload_images
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from app.routes import brands_and_models
-from app.routes import countries_and_cities
-from app.routes import functions
-from app.routes import menus
-from app.routes import responsibilities
+from app.routes import brands_and_models, users, countries_and_cities, functions, menus, responsibilities, auth, \
+    companies, favourite_screens, list_of_values, counters, branches
 from app.routes import test
-from app.routes import auth
-from app.routes import companies
-from app.routes import favourite_screens
-from app.routes import list_of_values
-from app.routes import counters
-from app.routes import branches
 from app.websocket_config import manager
 
 users_collection = get_collection("sys-users")
@@ -63,6 +54,7 @@ app.include_router(responsibilities.router, prefix="/responsibilities", tags=["R
 app.include_router(menus.router, prefix="/menus", tags=["Menus"])
 app.include_router(functions.router, prefix="/functions", tags=["Functions"])
 app.include_router(branches.router, prefix="/branches", tags=["Branches"])
+app.include_router(users.router, prefix="/users", tags=["Users"])
 app.include_router(test.router, prefix="/test", tags=["Test"])
 
 

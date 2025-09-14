@@ -12,7 +12,8 @@ roles_collection = get_collection("sys-roles")
 
 def serialize_role(role: dict) -> dict:
     role["_id"] = str(role["_id"])
-    role["menu_id"] = str(role.get("menu_id", "")) if role.get("menu_id") else ""
+    if role.get("menu_id"):
+        role["menu_id"] = str(role.get("menu_id", "")) if role.get("menu_id") else ""
     for key, value in role.items():
         if isinstance(value, datetime):
             role[key] = value.isoformat()
@@ -187,3 +188,20 @@ async def delete_role(role_id: str, _: dict = Depends(security.get_current_user)
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/get_roles_based_on_status")
+async def get_roles_based_on_status(_: dict = Depends(security.get_current_user)):
+    try:
+        roles = await roles_collection.find({"is_shown_for_users": True},
+                                            {
+                                                "_id": 1,
+                                                "role_name": 1,
+                                                "is_shown_for_users": 1,
+                                            }
+                                            ).to_list(None)
+
+        return {"roles": [serialize_role(role) for role in roles]}
+
+    except Exception as e:
+        return {"message": str(e)}

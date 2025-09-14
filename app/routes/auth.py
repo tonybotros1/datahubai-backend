@@ -1,6 +1,8 @@
-from typing import List
+from datetime import datetime
+from typing import List, Optional
 from bson import ObjectId
-from fastapi import APIRouter, HTTPException, Form, UploadFile, File
+from fastapi import APIRouter, HTTPException, Form, UploadFile, File, Depends, Body
+from pydantic import BaseModel, EmailStr
 from pymongo.errors import DuplicateKeyError
 from app.database import get_collection
 from app import database
@@ -14,6 +16,7 @@ router = APIRouter()
 users = get_collection("sys-users")
 companies = get_collection("companies")
 refresh_tokens = get_collection("refresh_tokens")
+
 
 
 @router.post("/register_company")
@@ -32,10 +35,8 @@ async def register_company(
 ):
     async with database.client.start_session() as s:
         try:
-            # 👇 ابدأ الترانزاكشن
             await s.start_transaction()
 
-            # معالجة صورة الشركة
             company_logo_url = ""
             company_logo_public_id = ""
             if company_logo:
@@ -45,7 +46,6 @@ async def register_company(
 
             role_ids_list = [ObjectId(r.strip()) for r in roles_ids]
 
-            # 1. إنشاء الشركة
             company_doc = {
                 "company_name": company_name,
                 "owner_id": None,
@@ -58,7 +58,6 @@ async def register_company(
             }
             res_company = await companies.insert_one(company_doc, session=s)
 
-            # 2. إنشاء المستخدم (الـ owner)
             owner_doc = {
                 "company_id": res_company.inserted_id,
                 "email": admin_email,
@@ -83,7 +82,6 @@ async def register_company(
                 session=s
             )
 
-            # 👇 إذا كلشي مشي تمام
             await s.commit_transaction()
 
             return {
@@ -105,6 +103,7 @@ async def register_company(
             # 👇 rollback إذا صار خطأ
             await s.abort_transaction()
             raise HTTPException(status_code=500, detail=f"Registration failed: {str(e)}")
+
 
 
 @router.post("/login")

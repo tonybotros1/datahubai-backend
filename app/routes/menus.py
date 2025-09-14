@@ -211,8 +211,7 @@ async def get_user_menu_tree(user_data: dict = Depends(security.get_current_user
         root_menus = data.get("rootMenus", [])
         tree_nodes_list = data.get("tree", [])
 
-        if not root_menus:
-            raise HTTPException(status_code=404, detail="No menus found for this user.")
+
 
         # Flatten the list of lists from tree_nodes
         all_nodes = root_menus + [node for sublist in tree_nodes_list for node in sublist]
