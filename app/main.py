@@ -15,6 +15,7 @@ from app.routes import companies
 from app.routes import favourite_screens
 from app.routes import list_of_values
 from app.routes import counters
+from app.routes import branches
 from app.websocket_config import manager
 
 users_collection = get_collection("sys-users")
@@ -61,6 +62,7 @@ app.include_router(counters.router, prefix="/counters", tags=["Counters"])
 app.include_router(responsibilities.router, prefix="/responsibilities", tags=["Responsibilities"])
 app.include_router(menus.router, prefix="/menus", tags=["Menus"])
 app.include_router(functions.router, prefix="/functions", tags=["Functions"])
+app.include_router(branches.router, prefix="/branches", tags=["Branches"])
 app.include_router(test.router, prefix="/test", tags=["Test"])
 
 
