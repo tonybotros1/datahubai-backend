@@ -121,7 +121,7 @@ async def change_counter_status(counter_id: str, status: bool = Body(None),
             return_document=ReturnDocument.AFTER
         )
         if not result:
-            raise HTTPException(status_code=404, detail="Model not found")
+            raise HTTPException(status_code=404, detail="Counter not found")
         serialized = serializer(result)
         await manager.broadcast({
             "type": "counter_updated",
