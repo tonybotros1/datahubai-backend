@@ -2,6 +2,7 @@ from typing import Optional, List
 from bson import ObjectId
 from fastapi import APIRouter, Body, HTTPException, Depends
 from pydantic import BaseModel, EmailStr
+from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError
 
 from app import database
@@ -26,10 +27,19 @@ def serializer(user: dict) -> dict:
 
 class UserCreate(BaseModel):
     user_name: Optional[str]
-    email: EmailStr
+    email: Optional[EmailStr]
     password: Optional[str]
-    roles_ids: Optional[List[str]]
+    roles: Optional[List[str]]
     expiry_date: Optional[datetime]
+
+
+# For updating a user (all fields optional)
+class UserUpdate(BaseModel):
+    user_name: Optional[str] = None
+    email: Optional[EmailStr] = None
+    password: Optional[str] = None
+    roles: Optional[List[str]] = None
+    expiry_date: Optional[datetime] = None
 
 
 @router.get("/get_all_users")
@@ -67,7 +77,7 @@ async def add_new_user(user: UserCreate, data: dict = Depends(security.get_curre
             "user_name": user.user_name,
             "email": user.email,
             "password_hash": security.pwd_ctx.hash(user.password),
-            "roles": user.roles_ids or [],
+            "roles": user.roles or [],
             "expiry_date": user.expiry_date,
             "status": True,
             "createdAt": security.now_utc(),
@@ -98,6 +108,49 @@ async def add_new_user(user: UserCreate, data: dict = Depends(security.get_curre
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
+@router.patch("/update_user/{user_id}")
+async def update_user(user_id: str, user: UserUpdate, _: dict = Depends(security.get_current_user)):
+    try:
+        user_data = user.model_dump(exclude_unset=True)
+
+        if "password" in user_data:
+            hashed = security.pwd_ctx.hash(user_data.pop("password"))
+            user_data["password_hash"] = hashed
+
+        user_data["updatedAt"] = security.now_utc()
+
+        result = await users_collection.find_one_and_update(
+            {"_id": ObjectId(user_id)},
+            {"$set": user_data},
+            projection={
+                "_id": 1,
+                "user_name": 1,
+                "email": 1,
+                "roles": 1,
+                "status": 1,
+                "expiry_date": 1,
+                "createdAt": 1,
+                "updatedAt": 1,
+            },
+            return_document=ReturnDocument.AFTER
+        )
+
+        if not result:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        updated_user = serializer(result)
+
+        await manager.broadcast({
+            "type": "user_updated",
+            "data": updated_user
+        })
+
+        return updated_user
+
+    except Exception as e:
+        raise e
+
+
 @router.delete("/remove_user/{user_id}")
 async def remove_user(user_id: str, _: dict = Depends(security.get_current_user)):
     try:
@@ -115,3 +168,20 @@ async def remove_user(user_id: str, _: dict = Depends(security.get_current_user)
 
     except Exception as e:
         raise e
+
+
+@router.patch("/change_user_status/{user_id}")
+async def change_user_status(user_id: str, status: bool = Body(None), _: dict = Depends(security.get_current_user)):
+    try:
+        result = await users_collection.find_one_and_update(
+            {"_id": ObjectId(user_id)}, {"$set": {"status": status, "updatedAt": datetime.now(timezone.utc), }},
+            return_document=ReturnDocument.AFTER
+        )
+        if not result:
+            raise HTTPException(status_code=404, detail="User not found")
+        await manager.broadcast({
+            "type": "user_status_updated",
+            "data": {"status": status, "_id": user_id}
+        })
+    except Exception as error:
+        return {"message": str(error)}
