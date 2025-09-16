@@ -343,4 +343,54 @@ async def update_value(value_id: str, name: str = Body(None),
         return {"message": str(e)}
 
 
+@router.get("/get_list_values_by_code")
+async def get_list_values_by_code(code: str, _: dict = Depends(security.get_current_user)):
+    try:
+        pipeline = [
+            {
+                "$match": {"code": code.upper(), "status": True},
+            },
+            {"$lookup": {
+                "from": "all_lists_values",
+                "let": {"listId": "$_id"},
+                "pipeline": [
+                    {
+                        "$match": {
+                            "$expr": {
+                                "$and": [
+                                    {"$eq": ["$list_id", "$$listId"]},
+                                    {"$eq": ["$status", True]}
+                                ]
+                            }
+                        }
+                    }
+                ],
+                "as": "value"
+            }
+            },
+            {
+                "$unwind": {
+                    "path": "$value",
+                    "preserveNullAndEmptyArrays": True
+                }
+            },
+            {
+                "$project": {
+                    "_id": "$value._id",
+                    "name": {"$ifNull": ["$value.name", ""]},
+                    "status": {"$ifNull": ["$value.status", ""]},
+                    "mastered_by": {"$ifNull": ["$value.mastered_by", ""]},
 
+                }
+            }
+        ]
+
+        cursor = await list_collection.aggregate(pipeline)
+        results = await cursor.to_list()
+        if not results:
+            raise HTTPException(status_code=404, detail="Values not found")
+        return {"values": [serializer(result) for result in results]}
+
+
+    except Exception as error:
+        raise error

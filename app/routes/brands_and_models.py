@@ -1,5 +1,7 @@
 from bson import ObjectId
-from fastapi import APIRouter, HTTPException, Form, File, UploadFile, Body
+from fastapi import APIRouter, HTTPException, Form, File, UploadFile, Body, Depends
+
+from app.core import security
 from app.database import get_collection
 from datetime import datetime, timezone
 from app.widgets import upload_images
@@ -13,36 +15,33 @@ models_collection = get_collection("all_brand_models")
 
 # ====================================== Brands Section ============================================
 
-def brand_serializer(brand) -> dict:
-    return {
-        "_id": str(brand["_id"]),  # <-- حوّل ObjectId لـ str
-        "name": brand["name"],
-        "logo": brand["logo"],
-        "status": brand.get("status", True),
-        "createdAt": brand["createdAt"].isoformat(),
-        "updatedAt": brand["updatedAt"].isoformat(),
-    }
+
+def brand_serializer(brand: dict) -> dict:
+    brand["_id"] = str(brand["_id"])
+    for key, value in brand.items():
+        if isinstance(value, datetime):
+            brand[key] = value.isoformat()
+    return brand
 
 
 def model_serializer(model) -> dict:
-    return {
-        "_id": str(model["_id"]),  # <-- حوّل ObjectId لـ str
-        "name": model["name"],
-        "status": model.get("status", True),
-        "createdAt": model["createdAt"].isoformat(),
-        "updatedAt": model["updatedAt"].isoformat(),
-    }
+    model["_id"] = str(model["_id"])
+    model["brand_id"] = str(model["brand_id"])
+    for key, value in model.items():
+        if isinstance(value, datetime):
+            model[key] = value.isoformat()
+    return model
 
 
 @router.get("/get_all_brands")
-def get_brands():
-    """إرجاع كل البراندز"""
-    brands = list(brands_collection.find({}))
+async def get_brands(_: dict = Depends(security.get_current_user)):
+    brands = await brands_collection.find({}).sort("name", 1).to_list(length=None)
     return {"brands": [brand_serializer(b) for b in brands]}
 
 
 @router.post("/add_new_brand")
-async def create_brand(name: str = Form(...), logo: UploadFile = File(...)):
+async def create_brand(name: str = Form(...), logo: UploadFile = File(...),
+                       _: dict = Depends(security.get_current_user)):
     try:
         result = await upload_images.upload_image(logo, 'car_brands')
 
@@ -55,7 +54,7 @@ async def create_brand(name: str = Form(...), logo: UploadFile = File(...)):
             "updatedAt": datetime.now(timezone.utc),
         }
 
-        insert_result = brands_collection.insert_one(brand_dict)
+        insert_result = await brands_collection.insert_one(brand_dict)
         brand_dict["_id"] = str(insert_result.inserted_id)
         serialized = brand_serializer(brand_dict)
 
@@ -69,8 +68,9 @@ async def create_brand(name: str = Form(...), logo: UploadFile = File(...)):
 
 
 @router.patch("/edit_brand/{brand_id}")
-async def update_brand(brand_id: str, name: str | None = Form(None), logo: UploadFile | None = File(None)):
-    brand = brands_collection.find_one({"_id": ObjectId(brand_id)})
+async def update_brand(brand_id: str, name: str | None = Form(None), logo: UploadFile | None = File(None),
+                       _: dict = Depends(security.get_current_user)):
+    brand = await brands_collection.find_one({"_id": ObjectId(brand_id)})
     if not brand:
         raise HTTPException(status_code=404, detail="Brand not found")
 
@@ -82,7 +82,7 @@ async def update_brand(brand_id: str, name: str | None = Form(None), logo: Uploa
         brand_data["name"] = brand["name"]
 
     if logo:
-        if brand['logo']:
+        if brand.get('logo'):
             await upload_images.delete_image_from_server(brand['logo_public_id'])
         result = await upload_images.upload_image(logo, 'car_brands')
         brand_data["logo"] = result["url"]
@@ -95,7 +95,7 @@ async def update_brand(brand_id: str, name: str | None = Form(None), logo: Uploa
         raise HTTPException(status_code=400, detail="Nothing to update")
 
     brand_data['updatedAt'] = datetime.now(timezone.utc)
-    brands_collection.update_one({"_id": ObjectId(brand_id)}, {"$set": brand_data})
+    await brands_collection.update_one({"_id": ObjectId(brand_id)}, {"$set": brand_data})
     brand_data['_id'] = ObjectId(brand_id)
     brand_data['createdAt'] = brand['createdAt']
     brand_data["status"] = brand.get("status", True)
@@ -110,8 +110,8 @@ async def update_brand(brand_id: str, name: str | None = Form(None), logo: Uploa
 
 
 @router.delete("/delete_brand/{brand_id}")
-async def delete_brand(brand_id: str):
-    brand = brands_collection.find_one({"_id": ObjectId(brand_id)})
+async def delete_brand(brand_id: str, _: dict = Depends(security.get_current_user)):
+    brand = await brands_collection.find_one({"_id": ObjectId(brand_id)})
     if not brand:
         raise HTTPException(status_code=404, detail="Brand not found")
 
@@ -119,7 +119,7 @@ async def delete_brand(brand_id: str):
         if "logo" in brand and brand["logo"]:
             public_id = brand["logo_public_id"]
             if await upload_images.delete_image_from_server(public_id):
-                result = brands_collection.delete_one({"_id": ObjectId(brand_id)})
+                result = await brands_collection.delete_one({"_id": ObjectId(brand_id)})
                 if result.deleted_count == 0:
                     raise HTTPException(status_code=404, detail="Brand not found")
                 await manager.broadcast({
@@ -129,18 +129,18 @@ async def delete_brand(brand_id: str):
                 return {"message": "Brand deleted successfully!"}
 
     except Exception as e:
-        # معالجة الأخطاء في حذف الصور
         print(f"Error deleting brand: {e}")
 
 
 @router.patch("/edit_brand_status/{brand_id}")
-async def edit_brand_status(brand_id: str, status: bool = Body(..., embed=True)):
-    result = brands_collection.update_one(
+async def edit_brand_status(brand_id: str, status: bool = Body(..., embed=True),
+                            _: dict = Depends(security.get_current_user)):
+    result = await brands_collection.update_one(
         {"_id": ObjectId(brand_id)}, {"$set": {"status": status, "updatedAt": datetime.now(timezone.utc)}})
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Brand not found")
 
-    updated_brand = brands_collection.find_one({"_id": ObjectId(brand_id)})
+    updated_brand = await brands_collection.find_one({"_id": ObjectId(brand_id)})
 
     await manager.broadcast({
         "type": "brand_updated",
@@ -153,13 +153,15 @@ async def edit_brand_status(brand_id: str, status: bool = Body(..., embed=True))
 # ====================================== Models Section ============================================
 
 @router.get("/get_models/{brand_id}")
-async def get_models(brand_id: str):
-    models = list(models_collection.find({"brand_id": brand_id}))
+async def get_models(brand_id: str, _: dict = Depends(security.get_current_user)):
+    models = await models_collection.find({"brand_id": brand_id}).sort("name", 1).to_list()
     return {"models": [model_serializer(m) for m in models]}
 
 
 @router.post("/add_new_model/{brand_id}")
-async def add_new_model(brand_id: str, name: str = Form(...)):
+async def add_new_model(brand_id: str, name: str = Body(..., embed=True),
+                        _: dict = Depends(security.get_current_user)
+                        ):
     try:
         model_dict = {
             "name": name,
@@ -169,7 +171,7 @@ async def add_new_model(brand_id: str, name: str = Form(...)):
             "updatedAt": datetime.now(timezone.utc),
         }
 
-        insert_result = models_collection.insert_one(model_dict)
+        insert_result = await models_collection.insert_one(model_dict)
         model_dict["_id"] = str(insert_result.inserted_id)
 
         serialized = model_serializer(model_dict)
@@ -185,13 +187,14 @@ async def add_new_model(brand_id: str, name: str = Form(...)):
 
 
 @router.patch("/edit_model_status/{model_id}")
-async def edit_model_status(model_id: str, status: bool = Body(..., embed=True)):
-    result = models_collection.update_one({"_id": ObjectId(model_id)},
-                                          {"$set": {"status": status, "updatedAt": datetime.now(timezone.utc)}})
+async def edit_model_status(model_id: str, status: bool = Body(..., embed=True),
+                            _: dict = Depends(security.get_current_user)):
+    result = await models_collection.update_one({"_id": ObjectId(model_id)},
+                                                {"$set": {"status": status, "updatedAt": datetime.now(timezone.utc)}})
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Model not found")
 
-    updated_model = models_collection.find_one({"_id": ObjectId(model_id)})
+    updated_model = await models_collection.find_one({"_id": ObjectId(model_id)})
 
     await manager.broadcast({
         "type": "model_updated",
@@ -202,9 +205,9 @@ async def edit_model_status(model_id: str, status: bool = Body(..., embed=True))
 
 
 @router.delete("/delete_model/{model_id}")
-async def delete_model(model_id: str):
+async def delete_model(model_id: str, _: dict = Depends(security.get_current_user)):
     try:
-        models_collection.delete_one({"_id": ObjectId(model_id)})
+        await models_collection.delete_one({"_id": ObjectId(model_id)})
         await manager.broadcast({
             "type": "model_deleted",
             "data": {"_id": model_id}
@@ -217,8 +220,8 @@ async def delete_model(model_id: str):
 
 
 @router.patch("/edit_model/{model_id}")
-async def edit_model(model_id: str, name: str = Body(..., embed=True)):
-    updated_model = models_collection.find_one_and_update(
+async def edit_model(model_id: str, name: str = Body(..., embed=True), _: dict = Depends(security.get_current_user)):
+    updated_model = await models_collection.find_one_and_update(
         {"_id": ObjectId(model_id)},
         {"$set": {"updatedAt": datetime.now(timezone.utc), "name": name}},
         return_document=ReturnDocument.AFTER  # بترجع المستند بعد التعديل
@@ -233,3 +236,15 @@ async def edit_model(model_id: str, name: str = Body(..., embed=True)):
     })
 
     return {"message": "Model updated successfully!", "model": model_serializer(updated_model)}
+
+
+@router.get("/get_all_brands_by_status")
+async def get_brands_by_status(_: dict = Depends(security.get_current_user)):
+    brands = await brands_collection.find({"status": True}).sort("name", 1).to_list(length=None)
+    return {"brands": [brand_serializer(b) for b in brands]}
+
+
+@router.get("/get_models_by_status/{brand_id}")
+async def get_models_by_status(brand_id: str, _: dict = Depends(security.get_current_user)):
+    models = await models_collection.find({"brand_id": brand_id, "status": True}).sort("name", 1).to_list()
+    return {"models": [model_serializer(m) for m in models]}
