@@ -974,7 +974,7 @@ async def search_engine_for_car_trading(
 
         # Execute the aggregation pipeline and return the results
         results = await all_trades_collection.aggregate(pipeline).to_list(None)
-        print(result)
+
         return results
 
     except Exception as e:
