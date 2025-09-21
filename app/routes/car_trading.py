@@ -9,7 +9,7 @@ from pymongo import UpdateOne
 from app import database
 from app.core import security
 from app.database import get_collection
-from datetime import datetime, timezone, timedelta, date
+from datetime import datetime, timezone, timedelta
 from app.websocket_config import manager
 
 router = APIRouter()
@@ -109,6 +109,22 @@ class CarTradingModel(BaseModel):
     model_config = {
         "arbitrary_types_allowed": True
     }
+
+
+def bson_serializer(obj):
+    if isinstance(obj, datetime):
+        return obj.isoformat()
+    elif isinstance(obj, ObjectId):
+        return str(obj)
+    elif isinstance(obj, list):
+        return [bson_serializer(item) for item in obj]
+    elif isinstance(obj, dict):
+        return {k: bson_serializer(v) for k, v in obj.items()}
+    return obj
+
+
+def car_trade_search_serializer(trade: dict) -> dict:
+    return bson_serializer(trade)
 
 
 def serialize(document: dict) -> dict:
@@ -711,7 +727,7 @@ async def update_generale_expenses(type_id: str, general: GeneralExpensesModel,
 
 @router.post("/add_new_trade")
 async def add_new_trade(trade: CarTradingModel, data: dict = Depends(security.get_current_user)):
-    company_id = data.get("company_id")
+    company_id = ObjectId(data.get("company_id"))
     async with database.client.start_session() as session:
         try:
             await session.start_transaction()
@@ -763,7 +779,6 @@ async def add_new_trade(trade: CarTradingModel, data: dict = Depends(security.ge
                     print(uuid_val)
                     if uuid_val:
                         uuid_map.append({"uuid": uuid_val, "db_id": str(inserted_id)})
-                print(uuid_map)
 
             await session.commit_transaction()
 
@@ -771,7 +786,6 @@ async def add_new_trade(trade: CarTradingModel, data: dict = Depends(security.ge
         except HTTPException:
             raise
         except Exception as e:
-            print("Error inserting trade:", e)
             traceback.print_exc()
             raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
 
@@ -787,7 +801,6 @@ async def update_trade(trade_id: str, trade: CarTradingModel,
 
         return {"message": "Trade updated successfully", "trade_id": trade_id}
     except Exception as e:
-        print("Error inserting trade:", e)
         raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
 
 
@@ -854,7 +867,6 @@ async def update_trade_items(
             )
 
         if added_items:
-            print("yes")
             items_result = await all_trades_items_collection.insert_many(added_items)
             for j, inserted_id in enumerate(items_result.inserted_ids):
                 if "uuid" in uuid_map[j]:
@@ -866,19 +878,21 @@ async def update_trade_items(
         raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
 
 
-@router.get("/search_engine_for_car_trading")
+@router.post("/search_engine_for_car_trading")
 async def search_engine_for_car_trading(
         filter_trades: CarTradingSearch,
         data: dict = Depends(security.get_current_user)
 ):
     try:
         company_id = ObjectId(data.get("company_id"))
+        pipeline: list[dict] = []
 
-        pipeline = []
-
-        # Initial match stage for the main 'all_trades' collection
+        # -------------------------------
+        # Initial match stage
+        # -------------------------------
         match_stage = {}
-        if company_id: match_stage["company_id"] = company_id
+        if company_id:
+            match_stage["company_id"] = company_id
         if filter_trades.car_brand:
             match_stage["car_brand"] = filter_trades.car_brand
         if filter_trades.car_model:
@@ -896,7 +910,38 @@ async def search_engine_for_car_trading(
 
         pipeline.append({"$match": match_stage})
 
-        # Lookup stage to join 'all_trades' with 'all_trades_items'
+        # -------------------------------
+        # Lookups for brand/model/etc
+        # -------------------------------
+        lookups = [
+            ("car_brand", "all_brands"),
+            ("car_model", "all_brand_models"),
+            ("color_in", "all_lists_values"),
+            ("color_out", "all_lists_values"),
+            ("specification", "all_lists_values"),
+            ("engine_size", "all_lists_values"),
+            ("year", "all_lists_values"),
+            ("bought_from", "all_lists_values"),
+            ("sold_to", "all_lists_values"),
+        ]
+
+        for local_field, collection in lookups:
+            pipeline.append({
+                "$lookup": {
+                    "from": collection,
+                    "let": {"field_id": f"${local_field}"},
+                    "pipeline": [
+                        {"$match": {"$expr": {"$eq": ["$_id", "$$field_id"]}}},
+                        {"$project": {"name": 1}}
+                    ],
+                    "as": local_field
+                }
+            })
+            pipeline.append({"$unwind": {"path": f"${local_field}", "preserveNullAndEmptyArrays": True}})
+
+        # -------------------------------
+        # Lookup trade items
+        # -------------------------------
         pipeline.append({
             "$lookup": {
                 "from": "all_trades_items",
@@ -905,77 +950,187 @@ async def search_engine_for_car_trading(
                 "as": "trade_items"
             }
         })
+        pipeline.append({"$unwind": {"path": "$trade_items", "preserveNullAndEmptyArrays": True}})
 
-        # Unwind the trade_items array to work with each item individually
-        pipeline.append({"$unwind": "$trade_items"})
-
-        # Lookup stage to join 'trade_items' with 'all_lists_values'
+        # Lookup item name
         pipeline.append({
             "$lookup": {
                 "from": "all_lists_values",
-                "localField": "trade_items.item",
-                "foreignField": "_id",
-                "as": "item_details"
+                "let": {"item_id": "$trade_items.item"},
+                "pipeline": [
+                    {"$match": {"$expr": {"$eq": ["$_id", "$$item_id"]}}},
+                    {"$project": {"name": 1}}
+                ],
+                "as": "item_detail"
+            }
+        })
+        pipeline.append({"$unwind": {"path": "$item_detail", "preserveNullAndEmptyArrays": True}})
+
+        # -------------------------------
+        # Add temporary fields for BUY/SELL dates
+        # -------------------------------
+        pipeline.append({
+            "$addFields": {
+                "buy_date_tmp": {
+                    "$cond": [
+                        {"$eq": ["$item_detail.name", "BUY"]},
+                        "$trade_items.date",
+                        None
+                    ]
+                },
+                "sell_date_tmp": {
+                    "$cond": [
+                        {"$eq": ["$item_detail.name", "SELL"]},
+                        "$trade_items.date",
+                        None
+                    ]
+                }
             }
         })
 
-        # Unwind the item_details array
-        pipeline.append({"$unwind": "$item_details"})
+        # -------------------------------
+        # Group per trade
+        # -------------------------------
+        pipeline.append({
+            "$group": {
+                "_id": "$_id",
+                "date": {"$first": "$date"},
+                "note": {"$first": "$note"},
+                "status": {"$first": "$status"},
+                "mileage": {"$first": "$mileage"},
+                "car_brand": {"$first": "$car_brand"},
+                "car_model": {"$first": "$car_model"},
+                "car_year": {"$first": "$year"},
+                "car_color_in": {"$first": "$color_in"},
+                "car_color_out": {"$first": "$color_out"},
+                "car_specification": {"$first": "$specification"},
+                "car_engine_size": {"$first": "$engine_size"},
+                "car_bought_from": {"$first": "$bought_from"},
+                "car_sold_to": {"$first": "$sold_to"},
+                "trade_items": {
+                    "$push": {
+                        "_id": "$trade_items._id",
+                        "company_id": "$trade_items.company_id",
+                        "trade_id": "$trade_items.trade_id",
+                        "date": "$trade_items.date",
+                        "item_id": "$item_detail._id",
+                        "item": "$item_detail.name",
+                        "pay": "$trade_items.pay",
+                        "receive": "$trade_items.receive",
+                        "comment": "$trade_items.comment",
+                        "createdAt": "$trade_items.createdAt",
+                        "updatedAt": "$trade_items.updatedAt"
+                    }
+                },
+                "buy_date": {"$min": "$buy_date_tmp"},
+                "sell_date": {"$min": "$sell_date_tmp"},
+                "total_pay": {"$sum": {"$ifNull": ["$trade_items.pay", 0]}},
+                "total_receive": {"$sum": {"$ifNull": ["$trade_items.receive", 0]}}
+            }
+        })
 
-        # Conditionally match on the item_details.name and date
-        item_match = {}
+        # -------------------------------
+        # Date filtering after group
+        # -------------------------------
+        now = datetime.now(timezone.utc)
+        date_field = "buy_date"
+        if filter_trades.status and filter_trades.status.lower() == "sold":
+            date_field = "sell_date"
 
-        # Default to 'BUY' date if no status is specified
-        item_name = "BUY"
+        date_filter = {}
+        if filter_trades.today:
+            start = datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
+            end = start + timedelta(days=1)
+            print(start, end)
+            date_filter[date_field] = {"$gte": start, "$lt": end}
 
-        if filter_trades.status:
-            # Check the status to determine which item type to filter
-            if filter_trades.status.lower() == "new":
-                item_name = "BUY"
-        elif filter_trades.status.lower() == "sold":
-            item_name = "SELL"
-
-        item_match["item_details.name"] = item_name
-
-        # Add item name match stage
-        pipeline.append({"$match": item_match})
-
-        # Date filtering logic based on the item date
-        date_match = {}
-        item_date_field = "$trade_items.date"
-
-        if filter_trades.from_date or filter_trades.to_date:
-            date_match[item_date_field] = {}
-        if filter_trades.from_date:
-            date_match[item_date_field]["$gte"] = filter_trades.from_date
-        if filter_trades.to_date:
-            # Add one day to the to_date to make it inclusive of the entire day
-            end_of_day = filter_trades.to_date + timedelta(days=1)
-            date_match[item_date_field]["$lt"] = end_of_day
-        elif filter_trades.today:
-            today_start = datetime.combine(date.today(), datetime.min.time())
-            today_end = datetime.combine(date.today(), datetime.max.time())
-            date_match[item_date_field] = {"$gte": today_start, "$lte": today_end}
         elif filter_trades.this_month:
-            today = date.today()
-            first_day_of_month = datetime(today.year, today.month, 1)
-            next_month = today.replace(day=28) + timedelta(days=4)
-            last_day_of_month = datetime(next_month.year, next_month.month, 1)
-            date_match[item_date_field] = {"$gte": first_day_of_month, "$lt": last_day_of_month}
+            start = datetime(now.year, now.month, 1, tzinfo=timezone.utc)
+            end = datetime(now.year + (now.month // 12), ((now.month % 12) + 1), 1)
+            date_filter[date_field] = {"$gte": start, "$lt": end}
+
         elif filter_trades.this_year:
-            today = date.today()
-            first_day_of_year = datetime(today.year, 1, 1)
-            last_day_of_year = datetime(today.year + 1, 1, 1)
-            date_match[item_date_field] = {"$gte": first_day_of_year, "$lt": last_day_of_year}
+            start = datetime(now.year, 1, 1, tzinfo=timezone.utc)
+            end = datetime(now.year + 1, 1, 1)
+            date_filter[date_field] = {"$gte": start, "$lt": end}
 
-        # Add date match stage if any date filter is applied
-        if date_match:
-            pipeline.append({"$match": date_match})
+        elif filter_trades.from_date or filter_trades.to_date:
+            date_filter[date_field] = {}
+            if filter_trades.from_date:
+                print("from date")
+                date_filter[date_field]["$gte"] = filter_trades.from_date
+            if filter_trades.to_date:
+                print("to date")
+                date_filter[date_field]["$lte"] = filter_trades.to_date
+            print(date_filter)
 
-        # Execute the aggregation pipeline and return the results
-        results = await all_trades_collection.aggregate(pipeline).to_list(None)
+        if date_filter:
+            pipeline.append({"$match": date_filter})
 
-        return results
+        # -------------------------------
+        # Final projection
+        # -------------------------------
+        pipeline.append({
+            "$project": {
+                "_id": 1,
+                "car_brand_id": "$car_brand._id",
+                "car_brand": "$car_brand.name",
+                "car_model_id": "$car_model._id",
+                "car_model": "$car_model.name",
+                "year_id": "$car_year._id",
+                "year": "$car_year.name",
+                "status": 1,
+                "color_in_id": "$car_color_in._id",
+                "color_in": "$car_color_in.name",
+                "color_out_id": "$car_color_out._id",
+                "color_out": "$car_color_out.name",
+                "specification_id": "$car_specification._id",
+                "specification": "$car_specification.name",
+                "engine_size_id": "$car_engine_size._id",
+                "engine_size": "$car_engine_size.name",
+                "mileage": 1,
+                "bought_from_id": "$car_bought_from._id",
+                "bought_from": "$car_bought_from.name",
+                "sold_to_id": "$car_sold_to._id",
+                "sold_to": "$car_sold_to.name",
+                "note": 1,
+                "date": 1,
+                "trade_items": 1,
+                "buy_date": 1,
+                "sell_date": 1,
+                "total_pay": 1,
+                "total_receive": 1,
+                "net": {"$subtract": ["$total_receive", "$total_pay"]}
+            }
+        })
+
+        # -------------------------------
+        # Sorting
+        # -------------------------------
+        sort_field = "buy_date" if (filter_trades.status and filter_trades.status.lower() == "sell") else "sell_date"
+        pipeline.append({"$sort": {sort_field: -1}})
+
+        # -------------------------------
+        # Grand totals
+        # -------------------------------
+        pipeline.append({
+            "$group": {
+                "_id": None,
+                "trades": {"$push": "$$ROOT"},
+                "grand_total_pay": {"$sum": "$total_pay"},
+                "grand_total_receive": {"$sum": "$total_receive"},
+                "grand_net": {"$sum": "$net"}
+            }
+        })
+
+        # Execute aggregation
+        cursor = await all_trades_collection.aggregate(pipeline)
+        results = await cursor.to_list(None)
+
+        if results:
+            return [car_trade_search_serializer(r) for r in results]
+        else:
+            return [{"trades": [], "grand_total_pay": 0, "grand_total_receive": 0, "grand_net": 0}]
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
