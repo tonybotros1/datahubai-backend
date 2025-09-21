@@ -5,6 +5,7 @@ from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from pydantic_core import core_schema
 from pymongo import UpdateOne
+from pymongo.errors import PyMongoError
 
 from app import database
 from app.core import security
@@ -1009,19 +1010,26 @@ async def search_engine_for_car_trading(
                 "car_sold_to": {"$first": "$sold_to"},
                 "trade_items": {
                     "$push": {
-                        "_id": "$trade_items._id",
-                        "company_id": "$trade_items.company_id",
-                        "trade_id": "$trade_items.trade_id",
-                        "date": "$trade_items.date",
-                        "item_id": "$item_detail._id",
-                        "item": "$item_detail.name",
-                        "pay": "$trade_items.pay",
-                        "receive": "$trade_items.receive",
-                        "comment": "$trade_items.comment",
-                        "createdAt": "$trade_items.createdAt",
-                        "updatedAt": "$trade_items.updatedAt"
+                        "$cond": [
+                            {"$ifNull": ["$trade_items._id", False]},
+                            {
+                                "_id": "$trade_items._id",
+                                "company_id": "$trade_items.company_id",
+                                "trade_id": "$trade_items.trade_id",
+                                "date": "$trade_items.date",
+                                "item_id": "$item_detail._id",
+                                "item": "$item_detail.name",
+                                "pay": "$trade_items.pay",
+                                "receive": "$trade_items.receive",
+                                "comment": "$trade_items.comment",
+                                "createdAt": "$trade_items.createdAt",
+                                "updatedAt": "$trade_items.updatedAt"
+                            },
+                            "$$REMOVE"
+                        ]
                     }
                 },
+
                 "buy_date": {"$min": "$buy_date_tmp"},
                 "sell_date": {"$min": "$sell_date_tmp"},
                 "total_pay": {"$sum": {"$ifNull": ["$trade_items.pay", 0]}},
@@ -1072,42 +1080,48 @@ async def search_engine_for_car_trading(
         # -------------------------------
         pipeline.append({
             "$project": {
-                "_id": 1,
-                "car_brand_id": "$car_brand._id",
-                "car_brand": "$car_brand.name",
-                "car_model_id": "$car_model._id",
-                "car_model": "$car_model.name",
-                "year_id": "$car_year._id",
-                "year": "$car_year.name",
-                "status": 1,
-                "color_in_id": "$car_color_in._id",
-                "color_in": "$car_color_in.name",
-                "color_out_id": "$car_color_out._id",
-                "color_out": "$car_color_out.name",
-                "specification_id": "$car_specification._id",
-                "specification": "$car_specification.name",
-                "engine_size_id": "$car_engine_size._id",
-                "engine_size": "$car_engine_size.name",
-                "mileage": 1,
-                "bought_from_id": "$car_bought_from._id",
-                "bought_from": "$car_bought_from.name",
-                "sold_to_id": "$car_sold_to._id",
-                "sold_to": "$car_sold_to.name",
-                "note": 1,
-                "date": 1,
-                "trade_items": 1,
-                "buy_date": 1,
-                "sell_date": 1,
-                "total_pay": 1,
-                "total_receive": 1,
-                "net": {"$subtract": ["$total_receive", "$total_pay"]}
+                "_id": 1,  # usually always present
+                "car_brand_id": {"$ifNull": ["$car_brand._id", ""]},
+                "car_brand": {"$ifNull": ["$car_brand.name", ""]},
+                "car_model_id": {"$ifNull": ["$car_model._id", ""]},
+                "car_model": {"$ifNull": ["$car_model.name", ""]},
+                "year_id": {"$ifNull": ["$car_year._id", ""]},
+                "year": {"$ifNull": ["$car_year.name", ""]},
+                "status": {"$ifNull": ["$status", ""]},
+                "color_in_id": {"$ifNull": ["$car_color_in._id", ""]},
+                "color_in": {"$ifNull": ["$car_color_in.name", ""]},
+                "color_out_id": {"$ifNull": ["$car_color_out._id", ""]},
+                "color_out": {"$ifNull": ["$car_color_out.name", ""]},
+                "specification_id": {"$ifNull": ["$car_specification._id", ""]},
+                "specification": {"$ifNull": ["$car_specification.name", ""]},
+                "engine_size_id": {"$ifNull": ["$car_engine_size._id", ""]},
+                "engine_size": {"$ifNull": ["$car_engine_size.name", ""]},
+                "mileage": {"$ifNull": ["$mileage", 0]},
+                "bought_from_id": {"$ifNull": ["$car_bought_from._id", ""]},
+                "bought_from": {"$ifNull": ["$car_bought_from.name", ""]},
+                "sold_to_id": {"$ifNull": ["$car_sold_to._id", ""]},
+                "sold_to": {"$ifNull": ["$car_sold_to.name", ""]},
+                "note": {"$ifNull": ["$note", ""]},
+                "date": {"$ifNull": ["$date", ""]},
+                "trade_items": {"$ifNull": ["$trade_items", []]},
+                "buy_date": {"$ifNull": ["$buy_date", ""]},
+                "sell_date": {"$ifNull": ["$sell_date", ""]},
+                "total_pay": {"$toDouble": {"$ifNull": ["$total_pay", 0]}},
+                "total_receive": {"$toDouble": {"$ifNull": ["$total_receive", 0]}},
+                "net": {
+                    "$subtract": [
+                        {"$toDouble": {"$ifNull": ["$total_receive", 0]}},
+                        {"$toDouble": {"$ifNull": ["$total_pay", 0]}}
+                    ]
+                }
+
             }
         })
 
         # -------------------------------
         # Sorting
         # -------------------------------
-        sort_field = "buy_date" if (filter_trades.status and filter_trades.status.lower() == "sell") else "sell_date"
+        sort_field = "sell_date" if (filter_trades.status and filter_trades.status.lower() == "sold") else "buy_date"
         pipeline.append({"$sort": {sort_field: -1}})
 
         # -------------------------------
@@ -1133,4 +1147,34 @@ async def search_engine_for_car_trading(
             return [{"trades": [], "grand_total_pay": 0, "grand_total_receive": 0, "grand_net": 0}]
 
     except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
+
+
+@router.delete("/delete_trade/{trade_id}")
+async def delete_trade(trade_id: str, _: dict = Depends(security.get_current_user)):
+    try:
+        # Validate ObjectId
+        if not ObjectId.is_valid(trade_id):
+            raise HTTPException(status_code=400, detail="Invalid trade ID")
+
+        async with database.client.start_session() as session:
+            await session.start_transaction()  # <-- await, not async with
+            result1 = await all_trades_collection.delete_one(
+                {"_id": ObjectId(trade_id)}, session=session
+            )
+            await all_trades_items_collection.delete_many(
+                {"trade_id": ObjectId(trade_id)}, session=session
+            )
+            await session.commit_transaction()  # commit the transaction
+
+            if result1.deleted_count == 0:
+                raise HTTPException(status_code=404, detail="Trade not found")
+
+        return {"message": "Trade and its items deleted successfully"}
+
+    except PyMongoError as e:
+        print(e)
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+    except Exception as e:
+        print(e)
         raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
