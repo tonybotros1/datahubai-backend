@@ -1,11 +1,8 @@
 from typing import Optional, List
-from bson import ObjectId
-from fastapi import APIRouter, Body, HTTPException, Depends
+from fastapi import APIRouter, Body, Depends
 from pydantic import BaseModel, EmailStr
 from pymongo import ReturnDocument
-from pymongo.errors import DuplicateKeyError
 
-from app import database
 from app.core import security
 from app.database import get_collection
 from datetime import datetime, timezone
@@ -61,66 +58,99 @@ async def get_all_users(data: dict = Depends(security.get_current_user)):
         return {"message": str(e)}
 
 
+from bson import ObjectId, errors
+from fastapi import  Depends, HTTPException
+
+
 @router.post("/add_new_user")
 async def add_new_user(user: UserCreate, data: dict = Depends(security.get_current_user)):
-    company_id = ObjectId(data.get("company_id"))
-
     try:
+        # Validate company_id
+        try:
+            company_id = ObjectId(data.get("company_id"))
+        except errors.InvalidId:
+            raise HTTPException(status_code=400, detail="Invalid company ID")
+
+        # Check for existing email
         existing_user = await users_collection.find_one(
             {"company_id": company_id, "email": user.email},
         )
         if existing_user:
             raise HTTPException(status_code=400, detail="Email already exists")
 
+        # Convert roles to ObjectId
+        roles_list = [ObjectId(role) for role in user.roles] if user.roles else []
+
+        # Hash password
+        password_hash = security.pwd_ctx.hash(user.password) if user.password else None
+
         new_user = {
             "company_id": company_id,
             "user_name": user.user_name,
             "email": user.email,
-            "password_hash": security.pwd_ctx.hash(user.password),
-            "roles": user.roles or [],
+            "password_hash": password_hash,
+            "roles": roles_list,
             "expiry_date": user.expiry_date,
             "status": True,
             "createdAt": security.now_utc(),
             "updatedAt": security.now_utc(),
         }
 
+        # Insert new user
         result = await users_collection.insert_one(new_user)
 
+        # Prepare response
+        new_user["_id"] = str(result.inserted_id)
         new_user.pop("password_hash", None)
         new_user.pop("company_id", None)
-        new_user["_id"] = str(result.inserted_id)
         new_user = serializer(new_user)
+
+        # Broadcast event
         await manager.broadcast({
             "type": "user_added",
             "data": new_user
         })
+
         return {
             "success": True,
             "message": "User created successfully",
             "user": new_user
         }
 
-
-    except HTTPException as e:  # let FastAPI handle HTTP errors
-        raise e
-
-    except Exception as error:  # other unexpected errors
+    except HTTPException:
+        raise
+    except Exception:
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.patch("/update_user/{user_id}")
-async def update_user(user_id: str, user: UserUpdate, _: dict = Depends(security.get_current_user)):
+async def update_user(
+        user_id: str, user: UserUpdate, _: dict = Depends(security.get_current_user)
+):
     try:
+        # Convert user_id safely
+        try:
+            user_obj_id = ObjectId(user_id)
+        except errors.InvalidId:
+            raise HTTPException(status_code=400, detail="Invalid user ID")
+
+        # Extract only provided fields
         user_data = user.model_dump(exclude_unset=True)
 
+        # Hash password if provided
         if "password" in user_data:
             hashed = security.pwd_ctx.hash(user_data.pop("password"))
             user_data["password_hash"] = hashed
 
+        # Convert roles to ObjectId
+        if "roles" in user_data:
+            user_data["roles"] = [ObjectId(role) for role in user_data["roles"]]
+
         user_data["updatedAt"] = security.now_utc()
 
+        # Update user in MongoDB
         result = await users_collection.find_one_and_update(
-            {"_id": ObjectId(user_id)},
+            {"_id": user_obj_id},
             {"$set": user_data},
             projection={
                 "_id": 1,
@@ -140,6 +170,7 @@ async def update_user(user_id: str, user: UserUpdate, _: dict = Depends(security
 
         updated_user = serializer(result)
 
+        # Broadcast update
         await manager.broadcast({
             "type": "user_updated",
             "data": updated_user
@@ -148,7 +179,7 @@ async def update_user(user_id: str, user: UserUpdate, _: dict = Depends(security
         return updated_user
 
     except Exception as e:
-        raise e
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.delete("/remove_user/{user_id}")
