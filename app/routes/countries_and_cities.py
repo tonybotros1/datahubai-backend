@@ -105,25 +105,38 @@ async def change_country_status(country_id: str, status: bool = Body(..., embed=
         return {"error": str(e)}
 
 
-# this is to delete country
+from fastapi import HTTPException, Depends
+from bson import ObjectId
+
+
 @router.delete("/delete_country/{country_id}")
 async def delete_country(country_id: str, _: dict = Depends(security.get_current_user)):
+    # Find the country first
     country = await countries_collection.find_one({"_id": ObjectId(country_id)})
     if not country:
         raise HTTPException(status_code=404, detail="Country not found")
 
     try:
-        if "flag" in country and country["flag"] and country["flag_public_id"]:
-            if await upload_images.delete_image_from_server(country["flag_public_id"]):
-                await countries_collection.delete_one({"_id": ObjectId(country_id)})
-                await manager.broadcast({
-                    "type": "country_deleted",
-                    "data": {"_id": country_id}
-                })
-                return {"message": "Country deleted successfully!"}
+        # If country has a flag, try to delete it
+        if country.get("flag") and country.get("flag_public_id"):
+            await upload_images.delete_image_from_server(country["flag_public_id"])
+
+        # Delete the country document
+        result = await countries_collection.delete_one({"_id": ObjectId(country_id)})
+        if result.deleted_count == 0:
+            raise HTTPException(status_code=404, detail="Country not found")
+
+        # Broadcast deletion event
+        await manager.broadcast({
+            "type": "country_deleted",
+            "data": {"_id": country_id}
+        })
+
+        return {"message": "Country deleted successfully!"}
 
     except Exception as e:
-        return {"error": str(e)}
+        print(f"Error deleting country: {e}")
+        raise HTTPException(status_code=500, detail="Failed to delete country")
 
 
 # This is to update country

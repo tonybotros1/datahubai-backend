@@ -39,20 +39,31 @@ async def get_brands(_: dict = Depends(security.get_current_user)):
     return {"brands": [brand_serializer(b) for b in brands]}
 
 
-@router.post("/add_new_brand")
-async def create_brand(name: str = Form(...), logo: UploadFile = File(...),
-                       _: dict = Depends(security.get_current_user)):
-    try:
-        result = await upload_images.upload_image(logo, 'car_brands')
+from fastapi import Form, File, UploadFile
+from datetime import datetime, timezone
 
+
+@router.post("/add_new_brand")
+async def create_brand(
+        name: str = Form(None),  # name can be null
+        logo: UploadFile = File(None),  # logo can be null
+        _: dict = Depends(security.get_current_user)
+):
+    try:
         brand_dict = {
             "name": name,
-            "logo": result["url"],
-            "logo_public_id": result["public_id"],
+            "logo": None,
+            "logo_public_id": None,
             "status": True,
             "createdAt": datetime.now(timezone.utc),
             "updatedAt": datetime.now(timezone.utc),
         }
+
+        # Upload logo only if provided
+        if logo is not None:
+            result = await upload_images.upload_image(logo, 'car_brands')
+            brand_dict["logo"] = result["url"]
+            brand_dict["logo_public_id"] = result["public_id"]
 
         insert_result = await brands_collection.insert_one(brand_dict)
         brand_dict["_id"] = str(insert_result.inserted_id)
@@ -62,7 +73,9 @@ async def create_brand(name: str = Form(...), logo: UploadFile = File(...),
             "type": "brand_created",
             "data": serialized
         })
+
         return {"message": "Brand created successfully!", "brand": serialized}
+
     except Exception as e:
         return {"error": str(e)}
 
@@ -109,27 +122,39 @@ async def update_brand(brand_id: str, name: str | None = Form(None), logo: Uploa
     return {"message": "Brand updated successfully!", "brand": serialized}
 
 
+from fastapi import HTTPException, Depends
+from bson import ObjectId
+
+
 @router.delete("/delete_brand/{brand_id}")
 async def delete_brand(brand_id: str, _: dict = Depends(security.get_current_user)):
+    # Find the brand first
     brand = await brands_collection.find_one({"_id": ObjectId(brand_id)})
     if not brand:
         raise HTTPException(status_code=404, detail="Brand not found")
 
     try:
-        if "logo" in brand and brand["logo"]:
-            public_id = brand["logo_public_id"]
-            if await upload_images.delete_image_from_server(public_id):
-                result = await brands_collection.delete_one({"_id": ObjectId(brand_id)})
-                if result.deleted_count == 0:
-                    raise HTTPException(status_code=404, detail="Brand not found")
-                await manager.broadcast({
-                    "type": "brand_deleted",
-                    "data": {"_id": brand_id}
-                })
-                return {"message": "Brand deleted successfully!"}
+        # If brand has a logo, try to delete it
+        if brand.get("logo") and brand.get("logo_public_id"):
+            await upload_images.delete_image_from_server(brand["logo_public_id"])
+
+        # Delete the brand document regardless of logo
+        result = await brands_collection.delete_one({"_id": ObjectId(brand_id)})
+        if result.deleted_count == 0:
+            raise HTTPException(status_code=404, detail="Brand not found")
+
+        # Broadcast the deletion event
+        await manager.broadcast({
+            "type": "brand_deleted",
+            "data": {"_id": brand_id}
+        })
+
+        return {"message": "Brand deleted successfully!"}
 
     except Exception as e:
+        # Log and raise a 500 error if anything fails
         print(f"Error deleting brand: {e}")
+        raise HTTPException(status_code=500, detail="Failed to delete brand")
 
 
 @router.patch("/edit_brand_status/{brand_id}")
@@ -154,7 +179,7 @@ async def edit_brand_status(brand_id: str, status: bool = Body(..., embed=True),
 
 @router.get("/get_models/{brand_id}")
 async def get_models(brand_id: str, _: dict = Depends(security.get_current_user)):
-    models = await models_collection.find({"brand_id": brand_id}).sort("name", 1).to_list()
+    models = await models_collection.find({"brand_id": ObjectId(brand_id)}).sort("name", 1).to_list()
     return {"models": [model_serializer(m) for m in models]}
 
 
@@ -246,5 +271,8 @@ async def get_brands_by_status(_: dict = Depends(security.get_current_user)):
 
 @router.get("/get_models_by_status/{brand_id}")
 async def get_models_by_status(brand_id: str, _: dict = Depends(security.get_current_user)):
-    models = await models_collection.find({"brand_id": brand_id, "status": True}).sort("name", 1).to_list()
-    return {"models": [model_serializer(m) for m in models]}
+    try:
+        models = await models_collection.find({"brand_id": ObjectId(brand_id), "status": True}).sort("name", 1).to_list()
+        return {"models": [model_serializer(m) for m in models]}
+    except Exception as e:
+        return {"error": str(e)}
