@@ -1,13 +1,7 @@
-from datetime import datetime
-from typing import List, Optional
 from bson import ObjectId
-from fastapi import APIRouter, HTTPException, Form, UploadFile, File, Depends, Body
-from pydantic import BaseModel, EmailStr
-from pymongo.errors import DuplicateKeyError
+from fastapi import APIRouter, HTTPException, Form
 from app.database import get_collection
-from app import database
 from app.core import security
-from app.widgets import upload_images
 from app.widgets.check_date import is_date_equals_today_or_older
 import jwt
 
@@ -16,93 +10,6 @@ router = APIRouter()
 users = get_collection("sys-users")
 companies = get_collection("companies")
 refresh_tokens = get_collection("refresh_tokens")
-
-
-
-@router.post("/register_company")
-async def register_company(
-        company_name: str = Form(...),
-        admin_email: str = Form(...),
-        admin_password: str = Form(...),
-        industry: str = Form(...),
-        company_logo: UploadFile = File(None),
-        roles_ids: List[str] = Form(...),
-        admin_name: str = Form(...),
-        phone_number: str = Form(...),
-        address: str = Form(...),
-        country: str = Form(...),
-        city: str = Form(...)
-):
-    async with database.client.start_session() as s:
-        try:
-            await s.start_transaction()
-
-            company_logo_url = ""
-            company_logo_public_id = ""
-            if company_logo:
-                result = await upload_images.upload_image(company_logo, 'companies')
-                company_logo_url = result["url"]
-                company_logo_public_id = result["public_id"]
-
-            role_ids_list = [ObjectId(r.strip()) for r in roles_ids]
-
-            company_doc = {
-                "company_name": company_name,
-                "owner_id": None,
-                "status": True,
-                "createdAt": security.now_utc(),
-                "updatedAt": security.now_utc(),
-                "industry": ObjectId(industry),
-                "company_logo_url": company_logo_url,
-                "company_logo_public_id": company_logo_public_id,
-            }
-            res_company = await companies.insert_one(company_doc, session=s)
-
-            owner_doc = {
-                "company_id": res_company.inserted_id,
-                "email": admin_email,
-                "user_name": admin_name,
-                "password_hash": security.pwd_ctx.hash(admin_password),
-                "roles": role_ids_list,
-                "status": True,
-                "expiry_date": security.one_month_from_now_utc(),
-                "createdAt": security.now_utc(),
-                "updatedAt": security.now_utc(),
-                "phone_number": phone_number,
-                "address": address,
-                "country": ObjectId(country),
-                "city": ObjectId(city),
-            }
-            res_owner = await users.insert_one(owner_doc, session=s)
-
-            # 3. تحديث الشركة وربطها بالـ owner
-            await companies.update_one(
-                {"_id": res_company.inserted_id},
-                {"$set": {"owner_id": res_owner.inserted_id}},
-                session=s
-            )
-
-            await s.commit_transaction()
-
-            return {
-                "company_id": str(res_company.inserted_id),
-                "owner_id": str(res_owner.inserted_id),
-                "message": "Company and owner registered successfully"
-            }
-
-        except DuplicateKeyError as e:
-            await s.abort_transaction()
-            if "company_name" in str(e):
-                raise HTTPException(status_code=400, detail="Company name already exists")
-            elif "email" in str(e):
-                raise HTTPException(status_code=400, detail="Email already exists")
-            else:
-                raise HTTPException(status_code=400, detail="Duplicate entry")
-
-        except Exception as e:
-            # 👇 rollback إذا صار خطأ
-            await s.abort_transaction()
-            raise HTTPException(status_code=500, detail=f"Registration failed: {str(e)}")
 
 
 

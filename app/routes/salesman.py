@@ -1,7 +1,7 @@
 from typing import Optional
 
 from bson import ObjectId
-from fastapi import APIRouter, Body, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from pymongo import ReturnDocument
 from app.core import security
@@ -72,7 +72,7 @@ async def delete_salesman(salesman_id: str, _: dict = Depends(security.get_curre
         })
     except HTTPException as e:  # Let FastAPI handle HTTP errors
         raise e
-    except Exception as e:
+    except Exception:
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
@@ -93,5 +93,5 @@ async def update_salesman(salesman_id: str, sale_man: SaleManModel, _: dict = De
 
     except HTTPException as e:  # Let FastAPI handle HTTP errors
         raise e
-    except Exception as e:
+    except Exception :
         raise HTTPException(status_code=500, detail="Internal server error")
