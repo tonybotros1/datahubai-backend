@@ -1,8 +1,7 @@
-import json
 from datetime import datetime
 from bson import ObjectId
-from fastapi import APIRouter, Depends, HTTPException, status, Form, UploadFile, File
-from pymongo.errors import DuplicateKeyError
+from fastapi import APIRouter, Depends, HTTPException, status, Form, UploadFile, File, Body
+from pymongo.errors import DuplicateKeyError, PyMongoError
 from app import database
 from app.core import security
 from app.database import get_collection
@@ -255,7 +254,7 @@ async def register_company(
         admin_password: str = Form(None),
         industry: str = Form(None),
         company_logo: UploadFile = File(None),  #
-        roles_ids: str = Form(None),  #
+        roles_ids: list[str] = Form(None),  #
         admin_name: str = Form(None),
         phone_number: str = Form(None),
         address: str = Form(None),
@@ -273,9 +272,9 @@ async def register_company(
                 result = await upload_images.upload_image(company_logo, 'companies')
                 company_logo_url = result["url"]
                 company_logo_public_id = result["public_id"]
-            role_list = json.loads(roles_ids)
-
-            role_ids_list = [ObjectId(r.strip()) for r in role_list]
+            role_ids_list = []
+            if roles_ids:
+                role_ids_list = [ObjectId(r.strip()) for r in roles_ids]
 
             company_doc = {
                 "company_name": company_name,
@@ -315,7 +314,7 @@ async def register_company(
 
             await s.commit_transaction()
             details = await get_company_details(res_company.inserted_id)
-            serialized = [serialize_doc(c) for c in details]
+            serialized = serialize_doc(details[0])
             await manager.broadcast({
                 "type": "company_created",
                 "data": serialized
@@ -324,7 +323,8 @@ async def register_company(
             return {
                 "company_id": str(res_company.inserted_id),
                 "owner_id": str(res_owner.inserted_id),
-                "message": "Company and owner registered successfully"
+                "message": "Company and owner registered successfully",
+                "data": serialized
             }
 
         except DuplicateKeyError as e:
@@ -337,6 +337,145 @@ async def register_company(
                 raise HTTPException(status_code=400, detail="Duplicate entry")
 
         except Exception as e:
+            print(e)
             # 👇 rollback إذا صار خطأ
             await s.abort_transaction()
             raise HTTPException(status_code=500, detail=f"Registration failed: {str(e)}")
+
+
+@router.patch("/update_company/{company_id}/{user_id}")
+async def update_company(company_id: str, user_id: str, company_name: str = Form(None),
+                         admin_email: str = Form(None),
+                         admin_password: str = Form(None),
+                         industry: str = Form(None),
+                         company_logo: UploadFile = File(None),  #
+                         roles_ids: list[str] = Form(None),  #
+                         admin_name: str = Form(None),
+                         phone_number: str = Form(None),
+                         address: str = Form(None),
+                         country: str = Form(None),
+                         city: str = Form(None), _: dict = Depends(security.get_current_user)):
+    async with database.client.start_session() as s:
+        try:
+            await s.start_transaction()
+            current_company = await companies_collection.find_one({"_id": ObjectId(company_id)}, session=s)
+            if not current_company:
+                raise HTTPException(status_code=404, detail="Company not found")
+            company_doc = {
+                "company_name": company_name,
+                "updatedAt": security.now_utc(),
+                "industry": ObjectId(industry) if industry else "",
+            }
+            if company_logo:
+                if current_company.get("company_logo_url") and current_company["company_logo_url"]:
+                    await upload_images.delete_image_from_server(current_company["company_logo_public_id"])
+                result = await upload_images.upload_image(company_logo, 'companies')
+                company_logo_url = result["url"]
+                company_logo_public_id = result["public_id"]
+                company_doc["company_logo_url"] = company_logo_url
+                company_doc["company_logo_public_id"] = company_logo_public_id
+            role_ids_list = []
+            if roles_ids:
+                role_ids_list = [ObjectId(r.strip()) for r in roles_ids]
+
+            await companies_collection.update_one({"_id": ObjectId(company_id)}, {"$set": company_doc},
+                                                  session=s)
+
+            owner_doc = {
+                "email": admin_email.lower(),
+                "user_name": admin_name,
+                "roles": role_ids_list,
+                "updatedAt": security.now_utc(),
+                "phone_number": phone_number,
+                "address": address,
+                "country": ObjectId(country) if country else "",
+                "city": ObjectId(city) if city else "",
+            }
+            if admin_password:
+                owner_doc["password_hash"] = security.pwd_ctx.hash(admin_password)
+            await users_collection.update_one({"_id": ObjectId(user_id)}, {"$set": owner_doc}, session=s)
+            await s.commit_transaction()
+            details = await get_company_details(ObjectId(company_id))
+            serialized = serialize_doc(details[0])
+            await manager.broadcast({
+                "type": "company_updated",
+                "data": serialized
+            })
+        except DuplicateKeyError as e:
+            await s.abort_transaction()
+            if "company_name" in str(e):
+                raise HTTPException(status_code=400, detail="Company name already exists")
+            elif "email" in str(e):
+                raise HTTPException(status_code=400, detail="Email already exists")
+            else:
+                raise HTTPException(status_code=400, detail="Duplicate entry")
+        except Exception as e:
+            print(e)
+            await s.abort_transaction()
+            raise HTTPException(status_code=500, detail=f"Registration failed: {str(e)}")
+
+
+@router.delete("/delete_company/{company_id}/{user_id}")
+async def delete_company(company_id: str, user_id: str, _: dict = Depends(security.get_current_user)):
+    try:
+        if not company_id:
+            raise HTTPException(status_code=400, detail="Invalid Company ID")
+        if not user_id:
+            raise HTTPException(status_code=400, detail="Invalid User ID")
+
+        company_id = ObjectId(company_id)
+        user_id = ObjectId(user_id)
+
+        async with database.client.start_session() as session:
+            await session.start_transaction()
+
+            # 1. Find and delete the company in one step
+            company = await companies_collection.find_one_and_delete(
+                {"_id": company_id}, session=session
+            )
+
+            if not company:
+                raise HTTPException(status_code=404, detail="Company not found")
+
+            # 2. Delete the owner
+            await users_collection.delete_one({"_id": user_id}, session=session)
+
+            # 3. Delete logo if exists
+            if company.get("company_logo_public_id"):
+                try:
+                    await upload_images.delete_image_from_server(company["company_logo_public_id"])
+                except Exception as e:
+                    print(f"⚠️ Failed to delete logo: {e}")
+
+            await session.commit_transaction()
+
+            # 4. Broadcast deletion
+            await manager.broadcast({
+                "type": "company_deleted",
+                "data": {"_id": str(company_id)},
+            })
+
+            return {"message": "Company and owner deleted successfully"}
+
+    except PyMongoError as e:
+        print(e)
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+    except Exception as e:
+        print(e)
+        raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
+
+
+@router.patch("/change_company_status/{company_id}")
+async def change_user_status(company_id: str, company_status: bool = Body(None), _: dict = Depends(security.get_current_user)):
+    try:
+        result = await companies_collection.update_one(
+            {"_id": ObjectId(company_id)}, {"$set": {"status": company_status, "updatedAt": security.now_utc()}},
+        )
+        if not result:
+            raise HTTPException(status_code=404, detail="User not found")
+        await manager.broadcast({
+            "type": "company_status_updated",
+            "data": {"status": company_status, "_id": company_id}
+        })
+    except Exception as error:
+        return {"message": str(error)}
