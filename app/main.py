@@ -5,7 +5,7 @@ from app.widgets import upload_images
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from app.routes import brands_and_models, users, countries_and_cities, functions, menus, responsibilities, auth, \
-    companies, favourite_screens, list_of_values, counters, branches, car_trading, salesman
+    companies, favourite_screens, list_of_values, counters, branches, car_trading, salesman, system_variables
 from app.routes import test
 from app.websocket_config import manager
 
@@ -57,6 +57,7 @@ app.include_router(branches.router, prefix="/branches", tags=["Branches"])
 app.include_router(users.router, prefix="/users", tags=["Users"])
 app.include_router(car_trading.router, prefix="/car_trading", tags=["Car Trading"])
 app.include_router(salesman.router, prefix="/salesman", tags=["Salesman"])
+app.include_router(system_variables.router, prefix="/system_variables", tags=["System Variables"])
 app.include_router(test.router, prefix="/test", tags=["Test"])
 
 
