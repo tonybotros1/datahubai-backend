@@ -80,12 +80,16 @@ async def logout(refresh_token: str = Form(...)):
 async def is_user_valid(user_id: str):
     try:
         user = await users.find_one({"_id": ObjectId(user_id)})
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+
         expiry_date = user.get("expiry_date", security.now_utc())
         return {"valid": not is_date_equals_today_or_older(expiry_date)}
 
-
+    except HTTPException:
+        raise
     except Exception as e:
-        return {"message": str(e)}
+        raise HTTPException(status_code=500, detail=f"Network/Database error: {str(e)}")
 
 
 @router.post("/refresh_token")
