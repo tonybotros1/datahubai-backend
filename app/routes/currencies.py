@@ -46,7 +46,8 @@ pipeline: list[Dict[str, Any]] = [
                 }, {
                     '$project': {
                         'name': 1,
-                        'code': 1
+                        'code': 1,
+                        'currency_code':1
                     }
                 }
             ],
@@ -66,6 +67,7 @@ pipeline: list[Dict[str, Any]] = [
             'rate': 1,
             'country_name': '$country.name',
             'country_code': '$country.code',
+            'currency_code': '$country.currency_code',
             'country_id': 1
         }
     }
@@ -185,3 +187,20 @@ async def change_user_status(currency_id: str, status: bool = Body(None), _: dic
         })
     except Exception as error:
         return {"message": str(error)}
+
+
+@router.get("/get_all_currencies_for_drop_down_menu")
+async def get_all_currencies_for_drop_down_menu(data: dict = Depends(security.get_current_user)):
+    try:
+        company_id = ObjectId(data.get("company_id"))
+        new_pipeline = pipeline.copy()
+        new_pipeline.insert(1, {
+            "$match": {
+                "company_id": company_id, "status": True
+            }
+        })
+        cursor = await currencies_collection.aggregate(new_pipeline)
+        results = await cursor.to_list(None)
+        return {"currencies": [serializer(c) for c in results]}
+    except Exception as e:
+        raise e
