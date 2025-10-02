@@ -1,12 +1,11 @@
 from typing import Optional
-
 from bson import ObjectId
-from fastapi import APIRouter, Body, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from pymongo import ReturnDocument
 from app.core import security
 from app.database import get_collection
-from datetime import datetime, timezone
+from datetime import datetime
 from app.websocket_config import manager
 
 router = APIRouter()
