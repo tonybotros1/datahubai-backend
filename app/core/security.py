@@ -77,11 +77,11 @@ def decode_access_token(raw: str):
 
 
 def verify_password(plain, hashed):
-    return pwd_ctx.verify(plain, hashed)
+    return pwd_ctx.verify(plain, hashed[:72])
 
 
 def get_password_hash(password):
-    return pwd_ctx.hash(password)
+    return pwd_ctx.hash(password[:72])
 
 
 async def get_current_user(authorization: str = Header(...)):
