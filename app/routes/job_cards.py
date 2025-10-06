@@ -2,7 +2,6 @@ from typing import Optional, List, Any
 from bson import ObjectId
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
-from pymongo import ReturnDocument
 
 from app import database
 from app.core import security
@@ -18,6 +17,7 @@ job_cards_invoice_items_collection = get_collection("job_cards_invoice_items")
 
 
 class InvoiceItems(BaseModel):
+    id: Optional[str] = None
     line_number: Optional[int] = None
     name: Optional[str] = None
     description: Optional[str] = None
@@ -109,6 +109,11 @@ pipeline: list[dict[str, Any]] = [
                 }
             ],
             'as': 'brand_details'
+        }
+    }, {
+        '$unwind': {
+            'path': '$brand_details',
+            'preserveNullAndEmptyArrays': True
         }
     }, {
         '$lookup': {
@@ -445,20 +450,45 @@ pipeline: list[dict[str, Any]] = [
                         }
                     }
                 }, {
+                    '$lookup': {
+                        'from': 'invoice_items',
+                        'let': {
+                            'nameId': '$name'
+                        },
+                        'pipeline': [
+                            {
+                                '$match': {
+                                    '$expr': {
+                                        '$eq': [
+                                            '$_id', '$$nameId'
+                                        ]
+                                    }
+                                }
+                            }, {
+                                '$project': {
+                                    '_id': 1,
+                                    'name': 1
+                                }
+                            }
+                        ],
+                        'as': 'name_details'
+                    }
+                }, {
+                    '$unwind': {
+                        'path': '$name_details',
+                        'preserveNullAndEmptyArrays': True
+                    }
+                }, {
+                    '$addFields': {
+                        'name_text': {
+                            '$ifNull': [
+                                '$name_details.name', None
+                            ]
+                        }
+                    }
+                }, {
                     '$project': {
-                        '_id': 1,
-                        'line_number': 1,
-                        'quantity': 1,
-                        'price': 1,
-                        'total': 1,
-                        'net': 1,
-                        'vat': 1,
-                        'name': 1,
-                        'description': 1,
-                        'amount': 1,
-                        'discount': 1,
-                        'createdAt': 1,
-                        'updatedAt': 1
+                        'name_details': 0
                     }
                 }
             ],
@@ -540,10 +570,25 @@ pipeline: list[dict[str, Any]] = [
             'branch_details': 0,
             'currency_details': 0,
             'currency_country_details': 0,
-            'quotation_details': 0,
+            'quotation_details': 0
         }
     }
 ]
+
+
+def serializer(doc: dict) -> dict:
+    def convert(value):
+        if isinstance(value, ObjectId):
+            return str(value)
+        elif isinstance(value, datetime):
+            return value.isoformat()
+        elif isinstance(value, list):
+            return [convert(v) for v in value]
+        elif isinstance(value, dict):
+            return {k: convert(v) for k, v in value.items()}
+        return value
+
+    return {k: convert(v) for k, v in doc.items()}
 
 
 async def get_job_card_details(job_card_id: ObjectId):
@@ -566,7 +611,7 @@ async def add_new_job_card(job_data: JobCard, data: dict = Depends(security.get_
             company_id = ObjectId(data.get("company_id"))
 
             job_data_dict = job_data.model_dump(exclude_unset=True)
-            new_job_counter = await create_custom_counter("JCN", "J", data, session=session)
+            new_job_counter = await create_custom_counter("JCN", "J", data, session)
 
             invoices = []
             if job_data_dict.get("invoice_items"):
@@ -587,7 +632,7 @@ async def add_new_job_card(job_data: JobCard, data: dict = Depends(security.get_
                 "salesman": ObjectId(job_data_dict["salesman"]) if job_data_dict["salesman"] else None,
                 "branch": ObjectId(job_data_dict["branch"]) if job_data_dict["branch"] else None,
                 "currency": ObjectId(job_data_dict["currency"]) if job_data_dict["currency"] else None,
-                "job_number": new_job_counter['final_counter'] if new_job_counter['success'] else None
+                "job_number": new_job_counter['final_counter'] if new_job_counter['success'] else None,
             })
 
             result = await job_cards_collection.insert_one(job_data_dict, session=session)
@@ -615,15 +660,118 @@ async def add_new_job_card(job_data: JobCard, data: dict = Depends(security.get_
                 if not new_invoices.inserted_ids:
                     raise HTTPException(status_code=500, detail="Failed to insert job items")
             await session.commit_transaction()
-
-            return {
-                "status": "success",
-                "message": "Job card added successfully",
-                "job_card_id": str(result.inserted_id)
-            }
+            new_job = await get_job_card_details(result.inserted_id)
+            serialized = serializer(new_job)
+            return {"job_card": serialized}
 
 
         except Exception as e:
             await session.abort_transaction()
             print(e)
             raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.patch("/update_job_card/{job_id}")
+async def update_job_card(job_id: str, job_data: JobCard, _: dict = Depends(security.get_current_user)):
+    try:
+        job_id = ObjectId(job_id)
+        job_data_dict = job_data.model_dump(exclude_unset=True)
+        job_data_dict.update({
+            "updatedAt": security.now_utc(),
+            "car_brand": ObjectId(job_data_dict["car_brand"]) if job_data_dict["car_brand"] else None,
+            "car_model": ObjectId(job_data_dict["car_model"]) if job_data_dict["car_model"] else None,
+            "country": ObjectId(job_data_dict["country"]) if job_data_dict["country"] else None,
+            "city": ObjectId(job_data_dict["city"]) if job_data_dict["city"] else None,
+            "color": ObjectId(job_data_dict["color"]) if job_data_dict["color"] else None,
+            "engine_type": ObjectId(job_data_dict["engine_type"]) if job_data_dict["engine_type"] else None,
+            "customer": ObjectId(job_data_dict["customer"]) if job_data_dict["customer"] else None,
+            "salesman": ObjectId(job_data_dict["salesman"]) if job_data_dict["salesman"] else None,
+            "branch": ObjectId(job_data_dict["branch"]) if job_data_dict["branch"] else None,
+            "currency": ObjectId(job_data_dict["currency"]) if job_data_dict["currency"] else None,
+        })
+        result = await job_cards_collection.update_one({"_id": job_id}, {"$set": job_data_dict})
+        if result.modified_count == 0:
+            raise HTTPException(status_code=404)
+
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.patch("/update_job_invoice_items")
+async def update_job_invoice_items(
+        items: list[InvoiceItems],
+        _: dict = Depends(security.get_current_user)
+):
+    try:
+        items = [item.model_dump(exclude_unset=True) for item in items]
+
+        added_list = []
+        deleted_list = []
+        modified_list = []
+        updated_list = []
+
+        for item in items:
+            if item.get("deleted"):
+                if "id" not in item:
+                    continue
+                print(item['id'])
+                deleted_list.append(ObjectId(item["id"]))
+
+            elif item.get("added") and not item.get("deleted"):
+                item.pop("id", None)
+                item["createdAt"] = security.now_utc()
+                item["updatedAt"] = security.now_utc()
+                item['name'] = ObjectId(item["name"]) if item["name"] else None
+                item.pop("deleted", None)
+                item.pop("added", None)
+                item.pop("is_modified", None)
+                added_list.append(item)
+
+
+            elif item.get("is_modified") and not item.get("deleted") and not item.get("added"):
+                if "id" not in item:
+                    continue
+                item_id = ObjectId(item["id"])
+                print(item_id)
+                item["updatedAt"] = security.now_utc()
+                item["name"] = ObjectId(item["name"]) if item["name"] else None
+                item.pop("deleted", None)
+                item.pop("added", None)
+                item.pop("is_modified", None)
+                modified_list.append((item_id, item))
+
+        async with  database.client.start_session() as s:
+            await s.start_transaction()
+            if deleted_list:
+                await job_cards_invoice_items_collection.delete_many(
+                    {"_id": {"$in": deleted_list}}, session=s
+                )
+
+            if added_list:
+                added_invoices = await job_cards_invoice_items_collection.insert_many(
+                    added_list, session=s
+                )
+                inserted_ids = added_invoices.inserted_ids
+                for item, new_id in zip(added_list, inserted_ids):
+                    item["_id"] = str(new_id)
+                    updated_list.append(item)
+
+            for item_id, item_data in modified_list:
+                item_data.pop("id", None)
+                await job_cards_invoice_items_collection.update_one(
+                    {"_id": item_id},
+                    {"$set": item_data},
+                    session=s
+                )
+                updated_list.append({"_id": item_id, **item_data})
+
+            await s.commit_transaction()
+        return {"updated_items": updated_list}
+
+
+
+    except Exception as e:
+        print(e)
+        await s.abort_transaction()
+        raise HTTPException(status_code=500, detail=str(e))

@@ -133,18 +133,30 @@ async def change_counter_status(counter_id: str, status: bool = Body(None),
         return {"message": str(error)}
 
 
+from fastapi import Body, Depends, HTTPException
+from bson import ObjectId
+from typing import Optional
+
+
 @router.post("/create_custom_counter")
 async def create_custom_counter(
         code: str = Body(...),
         prefix: str = Body(None),
-        data: dict = Depends(security.get_current_user)
+        data: dict = Depends(security.get_current_user),
+        session: Optional[object] = None,
+
 ):
     try:
         company_id = ObjectId(data.get("company_id"))
-        result = await counters_collection.find_one({
+        query = {
             "company_id": company_id,
             "code": code
-        })
+        }
+
+        # 👇 find existing counter
+        result = await counters_collection.find_one(query,
+                                                    session=session) if session else await counters_collection.find_one(
+            query)
 
         final_counter = ""
         separator = "-"
@@ -165,7 +177,12 @@ async def create_custom_counter(
                 "status": True,
             }
 
-            await counters_collection.insert_one(new_counter_dict)
+            # 👇 insert with or without session
+            if session:
+                await counters_collection.insert_one(new_counter_dict, session=session)
+            else:
+                await counters_collection.insert_one(new_counter_dict)
+
             final_counter = f"{prefix or ''}{separator}{str(initial_value).rjust(new_counter_dict['length'], '0')}"
 
         else:
@@ -178,10 +195,18 @@ async def create_custom_counter(
 
             final_counter = f"{prefix}{separator}{str(next_value).rjust(length, '0')}"
 
-            await counters_collection.update_one(
-                {"_id": ObjectId(counter_id)},
-                {"$set": {"value": next_value, "updatedAt": security.now_utc()}}
-            )
+            update_query = {
+                "$set": {
+                    "value": next_value,
+                    "updatedAt": security.now_utc()
+                }
+            }
+
+            # 👇 update with or without session
+            if session:
+                await counters_collection.update_one({"_id": ObjectId(counter_id)}, update_query, session=session)
+            else:
+                await counters_collection.update_one({"_id": ObjectId(counter_id)}, update_query)
 
         return {
             "success": True,
