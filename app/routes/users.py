@@ -119,7 +119,8 @@ async def add_new_user(user: UserCreate, data: dict = Depends(security.get_curre
 
     except HTTPException:
         raise
-    except Exception:
+    except Exception as e:
+        print(e)
         raise HTTPException(status_code=500, detail="Internal server error")
 
 

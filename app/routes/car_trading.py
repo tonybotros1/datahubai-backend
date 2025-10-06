@@ -787,6 +787,7 @@ async def add_new_trade(trade: CarTradingModel, data: dict = Depends(security.ge
         except HTTPException:
             raise
         except Exception as e:
+            await session.abort_transaction()
             traceback.print_exc()
             raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
 

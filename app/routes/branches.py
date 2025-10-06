@@ -14,6 +14,8 @@ def serializer(branch: dict) -> dict:
     branch["_id"] = str(branch["_id"])
     branch['country_id'] = str(branch['country_id'])
     branch['city_id'] = str(branch['city_id'])
+    if branch['company_id']:
+        branch['company_id'] = str(branch['company_id'])
     for key, value in branch.items():
         if isinstance(value, datetime):
             branch[key] = value.isoformat()
@@ -224,3 +226,16 @@ async def delete_branch(branch_id: str, _: dict = Depends(security.get_current_u
 
     except Exception as error:
         return {"message": str(error)}
+
+
+@router.get("/get_all_branches_by_status")
+async def get_all_branches_by_status(data: dict = Depends(security.get_current_user)):
+    try:
+        company_id = ObjectId(data.get("company_id"))
+        results = await branches_collection.find({"status": True, "company_id": company_id}).sort("name", 1).to_list(
+            None)
+        return {"branches": [serializer(result) for result in results]}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

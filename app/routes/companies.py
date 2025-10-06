@@ -1,6 +1,7 @@
 from datetime import datetime
 from bson import ObjectId
 from fastapi import APIRouter, Depends, HTTPException, status, Form, UploadFile, File, Body
+from pip._internal.network import session
 from pymongo.errors import DuplicateKeyError, PyMongoError
 from app import database
 from app.core import security
@@ -466,7 +467,8 @@ async def delete_company(company_id: str, user_id: str, _: dict = Depends(securi
 
 
 @router.patch("/change_company_status/{company_id}")
-async def change_user_status(company_id: str, company_status: bool = Body(None), _: dict = Depends(security.get_current_user)):
+async def change_user_status(company_id: str, company_status: bool = Body(None),
+                             _: dict = Depends(security.get_current_user)):
     try:
         result = await companies_collection.update_one(
             {"_id": ObjectId(company_id)}, {"$set": {"status": company_status, "updatedAt": security.now_utc()}},
@@ -479,3 +481,195 @@ async def change_user_status(company_id: str, company_status: bool = Body(None),
         })
     except Exception as error:
         return {"message": str(error)}
+
+
+@router.get("/get_current_company_details")
+async def get_current_company_details(data: dict = Depends(security.get_current_user)):
+    try:
+        company_id = ObjectId(data.get("company_id"))
+        my_pipeline = [
+            {
+                '$match': {
+                    '_id': company_id
+                }
+            }, {
+                '$lookup': {
+                    'from': 'sys-users',
+                    'let': {
+                        'owner_id': '$owner_id'
+                    },
+                    'pipeline': [
+                        {
+                            '$match': {
+                                '$expr': {
+                                    '$eq': [
+                                        '$_id', '$$owner_id'
+                                    ]
+                                }
+                            }
+                        }, {
+                            '$project': {
+                                '_id': 1,
+                                'country': 1,
+                                'city': 1
+                            }
+                        }
+                    ],
+                    'as': 'user_details'
+                }
+            }, {
+                '$unwind': {
+                    'path': '$user_details',
+                    'preserveNullAndEmptyArrays': True
+                }
+            }, {
+                '$lookup': {
+                    'from': 'all_countries',
+                    'let': {
+                        'country_id': '$user_details.country'
+                    },
+                    'pipeline': [
+                        {
+                            '$match': {
+                                '$expr': {
+                                    '$eq': [
+                                        '$_id', '$$country_id'
+                                    ]
+                                }
+                            }
+                        }, {
+                            '$project': {
+                                '_id': 1,
+                                'vat': 1,
+                                'name': 1,
+                                'currency_code': 1
+                            }
+                        }
+                    ],
+                    'as': 'country_details'
+                }
+            }, {
+                '$unwind': {
+                    'path': '$country_details',
+                    'preserveNullAndEmptyArrays': True
+                }
+            }, {
+                '$lookup': {
+                    'from': 'all_countries_cities',
+                    'let': {
+                        'city_id': '$user_details.city'
+                    },
+                    'pipeline': [
+                        {
+                            '$match': {
+                                '$expr': {
+                                    '$eq': [
+                                        '$_id', '$$city_id'
+                                    ]
+                                }
+                            }
+                        }, {
+                            '$project': {
+                                '_id': 1,
+                                'name': 1
+                            }
+                        }
+                    ],
+                    'as': 'city_details'
+                }
+            }, {
+                '$unwind': {
+                    'path': '$city_details',
+                    'preserveNullAndEmptyArrays': True
+                }
+            }, {
+                '$lookup': {
+                    'from': 'currencies',
+                    'let': {
+                        'country_id': '$country_details._id'
+                    },
+                    'pipeline': [
+                        {
+                            '$match': {
+                                '$expr': {
+                                    '$eq': [
+                                        '$country_id', '$$country_id'
+                                    ]
+                                }
+                            }
+                        }, {
+                            '$project': {
+                                '_id': 1,
+                                'rate': 1
+                            }
+                        }
+                    ],
+                    'as': 'currency_details'
+                }
+            }, {
+                '$unwind': {
+                    'path': '$currency_details',
+                    'preserveNullAndEmptyArrays': True
+                }
+            }, {
+                '$addFields': {
+                    'country': {
+                        '$ifNull': [
+                            '$country_details.name', None
+                        ]
+                    },
+                    'country_id': {
+                        '$ifNull': [
+                            '$country_details._id', None
+                        ]
+                    },
+                    'country_vat': {
+                        '$ifNull': [
+                            '$country_details.vat', None
+                        ]
+                    },
+                    'city': {
+                        '$ifNull': [
+                            '$city_details.name', None
+                        ]
+                    },
+                    'city_id': {
+                        '$ifNull': [
+                            '$city_details._id', None
+                        ]
+                    },
+                    'currency_id': {
+                        '$ifNull': [
+                            '$currency_details._id', None
+                        ]
+                    },
+                    'currency_rate': {
+                        '$ifNull': [
+                            '$currency_details.rate', None
+                        ]
+                    },
+                    'currency_code': {
+                        '$ifNull': [
+                            '$country_details.currency_code', None
+                        ]
+                    }
+                }
+            }, {
+                '$project': {
+                    'user_details': 0,
+                    'country_details': 0,
+                    'currency_details': 0,
+                    'city_details': 0
+                }
+            }
+        ]
+        cursor = await companies_collection.aggregate(my_pipeline)
+        result = await cursor.to_list(None)
+        serialized = serialize_doc(result[0])
+        return {"company_details": serialized}
+
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

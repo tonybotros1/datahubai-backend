@@ -297,3 +297,4 @@ async def delete_city(city_id: str, _: dict = Depends(security.get_current_user)
             return {"message": "City deleted successfully"}
     except Exception as e:
         return {"error": str(e)}
+

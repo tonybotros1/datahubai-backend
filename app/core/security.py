@@ -9,7 +9,7 @@ REFRESH_SECRET = str(os.getenv("REFRESH_SECRET_KEY"))
 ALGORITHM = "HS256"
 ACCESS_TTL_MIN = int(os.getenv("ACCESS_TTL_MIN", "60"))
 REFRESH_TTL_DAYS = int(os.getenv("REFRESH_TTL_DAYS", "60"))
-pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
+pwd_ctx = CryptContext(schemes=["argon2"], deprecated="auto")
 
 
 def now_utc():
@@ -77,11 +77,11 @@ def decode_access_token(raw: str):
 
 
 def verify_password(plain, hashed):
-    return pwd_ctx.verify(plain, hashed[:72])
+    return pwd_ctx.verify(plain, hashed)
 
 
 def get_password_hash(password):
-    return pwd_ctx.hash(password[:72])
+    return pwd_ctx.hash(password)
 
 
 async def get_current_user(authorization: str = Header(...)):

@@ -6,7 +6,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from app.routes import brands_and_models, users, countries_and_cities, functions, menus, responsibilities, auth, \
     companies, favourite_screens, list_of_values, counters, branches, car_trading, salesman, system_variables, \
-    currencies, entity_information, ap_payment_types, banks_and_others, technician, invoice_items
+    currencies, entity_information, ap_payment_types, banks_and_others, technician, invoice_items, job_cards
 from app.routes import test
 from app.websocket_config import manager
 
@@ -65,6 +65,7 @@ app.include_router(ap_payment_types.router, prefix="/ap_payment_types", tags=["A
 app.include_router(banks_and_others.router, prefix="/banks_and_others", tags=["Banks and Others"])
 app.include_router(technician.router, prefix="/technicians", tags=["Technicians"])
 app.include_router(invoice_items.router, prefix="/invoice_items", tags=["Invoice Items"])
+app.include_router(job_cards.router, prefix="/job_cards", tags=["Job Cards"])
 app.include_router(test.router, prefix="/test", tags=["Test"])
 
 

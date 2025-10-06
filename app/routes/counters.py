@@ -131,3 +131,64 @@ async def change_counter_status(counter_id: str, status: bool = Body(None),
 
     except Exception as error:
         return {"message": str(error)}
+
+
+@router.post("/create_custom_counter")
+async def create_custom_counter(
+        code: str = Body(...),
+        prefix: str = Body(None),
+        data: dict = Depends(security.get_current_user)
+):
+    try:
+        company_id = ObjectId(data.get("company_id"))
+        result = await counters_collection.find_one({
+            "company_id": company_id,
+            "code": code
+        })
+
+        final_counter = ""
+        separator = "-"
+        description = f"{code} Counter"
+
+        if not result:
+            initial_value = 1
+            new_counter_dict = {
+                "code": code,
+                "description": description,
+                "prefix": prefix or "",
+                "value": initial_value,
+                "length": 5,
+                "separator": separator,
+                "createdAt": security.now_utc(),
+                "updatedAt": security.now_utc(),
+                "company_id": company_id,
+                "status": True,
+            }
+
+            await counters_collection.insert_one(new_counter_dict)
+            final_counter = f"{prefix or ''}{separator}{str(initial_value).rjust(new_counter_dict['length'], '0')}"
+
+        else:
+            counter_id = result["_id"]
+            current_value = result.get("value", 0)
+            next_value = current_value + 1
+            length = result.get("length", 5)
+            prefix = result.get("prefix", "")
+            separator = result.get("separator", "-")
+
+            final_counter = f"{prefix}{separator}{str(next_value).rjust(length, '0')}"
+
+            await counters_collection.update_one(
+                {"_id": ObjectId(counter_id)},
+                {"$set": {"value": next_value, "updatedAt": security.now_utc()}}
+            )
+
+        return {
+            "success": True,
+            "final_counter": final_counter,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as error:
+        raise HTTPException(status_code=500, detail=str(error))
