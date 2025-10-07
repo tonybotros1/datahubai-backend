@@ -6,10 +6,10 @@ from pydantic import BaseModel
 from app import database
 from app.core import security
 from app.database import get_collection
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 
+from app.routes.car_trading import PyObjectId
 from app.routes.counters import create_custom_counter
-from app.websocket_config import manager
 
 router = APIRouter()
 job_cards_collection = get_collection("job_cards")
@@ -17,6 +17,7 @@ job_cards_invoice_items_collection = get_collection("job_cards_invoice_items")
 
 
 class InvoiceItems(BaseModel):
+    uid: Optional[str] = None
     id: Optional[str] = None
     line_number: Optional[int] = None
     name: Optional[str] = None
@@ -82,6 +83,23 @@ class JobCard(BaseModel):
     job_date: Optional[datetime] = None
     invoice_date: Optional[datetime] = None
     invoice_items: Optional[List[InvoiceItems]] = None
+
+
+class JobCardSearch(BaseModel):
+    job_number: Optional[str] = None
+    invoice_number: Optional[str] = None
+    car_brand: Optional[PyObjectId] = None
+    car_model: Optional[PyObjectId] = None
+    plate_number: Optional[str] = None
+    vin: Optional[str] = None
+    customer_name: Optional[PyObjectId] = None
+    status: Optional[str] = None
+    from_date: Optional[datetime] = None
+    to_date: Optional[datetime] = None
+    all: Optional[bool] = False
+    today: Optional[bool] = False
+    this_month: Optional[bool] = False
+    this_year: Optional[bool] = False
 
 
 pipeline: list[dict[str, Any]] = [
@@ -672,11 +690,17 @@ async def add_new_job_card(job_data: JobCard, data: dict = Depends(security.get_
 
 
 @router.patch("/update_job_card/{job_id}")
-async def update_job_card(job_id: str, job_data: JobCard, _: dict = Depends(security.get_current_user)):
+async def update_job_card(job_id: str, job_data: JobCard, data: dict = Depends(security.get_current_user)):
     try:
+        new_invoice_counter = ""
         job_id = ObjectId(job_id)
         job_data_dict = job_data.model_dump(exclude_unset=True)
+        if job_data_dict["job_status_1"] == "Posted":
+            new_invoice_counter_result = await create_custom_counter("JCI", "I", data)
+            new_invoice_counter = new_invoice_counter_result["final_counter"]
+
         job_data_dict.update({
+            "invoice_number": new_invoice_counter,
             "updatedAt": security.now_utc(),
             "car_brand": ObjectId(job_data_dict["car_brand"]) if job_data_dict["car_brand"] else None,
             "car_model": ObjectId(job_data_dict["car_model"]) if job_data_dict["car_model"] else None,
@@ -712,13 +736,16 @@ async def update_job_invoice_items(
         updated_list = []
 
         for item in items:
+            print(item)
             if item.get("deleted"):
                 if "id" not in item:
                     continue
+                print('yes deleted')
                 print(item['id'])
                 deleted_list.append(ObjectId(item["id"]))
 
             elif item.get("added") and not item.get("deleted"):
+                print('yes added')
                 item.pop("id", None)
                 item["createdAt"] = security.now_utc()
                 item["updatedAt"] = security.now_utc()
@@ -733,6 +760,7 @@ async def update_job_invoice_items(
                 if "id" not in item:
                     continue
                 item_id = ObjectId(item["id"])
+                print('yes modified')
                 print(item_id)
                 item["updatedAt"] = security.now_utc()
                 item["name"] = ObjectId(item["name"]) if item["name"] else None
@@ -754,8 +782,11 @@ async def update_job_invoice_items(
                 )
                 inserted_ids = added_invoices.inserted_ids
                 for item, new_id in zip(added_list, inserted_ids):
-                    item["_id"] = str(new_id)
-                    updated_list.append(item)
+                    response_item = {
+                        "_id": str(new_id),
+                        "uid": item.get("uid"),
+                    }
+                    updated_list.append(response_item)
 
             for item_id, item_data in modified_list:
                 item_data.pop("id", None)
@@ -764,14 +795,146 @@ async def update_job_invoice_items(
                     {"$set": item_data},
                     session=s
                 )
-                updated_list.append({"_id": item_id, **item_data})
+                updated_list.append({"_id": str(item_id), "uid": item_data["uid"]})
 
             await s.commit_transaction()
-        return {"updated_items": updated_list}
-
-
+        return {"updated_items": updated_list, "deleted_items": [str(d) for d in deleted_list]}
 
     except Exception as e:
         print(e)
         await s.abort_transaction()
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/get_job_card_status/{job_id}")
+async def get_job_card_status(job_id: str, _: dict = Depends(security.get_current_user)):
+    try:
+        if not ObjectId.is_valid(job_id):
+            raise HTTPException(status_code=400, detail="Invalid job_id format")
+
+        job_object_id = ObjectId(job_id)
+
+        result = await job_cards_collection.find_one(
+            {"_id": job_object_id},
+            {"_id": 0, "job_status_1": 1, "job_status_2": 1}
+        )
+
+        if not result:
+            raise HTTPException(status_code=404, detail="Job card not found")
+
+        return {"status": "success", "data": result}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
+
+
+@router.post("/search_engine_for_job_cards")
+async def search_engine_for_job_cards(filter_jobs: JobCardSearch, data: dict = Depends(security.get_current_user)):
+    try:
+        company_id = ObjectId(data.get("company_id"))
+        search_pipeline: list[dict] = []
+        match_stage = {}
+
+        if company_id:
+            match_stage["company_id"] = company_id
+        if filter_jobs.car_brand:
+            match_stage["car_brand"] = filter_jobs.car_brand
+        if filter_jobs.car_model:
+            match_stage["car_model"] = filter_jobs.car_model
+        if filter_jobs.job_number:
+            match_stage["job_number"] = {"$regex": filter_jobs.job_number, "$options": "i"}
+        if filter_jobs.invoice_number:
+            match_stage["invoice_number"] = {"$regex": filter_jobs.invoice_number, "$options": "i"}
+        if filter_jobs.plate_number:
+            match_stage["plate_number"] = {"$regex": filter_jobs.plate_number, "$options": "i"}
+        if filter_jobs.vin:
+            match_stage["vehicle_identification_number"] = {"$regex": filter_jobs.vin, "$options": "i"}
+        if filter_jobs.customer_name:
+            match_stage["customer_name"] = filter_jobs.customer_name
+        if filter_jobs.status:
+            match_stage["job_status_1"] = filter_jobs.status
+
+        pipeline.append({"$match": match_stage})
+
+        lookups = [
+            ("car_brand", "all_brands"),
+            ("car_model", "all_brand_models"),
+        ]
+
+        for local_field, collection in lookups:
+            pipeline.append({
+                "$lookup": {
+                    "from": collection,
+                    "let": {"field_id": f"${local_field}"},
+                    "pipeline": [
+                        {"$match": {"$expr": {"$eq": ["$_id", "$$field_id"]}}},
+                        {"$project": {"name": 1}}
+                    ],
+                    "as": local_field
+                }
+            })
+            pipeline.append({"$unwind": {"path": f"${local_field}", "preserveNullAndEmptyArrays": True}})
+
+        pipeline.append({
+            "$lookup": {
+                "from": "entity_information",
+                "localField": "customer",
+                "foreignField": "_id",
+                "as": "customer_details"
+            }
+        })
+        pipeline.append({"$unwind": {"path": "$customer_details", "preserveNullAndEmptyArrays": True}})
+
+        pipeline.append({
+            "$lookup": {
+                "from": "job_cards_invoice_items",
+                "localField": "_id",
+                "foreignField": "job_card_id",
+                "as": "job_invoice_items"
+            }
+        })
+        pipeline.append({"$unwind": {"path": "$job_invoice_items", "preserveNullAndEmptyArrays": True}})
+
+        now = datetime.now(timezone.utc)
+        date_field = "job_date"
+        date_filter = {}
+        if filter_jobs.today:
+            start = datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
+            end = start + timedelta(days=1)
+            print(start, end)
+            date_filter[date_field] = {"$gte": start, "$lt": end}
+
+        elif filter_jobs.this_month:
+            start = datetime(now.year, now.month, 1, tzinfo=timezone.utc)
+            end = datetime(now.year + (now.month // 12), ((now.month % 12) + 1), 1)
+            date_filter[date_field] = {"$gte": start, "$lt": end}
+
+        elif filter_jobs.this_year:
+            start = datetime(now.year, 1, 1, tzinfo=timezone.utc)
+            end = datetime(now.year + 1, 1, 1)
+            date_filter[date_field] = {"$gte": start, "$lt": end}
+
+        elif filter_jobs.from_date or filter_jobs.to_date:
+            date_filter[date_field] = {}
+            if filter_jobs.from_date:
+                print("from date")
+                date_filter[date_field]["$gte"] = filter_jobs.from_date
+            if filter_jobs.to_date:
+                print("to date")
+                date_filter[date_field]["$lte"] = filter_jobs.to_date
+            print(date_filter)
+
+        if date_filter:
+            pipeline.append({"$match": date_filter})
+
+
+
+
+
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
