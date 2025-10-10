@@ -1,6 +1,6 @@
 from typing import Optional, List, Any
 from bson import ObjectId
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, UploadFile, Form, File
 from pydantic import BaseModel
 
 from app import database
@@ -10,10 +10,14 @@ from datetime import datetime, timezone, timedelta
 
 from app.routes.car_trading import PyObjectId
 from app.routes.counters import create_custom_counter
+from app.widgets.check_date import is_date_equals_today_or_older
+from app.widgets.upload_files import upload_file
+from app.widgets.upload_images import upload_image
 
 router = APIRouter()
 job_cards_collection = get_collection("job_cards")
 job_cards_invoice_items_collection = get_collection("job_cards_invoice_items")
+job_cards_internal_notes_collection = get_collection("job_cards_internal_notes")
 
 
 class InvoiceItems(BaseModel):
@@ -515,6 +519,48 @@ pipeline: list[dict[str, Any]] = [
         }
     }, {
         '$addFields': {
+            'total_amount': {
+                '$sum': {
+                    '$map': {
+                        'input': '$invoice_items_details',
+                        'as': 'item',
+                        'in': {
+                            '$ifNull': [
+                                '$$item.total', 0
+                            ]
+                        }
+                    }
+                }
+            },
+            'total_vat': {
+                '$sum': {
+                    '$map': {
+                        'input': '$invoice_items_details',
+                        'as': 'item',
+                        'in': {
+                            '$ifNull': [
+                                '$$item.vat', 0
+                            ]
+                        }
+                    }
+                }
+            },
+            'total_net': {
+                '$sum': {
+                    '$map': {
+                        'input': '$invoice_items_details',
+                        'as': 'item',
+                        'in': {
+                            '$ifNull': [
+                                '$$item.net', 0
+                            ]
+                        }
+                    }
+                }
+            }
+        }
+    }, {
+        '$addFields': {
             'car_brand_name': {
                 '$ifNull': [
                     '$brand_details.name', None
@@ -688,6 +734,90 @@ async def add_new_job_card(job_data: JobCard, data: dict = Depends(security.get_
             await session.abort_transaction()
             print(e)
             raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/delete_job_card/{job_id}")
+async def delete_job_card(job_id: str, _: dict = Depends(security.get_current_user)):
+    async with database.client.start_session() as session:
+        try:
+            await session.start_transaction()
+            job_id = ObjectId(job_id)
+            if not job_id:
+                raise HTTPException(status_code=404, detail="Job card not found")
+            current_job = await job_cards_collection.find_one({"_id": job_id}, session=session)
+            if not current_job:
+                raise HTTPException(status_code=404, detail="Job card not found")
+            if current_job['job_status_1'] != "New":
+                raise HTTPException(status_code=403, detail="Only New Job Cards allowed")
+            result = await job_cards_collection.delete_one({"_id": job_id}, session=session)
+            if result.deleted_count == 0:
+                raise HTTPException(status_code=404, detail="Job card not found or already deleted")
+            await job_cards_invoice_items_collection.delete_many({"job_card_id": job_id}, session=session)
+            await session.commit_transaction()
+            return {"message": "Job card deleted successfully", "job_id": str(job_id)}
+
+        except HTTPException:
+            await session.abort_transaction()
+            raise
+
+        except Exception as e:
+            print(e)
+            await session.abort_transaction()
+            raise HTTPException(status_code=500, detail=f"Delete failed: {str(e)}")
+
+
+@router.post("/copy_job_card/{job_id}")
+async def copy_job_card(job_id: str, data: dict = Depends(security.get_current_user)):
+    async with database.client.start_session() as session:
+        try:
+            await session.start_transaction()
+            job_id = ObjectId(job_id)
+            if not job_id:
+                raise HTTPException(status_code=404, detail="Job card not found")
+            original_job = await job_cards_collection.find_one({"_id": job_id}, session=session)
+            if not original_job:
+                raise HTTPException(status_code=404, detail="Job card not found")
+            print(original_job['job_status_1'])
+            if original_job['job_status_1'] not in ["Posted", "Cancelled"]:
+                raise HTTPException(status_code=403, detail="Only Posted / Cancelled Job Cards allowed")
+            original_job.pop("_id", None)
+            original_job['job_status_1'] = "New"
+            original_job['job_status_2'] = "New"
+            original_job['invoice_number'] = ""
+            original_job['invoice_date'] = None
+            new_job_counter = await create_custom_counter("JCN", "J", data, session)
+            original_job["job_number"] = new_job_counter["final_counter"] if new_job_counter["success"] else None
+            warranty_end_date = original_job['job_warranty_end_date'] if original_job["job_warranty_end_date"] else None
+            if warranty_end_date:
+                result = is_date_equals_today_or_older(warranty_end_date)
+                if result:
+                    original_job['label'] = ""
+                else:
+                    original_job['label'] = "Returned"
+            new_job = await job_cards_collection.insert_one(original_job, session=session)
+            new_job_id = new_job.inserted_id
+            related_items = await job_cards_invoice_items_collection.find({"job_card_id": job_id}).to_list(None)
+            for item in related_items:
+                print(item['_id'])
+                item.pop("_id", None)
+                item["job_card_id"] = new_job_id
+                await job_cards_invoice_items_collection.insert_one(item, session=session)
+
+            await session.commit_transaction()
+            new_job_details = await get_job_card_details(new_job_id)
+            serialized = serializer(new_job_details)
+
+            return {"message": "Job card copied successfully", "copied_job": serialized}
+
+
+        except HTTPException:
+            await session.abort_transaction()
+            raise
+
+        except Exception as e:
+            print(e)
+            await session.abort_transaction()
+            raise HTTPException(status_code=500, detail=f"Delete failed: {str(e)}")
 
 
 @router.patch("/update_job_card/{job_id}")
@@ -1259,4 +1389,139 @@ async def search_engine_for_job_cards(filter_jobs: JobCardSearch, data: dict = D
     except HTTPException:
         raise
     except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
+
+
+def returning_internal_note_pipeline(company_id: ObjectId, user_id: ObjectId,
+                                     job_id: ObjectId):  # this function to assign the ids to the pipeline
+    internal_note_pipeline = [
+        {
+            "$match": {
+                "job_card_id": job_id,
+                "company_id": company_id,
+            }
+        },
+        {
+            '$lookup': {
+                'from': 'sys-users',
+                'let': {
+                    'user_id': '$user_id'
+                },
+                'pipeline': [
+                    {
+                        '$match': {
+                            '$expr': {
+                                '$eq': [
+                                    '$_id', '$$user_id'
+                                ]
+                            }
+                        }
+                    }, {
+                        '$project': {
+                            'user_name': 1
+                        }
+                    }
+                ],
+                'as': 'user_details'
+            }
+        }, {
+            '$unwind': {
+                'path': '$user_details',
+                'preserveNullAndEmptyArrays': True
+            }
+        }, {
+            '$addFields': {
+                'user_name': {
+                    '$ifNull': [
+                        '$user_details.user_name', None
+                    ]
+                },
+                'is_this_user_is_the_current_user': {
+                    '$cond': {
+                        'if': {
+                            '$eq': [
+                                '$user_id', user_id
+                            ]
+                        },
+                        'then': True,
+                        'else': False
+                    }
+                }
+            }
+        }, {
+            '$project': {
+                "user_details": 0
+            }
+        }
+    ]
+    return internal_note_pipeline
+
+
+@router.get("/get_all_internal_notes_for_job_card/{job_id}")
+async def get_all_internal_notes_for_job_card(job_id: str, data: dict = Depends(security.get_current_user)):
+    try:
+        user_id = ObjectId(data.get('sub'))
+        company_id = ObjectId(data.get('company_id'))
+        job_id = ObjectId(job_id)
+        internal_notes_pipeline_copy = returning_internal_note_pipeline(company_id=company_id, user_id=user_id, job_id=job_id)
+        cursor = await job_cards_internal_notes_collection.aggregate(internal_notes_pipeline_copy)
+        results = await cursor.to_list(None)
+        serialized = [serializer(r) for r in results]
+        return {"internal_notes": serialized}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(e)
+        raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
+
+
+@router.post("/add_new_internal_note_for_job_card/{job_id}")
+async def add_new_internal_note_for_job_card(job_id: str, note_type: str = Form(None), note: str = Form(None),
+                                             media_note: UploadFile = File(None), file_name: str = Form(None),
+                                             data: dict = Depends(security.get_current_user)):
+    try:
+        company_id = ObjectId(data.get("company_id"))
+        user_id = ObjectId(data.get("sub"))
+        note_public_id = None
+        if note_type and note_type.lower() != 'text' and media_note is not None:
+            if note_type.lower() != 'image':
+                result = await upload_file(media_note, folder="job cards internal notes")
+                file_name = result["file_name"]
+                note = result["url"] if "url" in result else None
+                note_public_id = result['public_id'] if "public_id" in result else None
+            else:
+                result = await upload_image(media_note, folder="job cards internal notes")
+                file_name = result["file_name"]
+                note = result["url"] if "url" in result else None
+                note_public_id = result['public_id'] if "public_id" in result else None
+
+        internal_note_dict = {
+            "job_card_id": ObjectId(job_id),
+            "company_id": company_id,
+            "user_id": user_id,
+            "type": note_type,
+            "note": note,
+            'createdAt': security.now_utc(),
+            'updatedAt': security.now_utc(),
+            "file_name": file_name,
+            "note_public_id": note_public_id,
+        }
+        new_note = await job_cards_internal_notes_collection.insert_one(internal_note_dict)
+        new_internal_note_pipeline = returning_internal_note_pipeline(company_id=company_id, user_id=user_id, job_id=ObjectId(job_id))
+        new_internal_note_pipeline.insert(1,{
+            "$match":{
+                "_id": new_note.inserted_id
+            }
+        })
+        cursor = await job_cards_internal_notes_collection.aggregate(new_internal_note_pipeline)
+        result = await cursor.to_list(None)
+        serialized = serializer(result[0])
+
+        return {"new_internal_note":serialized}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(e)
         raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
