@@ -11,7 +11,7 @@ from datetime import datetime, timezone, timedelta
 from app.routes.car_trading import PyObjectId
 from app.routes.counters import create_custom_counter
 from app.widgets.check_date import is_date_equals_today_or_older
-from app.widgets.upload_files import upload_file
+from app.widgets.upload_files import upload_file, delete_file_from_server
 from app.widgets.upload_images import upload_image
 
 router = APIRouter()
@@ -753,6 +753,12 @@ async def delete_job_card(job_id: str, _: dict = Depends(security.get_current_us
             if result.deleted_count == 0:
                 raise HTTPException(status_code=404, detail="Job card not found or already deleted")
             await job_cards_invoice_items_collection.delete_many({"job_card_id": job_id}, session=session)
+            job_notes = await job_cards_internal_notes_collection.find({"job_card_id": job_id}, session=session).to_list(None)
+            if job_notes:
+                for job_note in job_notes:
+                    if "note_public_id" in job_note and job_note["note_public_id"]:
+                        await delete_file_from_server(job_note["note_public_id"])
+                await job_cards_internal_notes_collection.delete_many({"job_card_id": job_id}, session=session)
             await session.commit_transaction()
             return {"message": "Job card deleted successfully", "job_id": str(job_id)}
 
@@ -798,7 +804,6 @@ async def copy_job_card(job_id: str, data: dict = Depends(security.get_current_u
             new_job_id = new_job.inserted_id
             related_items = await job_cards_invoice_items_collection.find({"job_card_id": job_id}).to_list(None)
             for item in related_items:
-                print(item['_id'])
                 item.pop("_id", None)
                 item["job_card_id"] = new_job_id
                 await job_cards_invoice_items_collection.insert_one(item, session=session)
