@@ -461,6 +461,7 @@ async def get_all_customers(data: dict = Depends(security.get_current_user)):
             "$match": {
                 "company_id": company_id,
                 "entity_code": "Customer",
+                "status":True
             }
         })
         cursor = await entity_information_collection.aggregate(new_pipeline)
@@ -652,3 +653,5 @@ async def change_entity_status(entity_id: str, status: bool = Body(None), _: dic
         })
     except Exception as error:
         raise HTTPException(status_code=500, detail=str(error))
+
+
