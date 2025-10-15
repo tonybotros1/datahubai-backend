@@ -702,7 +702,7 @@ async def add_new_job_card(job_data: JobCard, data: dict = Depends(security.get_
 
             result = await job_cards_collection.insert_one(job_data_dict, session=session)
             if not result.inserted_id:
-                raise HTTPException(status_code=500, detail="Failed to insert trade")
+                raise HTTPException(status_code=500, detail="Failed to insert job card")
 
             if invoices:
                 items_dict = [{
