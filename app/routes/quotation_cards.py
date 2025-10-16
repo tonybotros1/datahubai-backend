@@ -1,7 +1,8 @@
 from typing import Optional, List, Any
 from bson import ObjectId
 from fastapi import APIRouter, HTTPException, Depends, UploadFile, Form, File
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
+from starlette.responses import JSONResponse
 
 from app import database
 from app.core import security
@@ -16,6 +17,7 @@ from app.widgets.upload_images import upload_image
 
 router = APIRouter()
 quotation_cards_collection = get_collection("quotation_cards")
+job_cards_collection = get_collection("job_cards")
 quotation_cards_invoice_items_collection = get_collection("quotation_cards_invoice_items")
 
 
@@ -42,27 +44,27 @@ class QuotationCard(BaseModel):
     # job_number: Optional[str] = None
     quotation_status: Optional[str] = None
     car_brand_logo: Optional[str] = None
-    car_brand: Optional[PyObjectId] = None
-    car_model: Optional[PyObjectId] = None
+    car_brand: Optional[str] = None
+    car_model: Optional[str] = None
     plate_number: Optional[str] = None
     plate_code: Optional[str] = None
-    country: Optional[PyObjectId] = None
-    city: Optional[PyObjectId] = None
+    country: Optional[str] = None
+    city: Optional[str] = None
     year: Optional[str] = None
-    color: Optional[PyObjectId] = None
-    engine_type: Optional[PyObjectId] = None
+    color: Optional[str] = None
+    engine_type: Optional[str] = None
     vehicle_identification_number: Optional[str] = None
     transmission_type: Optional[str] = None
     mileage_in: Optional[float] = None
-    customer: Optional[PyObjectId] = None
+    customer: Optional[str] = None
     contact_name: Optional[str] = None
     contact_email: Optional[str] = None
     contact_number: Optional[str] = None
     credit_limit: Optional[float] = None
     outstanding: Optional[float] = None
-    salesman: Optional[PyObjectId] = None
-    branch: Optional[PyObjectId] = None
-    currency: Optional[PyObjectId] = None
+    salesman: Optional[str] = None
+    branch: Optional[str] = None
+    currency: Optional[str] = None
     rate: Optional[float] = None
     validity_days: Optional[int] = None
     validity_end_date: Optional[datetime] = None
@@ -652,7 +654,6 @@ async def get_quotation_card_details(quotation_card_id: ObjectId):
     return result[0]
 
 
-
 @router.post("/add_new_quotation_card")
 async def add_new_quotation_card(quotation_data: QuotationCard, data: dict = Depends(security.get_current_user)):
     async with database.client.start_session() as session:
@@ -672,7 +673,18 @@ async def add_new_quotation_card(quotation_data: QuotationCard, data: dict = Dep
                 "company_id": company_id,
                 "createdAt": security.now_utc(),
                 "updatedAt": security.now_utc(),
-                "quotation_number": new_quotation_counter['final_counter'] if new_quotation_counter['success'] else None,
+                "car_brand": ObjectId(quotation_data_dict["car_brand"]) if quotation_data_dict["car_brand"] else None,
+                "car_model": ObjectId(quotation_data_dict["car_model"]) if quotation_data_dict["car_model"] else None,
+                "country": ObjectId(quotation_data_dict["country"]) if quotation_data_dict["country"] else None,
+                "city": ObjectId(quotation_data_dict["city"]) if quotation_data_dict["city"] else None,
+                "color": ObjectId(quotation_data_dict["color"]) if quotation_data_dict["color"] else None,
+                "engine_type": ObjectId(quotation_data_dict["engine_type"]) if quotation_data_dict["engine_type"] else None,
+                "customer": ObjectId(quotation_data_dict["customer"]) if quotation_data_dict["customer"] else None,
+                "salesman": ObjectId(quotation_data_dict["salesman"]) if quotation_data_dict["salesman"] else None,
+                "branch": ObjectId(quotation_data_dict["branch"]) if quotation_data_dict["branch"] else None,
+                "currency": ObjectId(quotation_data_dict["currency"]) if quotation_data_dict["currency"] else None,
+                "quotation_number": new_quotation_counter['final_counter'] if new_quotation_counter[
+                    'success'] else None,
             })
 
             result = await quotation_cards_collection.insert_one(quotation_data_dict, session=session)
@@ -704,13 +716,15 @@ async def add_new_quotation_card(quotation_data: QuotationCard, data: dict = Dep
             serialized = serializer(new_quotation)
             return {"quotation_card": serialized}
 
-
+        except ValidationError as e:
+            print("\n=== VALIDATION ERROR ===")
+            print(e.errors())
+            print("========================\n")
+            return JSONResponse(status_code=422, content={"detail": e.errors()})
         except Exception as e:
-            await session.abort_transaction()
             print(e)
+            await session.abort_transaction()
             raise HTTPException(status_code=500, detail=str(e))
-
-
 
 
 @router.delete("/delete_quotation_card/{quotation_id}")
@@ -729,13 +743,16 @@ async def delete_quotation_card(quotation_id: str, _: dict = Depends(security.ge
             result = await quotation_cards_collection.delete_one({"_id": quotation_id}, session=session)
             if result.deleted_count == 0:
                 raise HTTPException(status_code=404, detail="Quotation card not found or already deleted")
-            await quotation_cards_invoice_items_collection.delete_many({"quotation_card_id": quotation_id}, session=session)
-            quotation_notes = await quotation_cards_invoice_items_collection.find({"quotation_card_id": quotation_id}, session=session).to_list(None)
+            await quotation_cards_invoice_items_collection.delete_many({"quotation_card_id": quotation_id},
+                                                                       session=session)
+            quotation_notes = await quotation_cards_invoice_items_collection.find({"quotation_card_id": quotation_id},
+                                                                                  session=session).to_list(None)
             if quotation_notes:
                 for quotation_note in quotation_notes:
                     if "note_public_id" in quotation_note and quotation_note["note_public_id"]:
                         await delete_file_from_server(quotation_note["note_public_id"])
-                await quotation_cards_invoice_items_collection.delete_many({"quotation_card_id": quotation_id}, session=session)
+                await quotation_cards_invoice_items_collection.delete_many({"quotation_card_id": quotation_id},
+                                                                           session=session)
             await session.commit_transaction()
             return {"message": "Quotation card deleted successfully", "quotation_id": str(quotation_id)}
 
@@ -749,9 +766,9 @@ async def delete_quotation_card(quotation_id: str, _: dict = Depends(security.ge
             raise HTTPException(status_code=500, detail=f"Delete failed: {str(e)}")
 
 
-
 @router.patch("/update_quotation_card/{quotation_id}")
-async def update_quotation_card(quotation_id: str, quotation_data: QuotationCard, _: dict = Depends(security.get_current_user)):
+async def update_quotation_card(quotation_id: str, quotation_data: QuotationCard,
+                                _: dict = Depends(security.get_current_user)):
     try:
         quotation_id = ObjectId(quotation_id)
         quotation_data_dict = quotation_data.model_dump(exclude_unset=True)
@@ -766,9 +783,6 @@ async def update_quotation_card(quotation_id: str, quotation_data: QuotationCard
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
-
-
 
 
 @router.patch("/update_quotation_invoice_items")
@@ -855,7 +869,6 @@ async def update_quotation_invoice_items(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-
 @router.get("/get_quotation_card_status/{quotation_id}")
 async def get_quotation_card_status(quotation_id: str, _: dict = Depends(security.get_current_user)):
     try:
@@ -873,6 +886,23 @@ async def get_quotation_card_status(quotation_id: str, _: dict = Depends(securit
             raise HTTPException(status_code=404, detail="Quotation card not found")
 
         return {"status": "success", "data": result}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
+
+
+@router.get("/get_job_number_for_quotation/{quotation_id}")
+async def get_job_number_for_quotation(quotation_id: str, _: dict = Depends(security.get_current_user)):
+    try:
+        quotation_id = ObjectId(quotation_id)
+        result = await job_cards_collection.find_one({"quotation§_id": quotation_id}, {
+            "job_number": 1
+        })
+        return {"job_number": result}
+
+
 
     except HTTPException:
         raise
