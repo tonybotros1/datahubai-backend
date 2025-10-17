@@ -902,7 +902,7 @@ async def get_quotation_card_status(quotation_id: str, _: dict = Depends(securit
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
 
-#
+# delet this when you are sure that's noo need for it
 # @router.get("/get_job_number_for_quotation/{quotation_id}")
 # async def get_job_number_for_quotation(quotation_id: str, _: dict = Depends(security.get_current_user)):
 #     try:
