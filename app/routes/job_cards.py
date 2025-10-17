@@ -884,7 +884,7 @@ async def update_job_invoice_items(
             elif item.get("added") and not item.get("deleted"):
                 print('yes added')
                 item.pop("id", None)
-                item.pop("uid", None)
+                # item.pop("uid", None)
                 item['company_id'] = company_id
                 item['job_card_id'] = ObjectId(item['job_card_id']) if item['job_card_id'] else None
                 item["createdAt"] = security.now_utc()
