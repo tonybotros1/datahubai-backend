@@ -1333,6 +1333,11 @@ async def search_engine_for_job_cards(filter_jobs: JobCardSearch, data: dict = D
                     '$ifNull': [
                         '$quotation_details.quotation_number', None
                     ]
+                },
+                'quotation_id': {
+                    '$ifNull': [
+                        '$quotation_details._id', None
+                    ]
                 }
             }
         })
@@ -1530,3 +1535,88 @@ async def add_new_internal_note_for_job_card(job_id: str, note_type: str = Form(
     except Exception as e:
         print(e)
         raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
+
+
+
+@router.post("/create_quotation_card_for_current_job/{job_id}")
+async def create_job_card_for_current_quotation(job_id: str, data: dict = Depends(security.get_current_user)):
+    async with database.client.start_session() as session:
+        try:
+            await session.start_transaction()
+            job_id = ObjectId(job_id)
+            if not job_id:
+                raise HTTPException(status_code=404, detail="Job card not found")
+            original_job = await job_cards_collection.find_one({"_id": job_id}, session=session)
+            if not original_job:
+                raise HTTPException(status_code=404, detail="Job card not found")
+            if original_job['job_status_1'] != "Posted":
+                raise HTTPException(status_code=403, detail="Only Posted Jobs Cards allowed")
+            job_warranty_days = original_job['quotation_warranty_days']
+            job_warranty_kms = original_job['quotation_warranty_km']
+            original_job.update({
+                "quotation_id": original_job['_id']
+            })
+            original_job.pop("_id", None)
+            original_job.pop("quotation_status", None)
+            # original_job.pop("quotation_number", None)
+            original_job.pop("validity_days", None)
+            original_job.pop("validity_end_date", None)
+            original_job.pop("reference_number", None)
+            original_job.pop("delivery_time", None)
+            original_job.pop("quotation_warranty_days", None)
+            original_job.pop("quotation_warranty_km", None)
+            original_job.pop("quotation_notes", None)
+            original_job.pop("quotation_date", None)
+            original_job.update({
+                "quotation_id": ObjectId(quotation_id),
+                "label": "",
+                'job_status_1': 'New',
+                'job_status_2': 'New',
+                'invoice_number': '',
+                'lpo_number': '',
+                'job_date': security.now_utc(),
+                'invoice_date': '',
+                'job_approval_date': '',
+                'job_start_date': '',
+                'job_cancellation_date': '',
+                'job_finish_date': '',
+                'job_delivery_date': '',
+                'job_warranty_days': job_warranty_days,
+                'job_warranty_km': job_warranty_kms,
+                'job_warranty_end_date': '',
+                'job_min_test_km': '',
+                'job_reference_1': '',
+                'job_reference_2': '',
+                'job_reference_3': '',
+                'job_notes': '',
+                'job_delivery_notes': '',
+                "mileage_out": 0,
+                "mileage_in_out_diff": 0,
+                "payment_method": "Cash"
+
+            })
+            new_job_counter = await create_custom_counter("JCN", "J", data, session)
+            original_job["job_number"] = new_job_counter["final_counter"] if new_job_counter[
+                "success"] else None
+
+            new_job = await job_cards_collection.insert_one(original_job, session=session)
+            new_job_id = new_job.inserted_id
+            related_items = await quotation_cards_invoice_items_collection.find(
+                {"quotation_card_id": quotation_id}).to_list(None)
+            for item in related_items:
+                item.pop("_id", None)
+                item["job_card_id"] = new_job_id
+                await job_cards_invoice_items_collection.insert_one(item, session=session)
+            await quotation_cards_collection.update_one({"_id": quotation_id}, {"$set": {
+                "job_card_id": new_job_id,
+            }}, session=session)
+            await session.commit_transaction()
+            return {"job_number": new_job_counter["final_counter"],"job_card_id": str(new_job_id)}
+
+        except HTTPException:
+            await session.abort_transaction()
+            raise
+        except Exception as e:
+            print(e)
+            await session.abort_transaction()
+            raise HTTPException(status_code=500, detail=f"Delete failed: {str(e)}")

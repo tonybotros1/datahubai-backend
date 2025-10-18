@@ -11,6 +11,7 @@ from datetime import datetime, timezone, timedelta
 
 from app.routes.car_trading import PyObjectId
 from app.routes.counters import create_custom_counter
+from app.routes.job_cards import get_job_card_details
 from app.widgets.upload_files import upload_file, delete_file_from_server
 from app.widgets.upload_images import upload_image
 
@@ -747,14 +748,14 @@ async def delete_quotation_card(quotation_id: str, _: dict = Depends(security.ge
                 raise HTTPException(status_code=404, detail="Quotation card not found or already deleted")
             await quotation_cards_invoice_items_collection.delete_many({"quotation_card_id": quotation_id},
                                                                        session=session)
-            quotation_notes = await quotation_cards_invoice_items_collection.find({"quotation_card_id": quotation_id},
-                                                                                  session=session).to_list(None)
+            quotation_notes = await quotation_cards_internal_notes_collection.find({"quotation_card_id": quotation_id},
+                                                                                   session=session).to_list(None)
             if quotation_notes:
                 for quotation_note in quotation_notes:
                     if "note_public_id" in quotation_note and quotation_note["note_public_id"]:
                         await delete_file_from_server(quotation_note["note_public_id"])
-                await quotation_cards_invoice_items_collection.delete_many({"quotation_card_id": quotation_id},
-                                                                           session=session)
+                await quotation_cards_internal_notes_collection.delete_many({"quotation_card_id": quotation_id},
+                                                                            session=session)
             await session.commit_transaction()
             return {"message": "Quotation card deleted successfully", "quotation_id": str(quotation_id)}
 
@@ -905,26 +906,6 @@ async def get_quotation_card_status(quotation_id: str, _: dict = Depends(securit
         raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
 
 
-# delet this when you are sure that's noo need for it
-# @router.get("/get_job_number_for_quotation/{quotation_id}")
-# async def get_job_number_for_quotation(quotation_id: str, _: dict = Depends(security.get_current_user)):
-#     try:
-#         quotation_id = ObjectId(quotation_id)
-#         result = await job_cards_collection.find_one({"quotation§_id": quotation_id}, {
-#             "job_number": 1
-#         })
-#         return {"job_number": result}
-#
-#
-#
-#     except HTTPException:
-#         raise
-#     except Exception as e:
-#         raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
-#
-#
-
-
 @router.post("/copy_quotation_card/{quotation_id}")
 async def copy_quotation_card(quotation_id: str, data: dict = Depends(security.get_current_user)):
     async with database.client.start_session() as session:
@@ -1034,14 +1015,14 @@ async def search_engine_for_quotation_cards(filter_quotations: QuotationCardSear
             '$lookup': {
                 'from': 'job_cards',
                 'let': {
-                    'job_id': '$job_id'
+                    'job_card_id': '$job_card_id'
                 },
                 'pipeline': [
                     {
                         '$match': {
                             '$expr': {
                                 '$eq': [
-                                    '$_id', '$$job_id'
+                                    '$_id', '$$job_card_id'
                                 ]
                             }
                         }
@@ -1329,6 +1310,11 @@ async def search_engine_for_quotation_cards(filter_quotations: QuotationCardSear
                     '$ifNull': [
                         '$job_details.job_number', None
                     ]
+                },
+                "job_card_id": {
+                    "$ifNull": [
+                        "$job_details._id", None
+                    ]
                 }
             }
         })
@@ -1546,9 +1532,12 @@ async def create_job_card_for_current_quotation(quotation_id: str, data: dict = 
                 raise HTTPException(status_code=403, detail="Only Posted Quotation Cards allowed")
             job_warranty_days = original_quotation['quotation_warranty_days']
             job_warranty_kms = original_quotation['quotation_warranty_km']
+            original_quotation.update({
+                "quotation_id": original_quotation['_id']
+            })
             original_quotation.pop("_id", None)
             original_quotation.pop("quotation_status", None)
-            original_quotation.pop("quotation_number", None)
+            # original_quotation.pop("quotation_number", None)
             original_quotation.pop("validity_days", None)
             original_quotation.pop("validity_end_date", None)
             original_quotation.pop("reference_number", None)
@@ -1564,7 +1553,7 @@ async def create_job_card_for_current_quotation(quotation_id: str, data: dict = 
                 'job_status_2': 'New',
                 'invoice_number': '',
                 'lpo_number': '',
-                'job_date': '',
+                'job_date': security.now_utc(),
                 'invoice_date': '',
                 'job_approval_date': '',
                 'job_start_date': '',
@@ -1580,6 +1569,9 @@ async def create_job_card_for_current_quotation(quotation_id: str, data: dict = 
                 'job_reference_3': '',
                 'job_notes': '',
                 'job_delivery_notes': '',
+                "mileage_out": 0,
+                "mileage_in_out_diff": 0,
+                "payment_method": "Cash"
 
             })
             new_job_counter = await create_custom_counter("JCN", "J", data, session)
@@ -1594,9 +1586,11 @@ async def create_job_card_for_current_quotation(quotation_id: str, data: dict = 
                 item.pop("_id", None)
                 item["job_card_id"] = new_job_id
                 await job_cards_invoice_items_collection.insert_one(item, session=session)
-
+            await quotation_cards_collection.update_one({"_id": quotation_id}, {"$set": {
+                "job_card_id": new_job_id,
+            }}, session=session)
             await session.commit_transaction()
-            return {"job_number": new_job_counter["final_counter"]}
+            return {"job_number": new_job_counter["final_counter"],"job_card_id": str(new_job_id)}
 
         except HTTPException:
             await session.abort_transaction()
@@ -1605,3 +1599,18 @@ async def create_job_card_for_current_quotation(quotation_id: str, data: dict = 
             print(e)
             await session.abort_transaction()
             raise HTTPException(status_code=500, detail=f"Delete failed: {str(e)}")
+
+
+@router.get("/open_job_card_screen_by_job_number_for_quotation/{job_id}")
+async def open_job_card_screen_by_job_number_for_quotation(job_id: str, _: dict = Depends(security.get_current_user)):
+    try:
+        required_job = await get_job_card_details(ObjectId(job_id))
+        serialized = serializer(required_job)
+        return {"required_job": serialized}
+
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(e)
+        raise HTTPException(status_code=500, detail=f"Delete failed: {str(e)}")
