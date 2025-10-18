@@ -11,7 +11,6 @@ from datetime import datetime, timezone, timedelta
 
 from app.routes.car_trading import PyObjectId
 from app.routes.counters import create_custom_counter
-from app.widgets.check_date import is_date_equals_today_or_older
 from app.widgets.upload_files import upload_file, delete_file_from_server
 from app.widgets.upload_images import upload_image
 
@@ -19,6 +18,8 @@ router = APIRouter()
 quotation_cards_collection = get_collection("quotation_cards")
 job_cards_collection = get_collection("job_cards")
 quotation_cards_invoice_items_collection = get_collection("quotation_cards_invoice_items")
+quotation_cards_internal_notes_collection = get_collection("quotation_cards_internal_notes")
+job_cards_invoice_items_collection = get_collection("job_cards_invoice_items")
 
 
 class InvoiceItems(BaseModel):
@@ -678,7 +679,8 @@ async def add_new_quotation_card(quotation_data: QuotationCard, data: dict = Dep
                 "country": ObjectId(quotation_data_dict["country"]) if quotation_data_dict["country"] else None,
                 "city": ObjectId(quotation_data_dict["city"]) if quotation_data_dict["city"] else None,
                 "color": ObjectId(quotation_data_dict["color"]) if quotation_data_dict["color"] else None,
-                "engine_type": ObjectId(quotation_data_dict["engine_type"]) if quotation_data_dict["engine_type"] else None,
+                "engine_type": ObjectId(quotation_data_dict["engine_type"]) if quotation_data_dict[
+                    "engine_type"] else None,
                 "customer": ObjectId(quotation_data_dict["customer"]) if quotation_data_dict["customer"] else None,
                 "salesman": ObjectId(quotation_data_dict["salesman"]) if quotation_data_dict["salesman"] else None,
                 "branch": ObjectId(quotation_data_dict["branch"]) if quotation_data_dict["branch"] else None,
@@ -902,6 +904,7 @@ async def get_quotation_card_status(quotation_id: str, _: dict = Depends(securit
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
 
+
 # delet this when you are sure that's noo need for it
 # @router.get("/get_job_number_for_quotation/{quotation_id}")
 # async def get_job_number_for_quotation(quotation_id: str, _: dict = Depends(security.get_current_user)):
@@ -922,8 +925,52 @@ async def get_quotation_card_status(quotation_id: str, _: dict = Depends(securit
 #
 
 
+@router.post("/copy_quotation_card/{quotation_id}")
+async def copy_quotation_card(quotation_id: str, data: dict = Depends(security.get_current_user)):
+    async with database.client.start_session() as session:
+        try:
+            await session.start_transaction()
+            quotation_id = ObjectId(quotation_id)
+            if not quotation_id:
+                raise HTTPException(status_code=404, detail="Quotation card not found")
+            original_quotation = await quotation_cards_collection.find_one({"_id": quotation_id}, session=session)
+            if not original_quotation:
+                raise HTTPException(status_code=404, detail="Quotation card not found")
+            if original_quotation['quotation_status'] not in ["Posted", "Cancelled"]:
+                raise HTTPException(status_code=403, detail="Only Posted / Cancelled Quotation Cards allowed")
+            original_quotation.pop("_id", None)
+            original_quotation['quotation_status'] = "New"
+            new_quotation_counter = await create_custom_counter("QN", "R", data, session)
+            original_quotation["quotation_number"] = new_quotation_counter["final_counter"] if new_quotation_counter[
+                "success"] else None
+
+            new_quotation = await quotation_cards_collection.insert_one(original_quotation, session=session)
+            new_job_id = new_quotation.inserted_id
+            related_items = await quotation_cards_invoice_items_collection.find(
+                {"quotation_card_id": quotation_id}).to_list(None)
+            for item in related_items:
+                item.pop("_id", None)
+                item["quotation_card_id"] = new_job_id
+                await quotation_cards_invoice_items_collection.insert_one(item, session=session)
+
+            await session.commit_transaction()
+            new_quotation_details = await get_quotation_card_details(new_job_id)
+            serialized = serializer(new_quotation_details)
+
+            return {"message": "Quotation card copied successfully", "copied_quotation": serialized}
+
+        except HTTPException:
+            await session.abort_transaction()
+            raise
+        except Exception as e:
+            print(e)
+            await session.abort_transaction()
+            raise HTTPException(status_code=500, detail=f"Delete failed: {str(e)}")
+
+
 @router.post("/search_engine_for_quotation_cards")
-async def search_engine_for_quotation_cards(filter_quotations: QuotationCardSearch, data: dict = Depends(security.get_current_user)):
+async def search_engine_for_quotation_cards(filter_quotations: QuotationCardSearch,
+                                            data: dict = Depends(security.get_current_user)):
     try:
         company_id = ObjectId(data.get("company_id"))
         search_pipeline: list[dict] = []
@@ -1145,6 +1192,7 @@ async def search_engine_for_quotation_cards(filter_quotations: QuotationCardSear
         }, )
 
         now = datetime.now(timezone.utc)
+        print(now)
         date_field = "quotation_date"
         date_filter = {}
         if filter_quotations.today:
@@ -1344,3 +1392,216 @@ async def search_engine_for_quotation_cards(filter_quotations: QuotationCardSear
     except Exception as e:
         print(e)
         raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
+
+
+def returning_internal_note_pipeline(company_id: ObjectId, user_id: ObjectId,
+                                     quotation_id: ObjectId):  # this function to assign the ids to the pipeline
+    internal_note_pipeline = [
+        {
+            "$match": {
+                "quotation_card_id": quotation_id,
+                "company_id": company_id,
+            }
+        },
+        {
+            '$lookup': {
+                'from': 'sys-users',
+                'let': {
+                    'user_id': '$user_id'
+                },
+                'pipeline': [
+                    {
+                        '$match': {
+                            '$expr': {
+                                '$eq': [
+                                    '$_id', '$$user_id'
+                                ]
+                            }
+                        }
+                    }, {
+                        '$project': {
+                            'user_name': 1
+                        }
+                    }
+                ],
+                'as': 'user_details'
+            }
+        }, {
+            '$unwind': {
+                'path': '$user_details',
+                'preserveNullAndEmptyArrays': True
+            }
+        }, {
+            '$addFields': {
+                'user_name': {
+                    '$ifNull': [
+                        '$user_details.user_name', None
+                    ]
+                },
+                'is_this_user_is_the_current_user': {
+                    '$cond': {
+                        'if': {
+                            '$eq': [
+                                '$user_id', user_id
+                            ]
+                        },
+                        'then': True,
+                        'else': False
+                    }
+                }
+            }
+        }, {
+            '$project': {
+                "user_details": 0
+            }
+        }
+    ]
+    return internal_note_pipeline
+
+
+@router.get("/get_all_internal_notes_for_quotation_card/{quotation_id}")
+async def get_all_internal_notes_for_quotation_card(quotation_id: str, data: dict = Depends(security.get_current_user)):
+    try:
+        user_id = ObjectId(data.get('sub'))
+        company_id = ObjectId(data.get('company_id'))
+        quotation_id = ObjectId(quotation_id)
+        internal_notes_pipeline_copy = returning_internal_note_pipeline(company_id=company_id, user_id=user_id,
+                                                                        quotation_id=quotation_id)
+        cursor = await quotation_cards_internal_notes_collection.aggregate(internal_notes_pipeline_copy)
+        results = await cursor.to_list(None)
+        serialized = [serializer(r) for r in results]
+        return {"internal_notes": serialized}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(e)
+        raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
+
+
+@router.post("/add_new_internal_note_for_quotation_card/{quotation_id}")
+async def add_new_internal_note_for_job_card(quotation_id: str, note_type: str = Form(None), note: str = Form(None),
+                                             media_note: UploadFile = File(None), file_name: str = Form(None),
+                                             data: dict = Depends(security.get_current_user)):
+    try:
+        company_id = ObjectId(data.get("company_id"))
+        user_id = ObjectId(data.get("sub"))
+        note_public_id = None
+        if note_type and note_type.lower() != 'text' and media_note is not None:
+            if note_type.lower() != 'image':
+                result = await upload_file(media_note, folder="quotation cards internal notes")
+                file_name = result["file_name"]
+                note = result["url"] if "url" in result else None
+                note_public_id = result['public_id'] if "public_id" in result else None
+            else:
+                result = await upload_image(media_note, folder="quotation cards internal notes")
+                file_name = result["file_name"]
+                note = result["url"] if "url" in result else None
+                note_public_id = result['public_id'] if "public_id" in result else None
+
+        internal_note_dict = {
+            "quotation_card_id": ObjectId(quotation_id),
+            "company_id": company_id,
+            "user_id": user_id,
+            "type": note_type,
+            "note": note,
+            'createdAt': security.now_utc(),
+            'updatedAt': security.now_utc(),
+            "file_name": file_name,
+            "note_public_id": note_public_id,
+        }
+        new_note = await quotation_cards_internal_notes_collection.insert_one(internal_note_dict)
+        new_internal_note_pipeline = returning_internal_note_pipeline(company_id=company_id, user_id=user_id,
+                                                                      quotation_id=ObjectId(quotation_id))
+        new_internal_note_pipeline.insert(1, {
+            "$match": {
+                "_id": new_note.inserted_id
+            }
+        })
+        cursor = await quotation_cards_internal_notes_collection.aggregate(new_internal_note_pipeline)
+        result = await cursor.to_list(None)
+        serialized = serializer(result[0])
+
+        return {"new_internal_note": serialized}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(e)
+        raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
+
+
+@router.post("/create_job_card_for_current_quotation/{quotation_id}")
+async def create_job_card_for_current_quotation(quotation_id: str, data: dict = Depends(security.get_current_user)):
+    async with database.client.start_session() as session:
+        try:
+            await session.start_transaction()
+            quotation_id = ObjectId(quotation_id)
+            if not quotation_id:
+                raise HTTPException(status_code=404, detail="Quotation card not found")
+            original_quotation = await quotation_cards_collection.find_one({"_id": quotation_id}, session=session)
+            if not original_quotation:
+                raise HTTPException(status_code=404, detail="Quotation card not found")
+            if original_quotation['quotation_status'] != "Posted":
+                raise HTTPException(status_code=403, detail="Only Posted Quotation Cards allowed")
+            job_warranty_days = original_quotation['quotation_warranty_days']
+            job_warranty_kms = original_quotation['quotation_warranty_km']
+            original_quotation.pop("_id", None)
+            original_quotation.pop("quotation_status", None)
+            original_quotation.pop("quotation_number", None)
+            original_quotation.pop("validity_days", None)
+            original_quotation.pop("validity_end_date", None)
+            original_quotation.pop("reference_number", None)
+            original_quotation.pop("delivery_time", None)
+            original_quotation.pop("quotation_warranty_days", None)
+            original_quotation.pop("quotation_warranty_km", None)
+            original_quotation.pop("quotation_notes", None)
+            original_quotation.pop("quotation_date", None)
+            original_quotation.update({
+                "quotation_id": ObjectId(quotation_id),
+                "label": "",
+                'job_status_1': 'New',
+                'job_status_2': 'New',
+                'invoice_number': '',
+                'lpo_number': '',
+                'job_date': '',
+                'invoice_date': '',
+                'job_approval_date': '',
+                'job_start_date': '',
+                'job_cancellation_date': '',
+                'job_finish_date': '',
+                'job_delivery_date': '',
+                'job_warranty_days': job_warranty_days,
+                'job_warranty_km': job_warranty_kms,
+                'job_warranty_end_date': '',
+                'job_min_test_km': '',
+                'job_reference_1': '',
+                'job_reference_2': '',
+                'job_reference_3': '',
+                'job_notes': '',
+                'job_delivery_notes': '',
+
+            })
+            new_job_counter = await create_custom_counter("JCN", "J", data, session)
+            original_quotation["job_number"] = new_job_counter["final_counter"] if new_job_counter[
+                "success"] else None
+
+            new_job = await job_cards_collection.insert_one(original_quotation, session=session)
+            new_job_id = new_job.inserted_id
+            related_items = await quotation_cards_invoice_items_collection.find(
+                {"quotation_card_id": quotation_id}).to_list(None)
+            for item in related_items:
+                item.pop("_id", None)
+                item["job_card_id"] = new_job_id
+                await job_cards_invoice_items_collection.insert_one(item, session=session)
+
+            await session.commit_transaction()
+            return {"job_number": new_job_counter["final_counter"]}
+
+        except HTTPException:
+            await session.abort_transaction()
+            raise
+        except Exception as e:
+            print(e)
+            await session.abort_transaction()
+            raise HTTPException(status_code=500, detail=f"Delete failed: {str(e)}")

@@ -1,3 +1,4 @@
+starlette
 pyjwt
 passlib
 python-jose
