@@ -10,14 +10,18 @@ from datetime import datetime, timezone, timedelta
 
 from app.routes.car_trading import PyObjectId
 from app.routes.counters import create_custom_counter
+from app.routes.quotation_cards import get_quotation_card_details
 from app.widgets.check_date import is_date_equals_today_or_older
 from app.widgets.upload_files import upload_file, delete_file_from_server
 from app.widgets.upload_images import upload_image
 
 router = APIRouter()
 job_cards_collection = get_collection("job_cards")
+quotation_cards_collection = get_collection("quotation_cards")
 job_cards_invoice_items_collection = get_collection("job_cards_invoice_items")
 job_cards_internal_notes_collection = get_collection("job_cards_internal_notes")
+quotation_cards_invoice_items_collection = get_collection("quotation_cards_invoice_items")
+quotation_cards_internal_notes_collection = get_collection("quotation_cards_internal_notes")
 
 
 class InvoiceItems(BaseModel):
@@ -753,7 +757,8 @@ async def delete_job_card(job_id: str, _: dict = Depends(security.get_current_us
             if result.deleted_count == 0:
                 raise HTTPException(status_code=404, detail="Job card not found or already deleted")
             await job_cards_invoice_items_collection.delete_many({"job_card_id": job_id}, session=session)
-            job_notes = await job_cards_internal_notes_collection.find({"job_card_id": job_id}, session=session).to_list(None)
+            job_notes = await job_cards_internal_notes_collection.find({"job_card_id": job_id},
+                                                                       session=session).to_list(None)
             if job_notes:
                 for job_note in job_notes:
                     if "note_public_id" in job_note and job_note["note_public_id"]:
@@ -1473,7 +1478,8 @@ async def get_all_internal_notes_for_job_card(job_id: str, data: dict = Depends(
         user_id = ObjectId(data.get('sub'))
         company_id = ObjectId(data.get('company_id'))
         job_id = ObjectId(job_id)
-        internal_notes_pipeline_copy = returning_internal_note_pipeline(company_id=company_id, user_id=user_id, job_id=job_id)
+        internal_notes_pipeline_copy = returning_internal_note_pipeline(company_id=company_id, user_id=user_id,
+                                                                        job_id=job_id)
         cursor = await job_cards_internal_notes_collection.aggregate(internal_notes_pipeline_copy)
         results = await cursor.to_list(None)
         serialized = [serializer(r) for r in results]
@@ -1518,9 +1524,10 @@ async def add_new_internal_note_for_job_card(job_id: str, note_type: str = Form(
             "note_public_id": note_public_id,
         }
         new_note = await job_cards_internal_notes_collection.insert_one(internal_note_dict)
-        new_internal_note_pipeline = returning_internal_note_pipeline(company_id=company_id, user_id=user_id, job_id=ObjectId(job_id))
-        new_internal_note_pipeline.insert(1,{
-            "$match":{
+        new_internal_note_pipeline = returning_internal_note_pipeline(company_id=company_id, user_id=user_id,
+                                                                      job_id=ObjectId(job_id))
+        new_internal_note_pipeline.insert(1, {
+            "$match": {
                 "_id": new_note.inserted_id
             }
         })
@@ -1528,14 +1535,13 @@ async def add_new_internal_note_for_job_card(job_id: str, note_type: str = Form(
         result = await cursor.to_list(None)
         serialized = serializer(result[0])
 
-        return {"new_internal_note":serialized}
+        return {"new_internal_note": serialized}
 
     except HTTPException:
         raise
     except Exception as e:
         print(e)
         raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
-
 
 
 @router.post("/create_quotation_card_for_current_job/{job_id}")
@@ -1546,72 +1552,66 @@ async def create_job_card_for_current_quotation(job_id: str, data: dict = Depend
             job_id = ObjectId(job_id)
             if not job_id:
                 raise HTTPException(status_code=404, detail="Job card not found")
+            already_created_quotation = await quotation_cards_collection.find_one({"job_card_id": job_id})
+            if already_created_quotation:
+                raise HTTPException(status_code=409, detail="Quotation is already created")
             original_job = await job_cards_collection.find_one({"_id": job_id}, session=session)
             if not original_job:
                 raise HTTPException(status_code=404, detail="Job card not found")
             if original_job['job_status_1'] != "Posted":
                 raise HTTPException(status_code=403, detail="Only Posted Jobs Cards allowed")
-            job_warranty_days = original_job['quotation_warranty_days']
-            job_warranty_kms = original_job['quotation_warranty_km']
+            job_warranty_days = original_job['job_warranty_days']
+            job_warranty_kms = original_job['job_warranty_km']
             original_job.update({
-                "quotation_id": original_job['_id']
+                "job_card_id": original_job['_id']
             })
             original_job.pop("_id", None)
-            original_job.pop("quotation_status", None)
-            # original_job.pop("quotation_number", None)
-            original_job.pop("validity_days", None)
-            original_job.pop("validity_end_date", None)
-            original_job.pop("reference_number", None)
-            original_job.pop("delivery_time", None)
-            original_job.pop("quotation_warranty_days", None)
-            original_job.pop("quotation_warranty_km", None)
-            original_job.pop("quotation_notes", None)
-            original_job.pop("quotation_date", None)
+            original_job.pop("job_status_1", None)
+            original_job.pop("job_status_2", None)
+            original_job.pop("invoice_number", None)
+            original_job.pop("lpo_number", None)
+            original_job.pop("job_date", None)
+            original_job.pop("invoice_date", None)
+            original_job.pop("job_approval_date", None)
+            original_job.pop("job_start_date", None)
+            original_job.pop("job_cancellation_date", None)
+            original_job.pop("job_finish_date", None)
+            original_job.pop("job_delivery_date", None)
+            original_job.pop("job_warranty_km", None)
+            original_job.pop("job_warranty_days", None)
+            original_job.pop("job_min_test_km", None)
+            original_job.pop("job_reference_1", None)
+            original_job.pop("job_reference_2", None)
+            original_job.pop("job_reference_3", None)
+            original_job.pop("job_notes", None)
+            original_job.pop("job_delivery_notes", None)
+            original_job.pop("mileage_out", None)
+            original_job.pop("mileage_in_out_diff", None)
             original_job.update({
-                "quotation_id": ObjectId(quotation_id),
-                "label": "",
-                'job_status_1': 'New',
-                'job_status_2': 'New',
-                'invoice_number': '',
-                'lpo_number': '',
-                'job_date': security.now_utc(),
-                'invoice_date': '',
-                'job_approval_date': '',
-                'job_start_date': '',
-                'job_cancellation_date': '',
-                'job_finish_date': '',
-                'job_delivery_date': '',
-                'job_warranty_days': job_warranty_days,
-                'job_warranty_km': job_warranty_kms,
-                'job_warranty_end_date': '',
-                'job_min_test_km': '',
-                'job_reference_1': '',
-                'job_reference_2': '',
-                'job_reference_3': '',
-                'job_notes': '',
-                'job_delivery_notes': '',
-                "mileage_out": 0,
-                "mileage_in_out_diff": 0,
-                "payment_method": "Cash"
-
+                "job_card_id": ObjectId(job_id),
+                'quotation_status': 'New',
+                'quotation_date': security.now_utc(),
+                'quotation_warranty_days': job_warranty_days,
+                'quotation_warranty_km': job_warranty_kms,
             })
-            new_job_counter = await create_custom_counter("JCN", "J", data, session)
-            original_job["job_number"] = new_job_counter["final_counter"] if new_job_counter[
+            new_quotation_counter = await create_custom_counter("QN", "Q", data, session)
+            original_job["quotation_number"] = new_quotation_counter["final_counter"] if new_quotation_counter[
                 "success"] else None
 
-            new_job = await job_cards_collection.insert_one(original_job, session=session)
-            new_job_id = new_job.inserted_id
-            related_items = await quotation_cards_invoice_items_collection.find(
-                {"quotation_card_id": quotation_id}).to_list(None)
+            new_quotation = await quotation_cards_collection.insert_one(original_job, session=session)
+            new_quotation_id = new_quotation.inserted_id
+            related_items = await job_cards_invoice_items_collection.find(
+                {"job_card_id": job_id}).to_list(None)
             for item in related_items:
                 item.pop("_id", None)
-                item["job_card_id"] = new_job_id
-                await job_cards_invoice_items_collection.insert_one(item, session=session)
-            await quotation_cards_collection.update_one({"_id": quotation_id}, {"$set": {
-                "job_card_id": new_job_id,
+                item["quotation_card_id"] = new_quotation_id
+                await quotation_cards_invoice_items_collection.insert_one(item, session=session)
+            await job_cards_collection.update_one({"_id": job_id}, {"$set": {
+                "quotation_id": new_quotation_id,
             }}, session=session)
             await session.commit_transaction()
-            return {"job_number": new_job_counter["final_counter"],"job_card_id": str(new_job_id)}
+            return {"quotation_number": new_quotation_counter["final_counter"],
+                    "quotation_card_id": str(new_quotation_id)}
 
         except HTTPException:
             await session.abort_transaction()
@@ -1620,3 +1620,19 @@ async def create_job_card_for_current_quotation(job_id: str, data: dict = Depend
             print(e)
             await session.abort_transaction()
             raise HTTPException(status_code=500, detail=f"Delete failed: {str(e)}")
+
+
+
+@router.get("/open_quotation_card_screen_by_quotation_number_for_job/{quotation_id}")
+async def open_quotation_card_screen_by_quotation_number_for_job(quotation_id: str, _: dict = Depends(security.get_current_user)):
+    try:
+        required_quotation = await get_quotation_card_details(ObjectId(quotation_id))
+        serialized = serializer(required_quotation)
+        return {"required_quotation": serialized}
+
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(e)
+        raise HTTPException(status_code=500, detail=f"Delete failed: {str(e)}")

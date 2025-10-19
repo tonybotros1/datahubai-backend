@@ -11,7 +11,7 @@ from datetime import datetime, timezone, timedelta
 
 from app.routes.car_trading import PyObjectId
 from app.routes.counters import create_custom_counter
-from app.routes.job_cards import get_job_card_details
+# from app.routes.job_cards import get_job_card_details
 from app.widgets.upload_files import upload_file, delete_file_from_server
 from app.widgets.upload_images import upload_image
 
@@ -664,7 +664,7 @@ async def add_new_quotation_card(quotation_data: QuotationCard, data: dict = Dep
             company_id = ObjectId(data.get("company_id"))
 
             quotation_data_dict = quotation_data.model_dump(exclude_unset=True)
-            new_quotation_counter = await create_custom_counter("QN", "R", data, session)
+            new_quotation_counter = await create_custom_counter("QN", "Q", data, session)
 
             invoices = []
             if quotation_data_dict.get("invoice_items"):
@@ -921,7 +921,7 @@ async def copy_quotation_card(quotation_id: str, data: dict = Depends(security.g
                 raise HTTPException(status_code=403, detail="Only Posted / Cancelled Quotation Cards allowed")
             original_quotation.pop("_id", None)
             original_quotation['quotation_status'] = "New"
-            new_quotation_counter = await create_custom_counter("QN", "R", data, session)
+            new_quotation_counter = await create_custom_counter("QN", "Q", data, session)
             original_quotation["quotation_number"] = new_quotation_counter["final_counter"] if new_quotation_counter[
                 "success"] else None
 
@@ -1525,6 +1525,9 @@ async def create_job_card_for_current_quotation(quotation_id: str, data: dict = 
             quotation_id = ObjectId(quotation_id)
             if not quotation_id:
                 raise HTTPException(status_code=404, detail="Quotation card not found")
+            already_created_job = await job_cards_collection.find_one({"quotation_id": quotation_id})
+            if already_created_job:
+                raise HTTPException(status_code=409, detail="Job card already created")
             original_quotation = await quotation_cards_collection.find_one({"_id": quotation_id}, session=session)
             if not original_quotation:
                 raise HTTPException(status_code=404, detail="Quotation card not found")
@@ -1590,7 +1593,7 @@ async def create_job_card_for_current_quotation(quotation_id: str, data: dict = 
                 "job_card_id": new_job_id,
             }}, session=session)
             await session.commit_transaction()
-            return {"job_number": new_job_counter["final_counter"],"job_card_id": str(new_job_id)}
+            return {"job_number": new_job_counter["final_counter"], "job_card_id": str(new_job_id)}
 
         except HTTPException:
             await session.abort_transaction()
@@ -1604,6 +1607,7 @@ async def create_job_card_for_current_quotation(quotation_id: str, data: dict = 
 @router.get("/open_job_card_screen_by_job_number_for_quotation/{job_id}")
 async def open_job_card_screen_by_job_number_for_quotation(job_id: str, _: dict = Depends(security.get_current_user)):
     try:
+        from app.routes.job_cards import get_job_card_details
         required_job = await get_job_card_details(ObjectId(job_id))
         serialized = serializer(required_job)
         return {"required_job": serialized}
