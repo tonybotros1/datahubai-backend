@@ -162,6 +162,11 @@ async def get_all_capitals_or_outstanding(get_type: str, data: dict = Depends(se
     pipeline = [
         {"$match": {"company_id": company_id}},
         {
+            "$sort": {
+                "date": 1
+            }
+        },
+        {
             "$lookup": {
                 "from": "all_lists_values",
                 "localField": "name",
@@ -466,6 +471,11 @@ async def get_all_general_expenses(data: dict = Depends(security.get_current_use
 
     pipeline = [
         {"$match": {"company_id": company_id}},
+        {
+            "$sort": {
+                "date": 1
+            }
+        },
         {
             "$lookup": {
                 "from": "all_lists_values",
