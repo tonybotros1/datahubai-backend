@@ -382,6 +382,11 @@ async def get_list_values_by_code(code: str, _: dict = Depends(security.get_curr
                     "mastered_by": {"$ifNull": ["$value.mastered_by", ""]},
 
                 }
+            },
+            {
+                "$sort": {
+                    "name": -1
+                }
             }
         ]
 
