@@ -65,7 +65,37 @@ async def search_engine(filter_time_sheets: TimeSheetsSearch, data: dict = Depen
                 '$match': {
                     'company_id': company_id
                 }
+            },
+            {
+                '$lookup': {
+                    'from': 'companies',
+                    'let': {
+                        'company_id': company_id
+                    },
+                    'pipeline': [
+                        {
+                            '$match': {
+                                '$expr': {
+                                    '$eq': [
+                                        '$_id', '$$company_id'
+                                    ]
+                                }
+                            }
+                        }, {
+                            '$project': {
+                                'incentive_percentage': 1
+                            }
+                        }
+                    ],
+                    'as': 'company_details'
+                }
             }, {
+                '$unwind': {
+                    'path': '$company_details',
+                    'preserveNullAndEmptyArrays': True
+                }
+            },
+            {
                 '$lookup': {
                     'from': 'time_sheets',
                     'let': {
@@ -571,7 +601,7 @@ async def search_engine(filter_time_sheets: TimeSheetsSearch, data: dict = Depen
                                 '$divide': [
                                     {
                                         '$multiply': [
-                                            '$points', 0.01, '$total_amount'
+                                            '$points', "$company_details.incentive_percentage", '$total_amount'
                                         ]
                                     }, '$total_points_all'
                                 ]
