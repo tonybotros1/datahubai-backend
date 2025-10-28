@@ -1349,7 +1349,7 @@ async def search_engine_for_job_cards(filter_jobs: JobCardSearch, data: dict = D
         search_pipeline.append({
             "$facet": {
                 "job_cards": [
-                    {"$sort": {"job_date": -1}},
+                    {"$sort": {"job_number": -1}},
                     {"$project": {
                         'car_brand_details': 0,
                         'car_model_details': 0,
@@ -1619,12 +1619,12 @@ async def create_job_card_for_current_quotation(job_id: str, data: dict = Depend
         except Exception as e:
             print(e)
             await session.abort_transaction()
-            raise HTTPException(status_code=500, detail=f"Delete failed: {str(e)}")
-
+            raise HTTPException(status_code=500, detail=f"failed: {str(e)}")
 
 
 @router.get("/open_quotation_card_screen_by_quotation_number_for_job/{quotation_id}")
-async def open_quotation_card_screen_by_quotation_number_for_job(quotation_id: str, _: dict = Depends(security.get_current_user)):
+async def open_quotation_card_screen_by_quotation_number_for_job(quotation_id: str,
+                                                                 _: dict = Depends(security.get_current_user)):
     try:
         required_quotation = await get_quotation_card_details(ObjectId(quotation_id))
         serialized = serializer(required_quotation)
@@ -1635,4 +1635,145 @@ async def open_quotation_card_screen_by_quotation_number_for_job(quotation_id: s
         raise
     except Exception as e:
         print(e)
-        raise HTTPException(status_code=500, detail=f"Delete failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"failed: {str(e)}")
+
+
+@router.get("/get_customer_outstanding/{customer_id}")
+async def get_customer_outstanding(customer_id: str, data: dict = Depends(security.get_current_user)):
+    try:
+        company_id = ObjectId(data.get("company_id"))
+        customer_id = ObjectId(customer_id)
+        customer_outstanding_pipeline = [
+            {
+                '$match': {
+                    'company_id': company_id,
+                    'customer': customer_id,
+                    'job_status_1': 'Posted'
+                }
+            }, {
+                '$lookup': {
+                    'from': 'job_cards_invoice_items',
+                    'let': {
+                        'job_id': '$_id'
+                    },
+                    'pipeline': [
+                        {
+                            '$match': {
+                                '$expr': {
+                                    '$eq': [
+                                        '$job_card_id', '$$job_id'
+                                    ]
+                                }
+                            }
+                        }, {
+                            '$project': {
+                                'net': 1
+                            }
+                        }
+                    ],
+                    'as': 'invoice_items_details'
+                }
+            }, {
+                '$addFields': {
+                    'net_amount': {
+                        '$sum': {
+                            '$map': {
+                                'input': '$invoice_items_details',
+                                'as': 'item',
+                                'in': {
+                                    '$ifNull': [
+                                        '$$item.net', 0
+                                    ]
+                                }
+                            }
+                        }
+                    }
+                }
+            }, {
+                '$lookup': {
+                    'from': 'all_receipts_invoices',
+                    'localField': '_id',
+                    'foreignField': 'job_id',
+                    'as': 'receipts_invoices_details'
+                }
+            }, {
+                '$addFields': {
+                    'received': {
+                        '$sum': {
+                            '$map': {
+                                'input': '$receipts_invoices_details',
+                                'as': 'receipt',
+                                'in': {
+                                    '$ifNull': [
+                                        '$$receipt.amount', 0
+                                    ]
+                                }
+                            }
+                        }
+                    }
+                }
+            }, {
+                '$group': {
+                    '_id': None,
+                    'total_net_amount': {
+                        '$sum': '$net_amount'
+                    },
+                    'total_received': {
+                        '$sum': '$received'
+                    }
+                }
+            }, {
+                '$addFields': {
+                    'outstanding': {
+                        '$subtract': [
+                            '$total_net_amount', '$total_received'
+                        ]
+                    }
+                }
+            }, {
+                '$project': {
+                    '_id': 0,
+                    'outstanding': 1
+                }
+            },
+            {
+                '$facet': {
+                    'data': [{'$project': {'outstanding': 1}}],
+                    'default': [
+                        {
+                            '$project': {
+                                '_id': 0,
+                                'outstanding': {'$literal': 0},
+                            }
+                        }
+                    ]
+                }
+            },
+            {
+                '$project': {
+                    'merged': {
+                        '$concatArrays': ['$data', '$default']
+                    }
+                }
+            },
+            {
+                '$project': {
+                    'result': {'$arrayElemAt': ['$merged', 0]}
+                }
+            },
+            {
+                '$replaceRoot': {
+                    'newRoot': {'$ifNull': ['$result', {'outstanding': 0}]}
+                }
+            }
+        ]
+        cursor = await job_cards_collection.aggregate(customer_outstanding_pipeline)
+        result = await cursor.next()
+        print(result)
+        return result
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(e)
+        raise HTTPException(status_code=500, detail=f"failed: {str(e)}")

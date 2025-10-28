@@ -1321,7 +1321,7 @@ async def search_engine_for_quotation_cards(filter_quotations: QuotationCardSear
         search_pipeline.append({
             "$facet": {
                 "quotation_cards": [
-                    {"$sort": {"job_date": -1}},
+                    {"$sort": {"quotation_number": -1}},
                     {"$project": {
                         'car_brand_details': 0,
                         'car_model_details': 0,
