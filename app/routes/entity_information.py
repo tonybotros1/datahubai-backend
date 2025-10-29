@@ -471,6 +471,26 @@ async def get_all_customers(data: dict = Depends(security.get_current_user)):
     except Exception as e:
         raise e
 
+
+@router.get("/get_all_vendors")
+async def get_all_vendors(data: dict = Depends(security.get_current_user)):
+    try:
+        company_id = ObjectId(data.get("company_id"))
+        new_pipeline = pipeline.copy()
+        new_pipeline.insert(1, {
+            "$match": {
+                "company_id": company_id,
+                "entity_code": "Vendor",
+                "status":True
+            }
+        })
+        cursor = await entity_information_collection.aggregate(new_pipeline)
+        results = await cursor.to_list(None)
+        return {"vendors": [serializer(e) for e in results]}
+
+    except Exception as e:
+        raise e
+
 @router.post("/add_new_entities")
 async def add_new_entity(
         entity_name: str = Form(None),

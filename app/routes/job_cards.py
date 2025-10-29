@@ -1,3 +1,4 @@
+import copy
 from typing import Optional, List, Any
 from bson import ObjectId
 from fastapi import APIRouter, HTTPException, Depends, UploadFile, Form, File
@@ -661,7 +662,7 @@ def serializer(doc: dict) -> dict:
 
 
 async def get_job_card_details(job_card_id: ObjectId):
-    new_pipeline = pipeline.copy()
+    new_pipeline = copy.deepcopy(pipeline)
     new_pipeline.insert(1, {
         "$match": {
             "_id": job_card_id
@@ -1776,4 +1777,26 @@ async def get_customer_outstanding(customer_id: str, data: dict = Depends(securi
         raise
     except Exception as e:
         print(e)
+        raise HTTPException(status_code=500, detail=f"failed: {str(e)}")
+
+
+@router.get("/get_all_job_cards")
+async def get_all_job_cards(data: dict = Depends(security.get_current_user)):
+    try:
+        company_id = ObjectId(data["company_id"])
+        new_pipeline_for_all_jobs = copy.deepcopy(pipeline)
+        new_pipeline_for_all_jobs.insert(1, {
+            "$match": {
+                "company_id": company_id
+            }
+        })
+        cursor = await job_cards_collection.aggregate(new_pipeline_for_all_jobs)
+        results = await cursor.to_list(None)
+        serialized = [serializer(r) for r in results]
+        return {"all_jobs": serialized}
+
+
+    except HTTPException:
+        raise
+    except Exception as e:
         raise HTTPException(status_code=500, detail=f"failed: {str(e)}")
