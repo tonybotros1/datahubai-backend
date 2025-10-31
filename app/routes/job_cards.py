@@ -1790,6 +1790,11 @@ async def get_all_job_cards(data: dict = Depends(security.get_current_user)):
                 "company_id": company_id
             }
         })
+        new_pipeline_for_all_jobs.insert(2, {
+            "$sort": {
+                "job_number": -1
+            }
+        })
         cursor = await job_cards_collection.aggregate(new_pipeline_for_all_jobs)
         results = await cursor.to_list(None)
         serialized = [serializer(r) for r in results]

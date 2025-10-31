@@ -645,7 +645,6 @@ async def add_new_receipt(
             return {"receipt": serialized}
 
         except Exception as e:
-            print(e)
             await session.abort_transaction()
             raise HTTPException(status_code=500, detail=str(e))
 
@@ -929,7 +928,7 @@ async def search_engine_for_ar_receipts(
             grand_totals = totals[0] if totals else {"grand_received": 0}
         else:
             receipts = []
-            grand_totals = {"grand_total": 0, "grand_vat": 0, "grand_net": 0}
+            grand_totals = {"grand_received": 0}
 
         return {
             "receipts": receipts,
