@@ -290,7 +290,6 @@ class PaymentModel(BaseModel):
     invoices: Optional[List[Invoices]] = None
 
 
-
 class PaymentSearch(BaseModel):
     payment_number: Optional[str] = None
     payment_type: Optional[PyObjectId] = None
@@ -493,7 +492,6 @@ async def add_new_payment(
             if not result.inserted_id:
                 raise HTTPException(status_code=500, detail="Failed to insert payment")
 
-
             if payment_invoices:
                 for inv in payment_invoices:
                     print(inv)
@@ -608,7 +606,8 @@ async def update_payment_invoices(
                     session=s
                 )
                 updated_list.append(
-                    {"_id": str(item_id), "ap_invoice_id": str(item_data["ap_invoice_id"]) if item_data.get("ap_invoice_id") else None})
+                    {"_id": str(item_id),
+                     "ap_invoice_id": str(item_data["ap_invoice_id"]) if item_data.get("ap_invoice_id") else None})
 
             await s.commit_transaction()
         return {"updated_items": updated_list, "deleted_items": [str(d) for d in deleted_list]}
@@ -640,6 +639,7 @@ async def update_ar_receipt(payment_id: str, payment: PaymentModel, _: dict = De
     except Exception as e:
         print(e)
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @router.get("/get_ap_payment_status/{payment_id}")
 async def get_ap_payment_status(payment_id: str, _: dict = Depends(security.get_current_user)):
