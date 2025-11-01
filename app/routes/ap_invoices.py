@@ -518,3 +518,144 @@ async def search_engine(filtered_invoices: APInvoicesSearch, data: dict = Depend
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
+
+
+@router.get("/get_vendor_outstanding/{vendor_id}")
+async def get_vendor_outstanding(vendor_id: str, data: dict = Depends(security.get_current_user)):
+    try:
+        company_id = ObjectId(data.get("company_id"))
+        vendor_id = ObjectId(vendor_id)
+
+        vendor_outstanding_pipeline = [
+            {
+                '$match': {
+                    'company_id': company_id,
+                    'vendor': vendor_id,
+                    'status': 'Posted'
+                }
+            }, {
+                '$lookup': {
+                    'from': 'ap_invoices_items',
+                    'localField': '_id',
+                    'foreignField': 'ap_invoice_id',
+                    'as': 'invoice_items_details'
+                }
+            }, {
+                '$addFields': {
+                    'amounts': {
+                        '$sum': {
+                            '$map': {
+                                'input': '$invoice_items_details',
+                                'as': 'item',
+                                'in': {
+                                    '$ifNull': [
+                                        '$$item.amount', 0
+                                    ]
+                                }
+                            }
+                        }
+                    }
+                }
+            }, {
+                '$lookup': {
+                    'from': 'all_payments_invoices',
+                    'localField': '_id',
+                    'foreignField': 'ap_invoices_id',
+                    'as': 'payments_invoices_details'
+                }
+            }, {
+                '$addFields': {
+                    'gived': {
+                        '$sum': {
+                            '$map': {
+                                'input': '$payments_invoices_details',
+                                'as': 'payment',
+                                'in': {
+                                    '$ifNull': [
+                                        '$$payment.amount', 0
+                                    ]
+                                }
+                            }
+                        }
+                    }
+                }
+            }, {
+                '$group': {
+                    '_id': None,
+                    'total_amounts': {
+                        '$sum': '$amounts'
+                    },
+                    'total_gived': {
+                        '$sum': '$gived'
+                    }
+                }
+            }, {
+                '$addFields': {
+                    'outstanding': {
+                        '$subtract': [
+                            '$total_amounts', '$total_gived'
+                        ]
+                    }
+                }
+            }, {
+                '$project': {
+                    '_id': 0,
+                    'outstanding': 1
+                }
+            }, {
+                '$facet': {
+                    'data': [
+                        {
+                            '$project': {
+                                'outstanding': 1
+                            }
+                        }
+                    ],
+                    'default': [
+                        {
+                            '$project': {
+                                '_id': 0,
+                                'outstanding': {
+                                    '$literal': 0
+                                }
+                            }
+                        }
+                    ]
+                }
+            }, {
+                '$project': {
+                    'merged': {
+                        '$concatArrays': [
+                            '$data', '$default'
+                        ]
+                    }
+                }
+            }, {
+                '$project': {
+                    'result': {
+                        '$arrayElemAt': [
+                            '$merged', 0
+                        ]
+                    }
+                }
+            }, {
+                '$replaceRoot': {
+                    'newRoot': {
+                        '$ifNull': [
+                            '$result', {
+                                'outstanding': 0
+                            }
+                        ]
+                    }
+                }
+            }
+        ]
+
+        cursor = await ap_invoices_collection.aggregate(vendor_outstanding_pipeline)
+        result = await cursor.next()
+        return result
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
