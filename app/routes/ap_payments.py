@@ -493,6 +493,7 @@ async def add_new_payment(
             if not result.inserted_id:
                 raise HTTPException(status_code=500, detail="Failed to insert payment")
 
+
             if payment_invoices:
                 for inv in payment_invoices:
                     print(inv)
