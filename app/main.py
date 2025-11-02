@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.routes import brands_and_models, users, countries_and_cities, functions, menus, responsibilities, auth, \
     companies, favourite_screens, list_of_values, counters, branches, car_trading, salesman, system_variables, \
     currencies, entity_information, ap_payment_types, banks_and_others, technician, invoice_items, job_cards, \
-    quotation_cards, job_tasks, time_sheets, employees_performance, company_variables, ar_receipts, ap_payments, ap_invoices
+    quotation_cards, job_tasks, time_sheets, employees_performance, company_variables, ar_receipts, ap_payments, ap_invoices, inventory_items
 from app.routes import test
 from app.websocket_config import manager
 
@@ -75,6 +75,7 @@ app.include_router(company_variables.router, prefix="/company_variables", tags=[
 app.include_router(ar_receipts.router, prefix="/ar_receipts", tags=["AR Receipts"])
 app.include_router(ap_payments.router, prefix="/ap_payments", tags=["AP Payments"])
 app.include_router(ap_invoices.router, prefix="/ap_invoices", tags=["AP Invoices"])
+app.include_router(inventory_items.router, prefix="/inventory_items", tags=["Inventory Items"])
 app.include_router(test.router, prefix="/test", tags=["Test"])
 
 
