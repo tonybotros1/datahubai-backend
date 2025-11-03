@@ -399,3 +399,18 @@ async def get_list_values_by_code(code: str, _: dict = Depends(security.get_curr
 
     except Exception as error:
         raise error
+
+
+@router.get("/get_list_details_by_code")
+async def get_list_values_by_code(code: str, _: dict = Depends(security.get_current_user)):
+    try:
+
+        result = await list_collection.find_one({"code": code.upper()})
+        if not result:
+            raise HTTPException(status_code=404, detail="List not found")
+        serialized = serializer(result)
+        return {"list_details": serialized}
+
+
+    except Exception as error:
+        raise error

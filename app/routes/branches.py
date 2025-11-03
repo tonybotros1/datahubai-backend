@@ -10,16 +10,20 @@ router = APIRouter()
 branches_collection = get_collection("branches")
 
 
-def serializer(branch: dict) -> dict:
-    branch["_id"] = str(branch["_id"])
-    branch['country_id'] = str(branch['country_id'])
-    branch['city_id'] = str(branch['city_id'])
-    if branch['company_id']:
-        branch['company_id'] = str(branch['company_id'])
-    for key, value in branch.items():
-        if isinstance(value, datetime):
-            branch[key] = value.isoformat()
-    return branch
+def serializer(doc: dict) -> dict:
+    def convert(value):
+        if isinstance(value, ObjectId):
+            return str(value)
+        elif isinstance(value, datetime):
+            return value.isoformat()
+        elif isinstance(value, list):
+            return [convert(v) for v in value]
+        elif isinstance(value, dict):
+            return {k: convert(v) for k, v in value.items()}
+        return value
+
+    return {k: convert(v) for k, v in doc.items()}
+
 
 
 async def get_branch_details(branch_id: ObjectId):
@@ -70,11 +74,11 @@ async def get_branch_details(branch_id: ObjectId):
         }
     ]
     cursor = await branches_collection.aggregate(pipeline)
-    results = await cursor.to_list()
+    results = await cursor.next()
     if not results:
         raise HTTPException(status_code=404, detail="Branch not found")
 
-    return results[0]
+    return results
 
 
 @router.get("/get_all_branches")
@@ -131,7 +135,8 @@ async def get_all_branches(data: dict = Depends(security.get_current_user)):
         results = await cursor.to_list()
         if not results:
             raise HTTPException(status_code=404, detail="Branch not found")
-        return {"branches": [serializer(result) for result in results]}
+        serialized = [serializer(result) for result in results]
+        return {"branches": serialized}
 
 
     except Exception as e:

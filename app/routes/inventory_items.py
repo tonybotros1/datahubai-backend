@@ -33,9 +33,7 @@ class InventoryItem(BaseModel):
 async def get_all_inventory_items(data: dict = Depends(security.get_current_user)):
     try:
         company_id = ObjectId(data.get("company_id"))
-        print(company_id)
         results = await inventory_items_collection.find({"company_id": company_id}).to_list(None)
-        print(f"results: {results}")
         return {"inventory_items": [serializer(r) for r in results]}
 
     except Exception as e:
