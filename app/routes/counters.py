@@ -160,7 +160,7 @@ async def create_custom_counter(
 
         final_counter = ""
         separator = "-"
-        description = f"{code} Counter"
+        description = f"{code} Number"
 
         if not result:
             initial_value = 1
