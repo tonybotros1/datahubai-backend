@@ -143,6 +143,7 @@ async def create_custom_counter(
         code: str = Body(...),
         prefix: str = Body(None),
         data: dict = Depends(security.get_current_user),
+        description: str = Body(None),
         session: Optional[object] = None,
 
 ):
@@ -160,7 +161,7 @@ async def create_custom_counter(
 
         final_counter = ""
         separator = "-"
-        description = f"{code} Number"
+        description = description if description else f"{code} Number"
 
         if not result:
             initial_value = 1

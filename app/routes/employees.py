@@ -214,7 +214,6 @@ async def update_employee(employee_id: str, employee: EmployeesModel, _: dict = 
         raise HTTPException(status_code=500, detail=str(e))
 
 
-
 @router.delete("/delete_employee/{employee_id}")
 async def delete_employee(employee_id: str, _: dict = Depends(security.get_current_user)):
     try:
@@ -230,3 +229,51 @@ async def delete_employee(employee_id: str, _: dict = Depends(security.get_curre
 
     except Exception as error:
         return {"message": str(error)}
+
+
+@router.get("/get_employees_by_department")
+async def get_employees_by_department(department: str, data: dict = Depends(security.get_current_user)):
+    try:
+        company_id = ObjectId(data.get("company_id"))
+        get_employees_by_department_pipeline = [
+            {
+                '$match': {
+                    'company_id': company_id,
+                    'department': {
+                        '$in': [
+                            department
+                        ]
+                    }
+                }
+            }, {
+                '$lookup': {
+                    'from': 'all_lists_values',
+                    'localField': 'status',
+                    'foreignField': '_id',
+                    'as': 'status_details'
+                }
+            }, {
+                '$match': {
+                    '$expr': {
+                        '$ne': [
+                            {
+                                '$arrayElemAt': [
+                                    '$status_details.name', 0
+                                ]
+                            }, 'Inactive'
+                        ]
+                    }
+                }
+            }, {
+                '$project': {
+                    '_id': 1,
+                    'name': 1
+                }
+            }
+        ]
+        cursor = await employees_collection.aggregate(get_employees_by_department_pipeline)
+        results = await cursor.to_list(None)
+        return {"employees" : [serializer(e) for e in results]}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
