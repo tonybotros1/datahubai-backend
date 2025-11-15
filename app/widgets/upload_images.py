@@ -1,4 +1,4 @@
-from fastapi import File, UploadFile, APIRouter
+from fastapi import File, UploadFile, APIRouter, HTTPException
 import cloudinary.uploader
 from app.cloudinary_config import cloudinary
 
@@ -9,8 +9,7 @@ images = APIRouter()
 async def upload_image(file: UploadFile = File(...), folder: str = "general"):
     try:
         result = cloudinary.uploader.upload(file.file, folder=folder)
-
-        return {"url": result["secure_url"], "public_id": result["public_id"],"file_name":file.filename}
+        return {"url": result["secure_url"], "public_id": result["public_id"],"file_name":file.filename, "created_at": result["created_at"]}
     except Exception as e:
         return {"error": str(e)}
 
@@ -27,3 +26,4 @@ async def delete_image_from_server(public_id: str) -> bool:
     except Exception as e:
         print(f"Error deleting images from Cloudinary: {e}")
         return False
+

@@ -3,12 +3,10 @@ from typing import Optional, List, Any
 from bson import ObjectId
 from fastapi import APIRouter, HTTPException, Depends, UploadFile, Form, File
 from pydantic import BaseModel
-
 from app import database
 from app.core import security
 from app.database import get_collection
 from datetime import datetime, timezone, timedelta
-
 from app.routes.car_trading import PyObjectId
 from app.routes.counters import create_custom_counter
 from app.routes.quotation_cards import get_quotation_card_details
@@ -21,6 +19,7 @@ job_cards_collection = get_collection("job_cards")
 quotation_cards_collection = get_collection("quotation_cards")
 job_cards_invoice_items_collection = get_collection("job_cards_invoice_items")
 job_cards_internal_notes_collection = get_collection("job_cards_internal_notes")
+job_cards_inspection_reports_collection = get_collection("job_cards_inspection_reports")
 quotation_cards_invoice_items_collection = get_collection("quotation_cards_invoice_items")
 quotation_cards_internal_notes_collection = get_collection("quotation_cards_internal_notes")
 
@@ -1805,3 +1804,4 @@ async def get_all_job_cards(data: dict = Depends(security.get_current_user)):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"failed: {str(e)}")
+

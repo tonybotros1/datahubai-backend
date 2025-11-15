@@ -8,7 +8,7 @@ from app.routes import brands_and_models, users, countries_and_cities, functions
     companies, favourite_screens, list_of_values, counters, branches, car_trading, salesman, system_variables, \
     currencies, entity_information, ap_payment_types, banks_and_others, technician, invoice_items, job_cards, \
     quotation_cards, job_tasks, time_sheets, employees_performance, company_variables, ar_receipts, ap_payments, \
-    ap_invoices, inventory_items, employees, receiving
+    ap_invoices, inventory_items, employees, receiving, inspection_reports
 from app.routes import test
 from app.websocket_config import manager
 
@@ -68,6 +68,7 @@ app.include_router(banks_and_others.router, prefix="/banks_and_others", tags=["B
 app.include_router(technician.router, prefix="/technicians", tags=["Technicians"])
 app.include_router(invoice_items.router, prefix="/invoice_items", tags=["Invoice Items"])
 app.include_router(job_cards.router, prefix="/job_cards", tags=["Job Cards"])
+app.include_router(inspection_reports.router, prefix="/inspection_reports", tags=["Inspection Reports"])
 app.include_router(quotation_cards.router, prefix="/quotation_cards", tags=["Quotation Cards"])
 app.include_router(job_tasks.router, prefix="/job_tasks", tags=["Job Tasks"])
 app.include_router(time_sheets.router, prefix="/time_sheets", tags=["Time sheets"])
