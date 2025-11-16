@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, List
 
 from bson import ObjectId
 from fastapi import APIRouter, HTTPException, Depends
@@ -249,7 +249,8 @@ async def update_company_variables(
 
         result = await companies_collection.update_one(
             {"_id": ObjectId(company_id)},
-            {"$set": {"vat_percentage" : var['vat_percentage'], "tax_number" : var['tax_number'],"incentive_percentage" : var['incentive_percentage']}},
+            {"$set": {"vat_percentage": var['vat_percentage'], "tax_number": var['tax_number'],
+                      "incentive_percentage": var['incentive_percentage']}},
         )
 
         if result.matched_count == 0:
@@ -261,4 +262,24 @@ async def update_company_variables(
         raise
     except Exception as error:
         print(f"❌ Error updating company variables: {error}")
+        raise HTTPException(status_code=500, detail=str(error))
+
+
+@router.patch("/update_inspection_report")
+async def update_inspection_report(inspection_report: Optional[List[str]] = None,
+                                   data: dict = Depends(security.get_current_user)):
+    try:
+        company_id = ObjectId(data.get("company_id"))
+        inspection_report = inspection_report or []
+        result = await companies_collection.update_one({"_id": company_id}, {
+            "$set": {"inspection_report": inspection_report, "updatedAt": security.now_utc()}})
+
+        if result.matched_count == 0:
+            raise HTTPException(status_code=404, detail="Company not found")
+
+
+    except HTTPException:
+        raise
+    except Exception as error:
+        print(f"❌ Error updating inspection report: {error}")
         raise HTTPException(status_code=500, detail=str(error))

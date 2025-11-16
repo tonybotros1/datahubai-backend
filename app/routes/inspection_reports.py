@@ -189,7 +189,7 @@ async def get_new_job_cards_inspection_reports(data: dict = Depends(security.get
         })
         new_pipeline.insert(2, {
             "$sort":{
-                "job_date": -1
+                "job_number": -1
             }
         })
         cursor = await job_cards_collection.aggregate(new_pipeline)
@@ -211,9 +211,15 @@ async def get_done_job_cards_inspection_reports(data: dict = Depends(security.ge
         new_pipeline.insert(1, {
             "$match": {
                 "company_id": company_id,
-                "job_status_1": {"$ne": "New"}
+                "job_status_2": {"$ne": "New"}
             }
         })
+        new_pipeline.insert(2, {
+            "$sort": {
+                "job_number": -1
+            }
+        })
+        new_pipeline.append({"$limit": 200})
         cursor = await job_cards_collection.aggregate(new_pipeline)
         results = await cursor.to_list(None)
         serialized = [serializer(r) for r in results]
