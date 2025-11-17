@@ -188,7 +188,7 @@ async def get_new_job_cards_inspection_reports(data: dict = Depends(security.get
             }
         })
         new_pipeline.insert(2, {
-            "$sort":{
+            "$sort": {
                 "job_number": -1
             }
         })
@@ -295,7 +295,7 @@ async def create_job_from_inspection_report(job_date: Optional[datetime] = Form(
                 "plate_code": code,
                 "mileage_in": float(mileage_in) if mileage_in else 0,
                 "engine_type": ObjectId(engine_type) if engine_type else None,
-                "year": float(year) if year else None,
+                "year": int(year) if year else None,
                 "transmission_type": transmission_type,
                 "fuel_amount": float(fuel_amount) if fuel_amount else 0,
                 "vehicle_identification_number": vin,
@@ -368,3 +368,164 @@ async def create_job_from_inspection_report(job_date: Optional[datetime] = Form(
             print(e)
             await session.abort_transaction()
             raise HTTPException(status_code=500, detail=f"failed: {str(e)}")
+
+
+@router.put("/update_job_from_inspection_report/{job_card_id}")
+async def update_job_from_inspection_report(
+        job_card_id: str,
+        job_date: Optional[datetime] = Form(None),
+        technician: Optional[str] = Form(None),
+        customer: Optional[str] = Form(None),
+        customer_name: Optional[str] = Form(None),
+        customer_email: Optional[str] = Form(None),
+        customer_phone: Optional[str] = Form(None),
+        credit_limit: Optional[str] = Form(None),
+        salesman: Optional[str] = Form(None),
+        car_brand: Optional[str] = Form(None),
+        car_model: Optional[str] = Form(None),
+        car_brand_logo: Optional[str] = Form(None),
+        plate_number: Optional[str] = Form(None),
+        code: Optional[str] = Form(None),
+        color: Optional[str] = Form(None),
+        mileage_in: Optional[str] = Form(None),
+        engine_type: Optional[str] = Form(None),
+        year: Optional[str] = Form(None),
+        transmission_type: Optional[str] = Form(None),
+        fuel_amount: Optional[str] = Form(None),
+        vin: Optional[str] = Form(None),
+        comment: Optional[str] = Form(None),
+        left_front_wheel: Optional[str] = Form(None),
+        right_front_wheel: Optional[str] = Form(None),
+        left_rear_wheel: Optional[str] = Form(None),
+        right_rear_wheel: Optional[str] = Form(None),
+        interior_exterior: Optional[str] = Form(None),
+        under_vehicle: Optional[str] = Form(None),
+        under_hood: Optional[str] = Form(None),
+        battery_performance: Optional[str] = Form(None),
+        extra_checks: Optional[str] = Form(None),
+        new_images: Optional[List[UploadFile]] = File(None),
+        kept_images: Optional[str] = Form("[]"),
+        _: dict = Depends(security.get_current_user)
+):
+    try:
+        kept_images = json.loads(kept_images)
+        job_card_id = ObjectId(job_card_id)
+
+        # 🟦 1) جلب الـ job card الحالي
+        job_card = await job_cards_collection.find_one({"_id": job_card_id})
+        if not job_card:
+            raise HTTPException(status_code=404, detail="Job card not found")
+
+        # 🟦 2) جلب تقرير التفتيش الحالي (إذا وجد)
+        try:
+            report = await job_cards_inspection_reports_collection.find_one({"job_card_id": job_card_id})
+        except Exception as e:
+            # إذا حصل أي خطأ في الاتصال/سيرفر، ارفع الخطأ مباشرة ولا تنشئ تقرير جديد
+            raise HTTPException(status_code=500, detail=f"Server error: {str(e)}")
+
+        if not report:
+            # لم نجد تقرير تفتيش → أنشئ واحد جديد
+            new_report = {
+                "company_id": job_card["company_id"],
+                "job_card_id": job_card_id,
+                "left_front_wheel": {},
+                "right_front_wheel": {},
+                "left_rear_wheel": {},
+                "right_rear_wheel": {},
+                "interior_exterior": {},
+                "under_vehicle": {},
+                "under_hood": {},
+                "battery_performance": {},
+                "extra_checks": {},
+                "car_images": [],
+                "comment": "",
+                "createdAt": security.now_utc(),
+                "updatedAt": security.now_utc()
+            }
+            ins_result = await job_cards_inspection_reports_collection.insert_one(new_report)
+            inspection_id = ins_result.inserted_id
+            report = new_report
+        else:
+            inspection_id = report["_id"]
+
+        # 🟦 3) تحديث الـ Job Card
+        job_updates = {
+            "job_date": job_date if job_date else job_card.get("job_date"),
+            "technician": ObjectId(technician) if technician else job_card.get("technician"),
+            "customer": ObjectId(customer) if customer else job_card.get("customer"),
+            "contact_name": customer_name if customer_name else job_card.get("contact_name"),
+            "contact_email": customer_email if customer_email else job_card.get("contact_email"),
+            "contact_number": customer_phone if customer_phone else job_card.get("contact_number"),
+            "credit_limit": float(credit_limit) if credit_limit else job_card.get("credit_limit", 0),
+            "salesman": ObjectId(salesman) if salesman else job_card.get("salesman"),
+            "car_brand": ObjectId(car_brand) if car_brand else job_card.get("car_brand"),
+            "car_model": ObjectId(car_model) if car_model else job_card.get("car_model"),
+            "car_brand_logo": car_brand_logo if car_brand_logo else job_card.get("car_brand_logo"),
+            "color": ObjectId(color) if color else job_card.get("color"),
+            "plate_number": plate_number if plate_number else job_card.get("plate_number"),
+            "plate_code": code if code else job_card.get("plate_code"),
+            "mileage_in": float(mileage_in) if mileage_in else job_card.get("mileage_in", 0),
+            "engine_type": ObjectId(engine_type) if engine_type else job_card.get("engine_type"),
+            "year": int(year) if year else job_card.get("year"),
+            "transmission_type": transmission_type if transmission_type else job_card.get("transmission_type"),
+            "fuel_amount": float(fuel_amount) if fuel_amount else job_card.get("fuel_amount", 0),
+            "vehicle_identification_number": vin if vin else job_card.get("vehicle_identification_number"),
+            "updatedAt": security.now_utc(),
+        }
+        await job_cards_collection.update_one({"_id": job_card_id}, {"$set": job_updates})
+
+        # 🟦 4) تحديث الصور
+        old_images = report.get("car_images", [])
+        images_to_delete = [img for img in old_images if img["image_public_id"] not in kept_images]
+        for img in images_to_delete:
+            try:
+                await upload_images.delete_image_from_server(img["image_public_id"])
+            except Exception as e:
+                print(f"Failed to delete image {img['image_public_id']}: {e}")
+                pass
+
+        new_uploaded_images = []
+        if new_images:
+            for img in new_images:
+                res = await upload_images.upload_image(img, "job_cards_inspection_report")
+                new_uploaded_images.append({
+                    "url": res["url"],
+                    "image_public_id": res["public_id"],
+                    "created_at": res["created_at"]
+                })
+        updated_car_images = [img for img in old_images if img["image_public_id"] in kept_images] + new_uploaded_images
+
+        # 🟦 5) تحديث الـ Inspection Report
+        report_updates = {
+            "left_front_wheel": safe_json_load(left_front_wheel) if left_front_wheel else report.get("left_front_wheel",
+                                                                                                     {}),
+            "right_front_wheel": safe_json_load(right_front_wheel) if right_front_wheel else report.get(
+                "right_front_wheel", {}),
+            "left_rear_wheel": safe_json_load(left_rear_wheel) if left_rear_wheel else report.get("left_rear_wheel",
+                                                                                                  {}),
+            "right_rear_wheel": safe_json_load(right_rear_wheel) if right_rear_wheel else report.get("right_rear_wheel",
+                                                                                                     {}),
+            "interior_exterior": safe_json_load(interior_exterior) if interior_exterior else report.get(
+                "interior_exterior", {}),
+            "under_vehicle": safe_json_load(under_vehicle) if under_vehicle else report.get("under_vehicle", {}),
+            "under_hood": safe_json_load(under_hood) if under_hood else report.get("under_hood", {}),
+            "battery_performance": safe_json_load(battery_performance) if battery_performance else report.get(
+                "battery_performance", {}),
+            "extra_checks": safe_json_load(extra_checks) if extra_checks else report.get("extra_checks", {}),
+            "car_images": updated_car_images,
+            "comment": comment if comment else report.get("comment", ""),
+            "updatedAt": security.now_utc(),
+        }
+
+        await job_cards_inspection_reports_collection.update_one(
+            {"_id": inspection_id},
+            {"$set": report_updates}
+        )
+
+        return {"success": True, "message": "Job & Inspection Report updated successfully"}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(e)
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
