@@ -11,6 +11,7 @@ from datetime import datetime, timezone, timedelta
 from app.routes.car_trading import PyObjectId
 from app.routes.counters import create_custom_counter
 from app.routes.quotation_cards import get_quotation_card_details
+from app.websocket_config import manager
 from app.widgets import upload_images
 from app.widgets.check_date import is_date_equals_today_or_older
 from app.widgets.upload_files import upload_file, delete_file_from_server
@@ -127,6 +128,9 @@ inspection_reports_pipeline = [
         }
     }, {
         '$addFields': {
+            'job_warranty_end_date': {
+                '$ifNull': ['$job_warranty_end_date', None],
+            },
             'technician_name': {
                 '$ifNull': [
                     '$technician_details.name', None
@@ -174,6 +178,26 @@ inspection_reports_pipeline = [
         }
     }
 ]
+
+
+@router.get("/get_current_job_card_inspection_report_details/{job_id}")
+async def get_current_job_card_inspection_report_details(job_id: str, _: dict = Depends(security.get_current_user)):
+    try:
+        job_id = ObjectId(job_id)
+        new_pipeline = copy.deepcopy(inspection_reports_pipeline)
+        new_pipeline.insert(1, {
+            "$match": {
+                "_id": job_id
+            }
+        })
+        cursor = await job_cards_collection.aggregate(new_pipeline)
+        result = await cursor.next()
+        return {"inspection_report": serializer(result)}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/get_new_job_cards_inspection_reports")
@@ -360,7 +384,12 @@ async def create_job_from_inspection_report(job_date: Optional[datetime] = Form(
                 raise HTTPException(status_code=500, detail="Failed to insert inspection report")
             await session.commit_transaction()
 
-
+            res = await get_current_job_card_inspection_report_details(str(result.inserted_id))
+            serialized = serializer(res['inspection_report'])
+            await manager.broadcast({
+                "type": "inspection_report_added",
+                "data": serialized
+            })
         except HTTPException as e:
             print(e)
             raise
@@ -521,6 +550,12 @@ async def update_job_from_inspection_report(
             {"_id": inspection_id},
             {"$set": report_updates}
         )
+        res = await get_current_job_card_inspection_report_details(str(job_card_id))
+        serialized = serializer(res['inspection_report'])
+        await manager.broadcast({
+            "type": "inspection_report_updated",
+            "data": serialized
+        })
 
         return {"success": True, "message": "Job & Inspection Report updated successfully"}
 

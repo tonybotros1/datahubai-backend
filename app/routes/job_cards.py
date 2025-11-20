@@ -12,7 +12,7 @@ from app.routes.counters import create_custom_counter
 from app.routes.quotation_cards import get_quotation_card_details
 from app.widgets.check_date import is_date_equals_today_or_older
 from app.widgets.upload_files import upload_file, delete_file_from_server
-from app.widgets.upload_images import upload_image
+from app.widgets.upload_images import upload_image, delete_image_from_server
 
 router = APIRouter()
 job_cards_collection = get_collection("job_cards")
@@ -745,7 +745,10 @@ async def delete_job_card(job_id: str, _: dict = Depends(security.get_current_us
     async with database.client.start_session() as session:
         try:
             await session.start_transaction()
-            job_id = ObjectId(job_id)
+            try:
+                job_id = ObjectId(job_id)
+            except Exception:
+                raise HTTPException(status_code=400, detail="Invalid job_id format")
             if not job_id:
                 raise HTTPException(status_code=404, detail="Job card not found")
             current_job = await job_cards_collection.find_one({"_id": job_id}, session=session)
@@ -764,6 +767,20 @@ async def delete_job_card(job_id: str, _: dict = Depends(security.get_current_us
                     if "note_public_id" in job_note and job_note["note_public_id"]:
                         await delete_file_from_server(job_note["note_public_id"])
                 await job_cards_internal_notes_collection.delete_many({"job_card_id": job_id}, session=session)
+            inspection_report = await job_cards_inspection_reports_collection.find_one({"job_card_id": job_id},
+                                                                                       session=session)
+            if inspection_report:
+                if 'car_images' in inspection_report:
+                    for image in inspection_report['car_images']:
+                        if 'image_public_id' in image and image['image_public_id']:
+                            await delete_image_from_server(image['image_public_id'])
+                if 'customer_signature_public_id' in inspection_report and inspection_report['customer_signature_public_id']:
+                    await delete_image_from_server(inspection_report['customer_signature_public_id'])
+                if 'advisor_signature_public_id' in inspection_report and inspection_report['advisor_signature_public_id']:
+                    await delete_image_from_server(inspection_report['advisor_signature_public_id'])
+                if 'car_dialog_public_id' in inspection_report and inspection_report['car_dialog_public_id']:
+                    await delete_image_from_server(inspection_report['car_dialog_public_id'])
+                await job_cards_inspection_reports_collection.delete_one({"job_card_id": job_id}, session=session)
             await session.commit_transaction()
             return {"message": "Job card deleted successfully", "job_id": str(job_id)}
 
@@ -1804,4 +1821,3 @@ async def get_all_job_cards(data: dict = Depends(security.get_current_user)):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"failed: {str(e)}")
-
