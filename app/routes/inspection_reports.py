@@ -197,6 +197,7 @@ async def get_current_job_card_inspection_report_details(job_id: str, _: dict = 
     except HTTPException:
         raise
     except Exception as e:
+        print(e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
