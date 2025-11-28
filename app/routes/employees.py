@@ -267,7 +267,8 @@ async def get_employees_by_department(department: str, data: dict = Depends(secu
             }, {
                 '$project': {
                     '_id': 1,
-                    'name': 1
+                    'name': 1,
+                    'job_title':1
                 }
             }
         ]

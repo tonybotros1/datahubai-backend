@@ -174,7 +174,7 @@ async def get_approval_jobs(data: dict = Depends(security.get_current_user)):
 time_sheets_pipeline = [
     {
         '$lookup': {
-            'from': 'all_technicians',
+            'from': 'employees',
             'localField': 'employee_id',
             'foreignField': '_id',
             'as': 'employee_details'
