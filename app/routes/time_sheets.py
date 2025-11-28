@@ -302,7 +302,7 @@ time_sheets_pipeline = [
 
 async def get_time_sheet_details(time_sheet_id: ObjectId):
     time_sheet_details_pipeline = time_sheets_pipeline.copy()
-    time_sheet_details_pipeline.insert(1,
+    time_sheet_details_pipeline.insert(0,
                                        {
                                            "$match": {
                                                "_id": time_sheet_id
@@ -321,7 +321,7 @@ async def get_all_time_sheets(data: dict = Depends(security.get_current_user)):
     try:
         company_id = ObjectId(data.get('company_id'))
         all_sheets_pipeline = time_sheets_pipeline.copy()
-        all_sheets_pipeline.insert(1,
+        all_sheets_pipeline.insert(0,
                                    {
                                        '$match': {
                                            'company_id': company_id,
@@ -330,7 +330,7 @@ async def get_all_time_sheets(data: dict = Depends(security.get_current_user)):
                                        }
                                    }
                                    )
-        all_sheets_pipeline.insert(2,
+        all_sheets_pipeline.insert(1,
                                    {
                                        '$sort': {
                                            'start_date': -1

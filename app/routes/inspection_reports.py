@@ -185,7 +185,7 @@ async def get_current_job_card_inspection_report_details(job_id: str, _: dict = 
     try:
         job_id = ObjectId(job_id)
         new_pipeline = copy.deepcopy(inspection_reports_pipeline)
-        new_pipeline.insert(1, {
+        new_pipeline.insert(0, {
             "$match": {
                 "_id": job_id
             }
@@ -206,13 +206,13 @@ async def get_new_job_cards_inspection_reports(data: dict = Depends(security.get
     try:
         company_id = ObjectId(data.get('company_id'))
         new_pipeline = copy.deepcopy(inspection_reports_pipeline)
-        new_pipeline.insert(1, {
+        new_pipeline.insert(0, {
             "$match": {
                 "company_id": company_id,
                 "job_status_2": "New",
             }
         })
-        new_pipeline.insert(2, {
+        new_pipeline.insert(1, {
             "$sort": {
                 "job_number": -1
             }
@@ -233,13 +233,13 @@ async def get_done_job_cards_inspection_reports(data: dict = Depends(security.ge
     try:
         company_id = ObjectId(data.get('company_id'))
         new_pipeline = copy.deepcopy(inspection_reports_pipeline)
-        new_pipeline.insert(1, {
+        new_pipeline.insert(0, {
             "$match": {
                 "company_id": company_id,
                 "job_status_2": {"$ne": "New"}
             }
         })
-        new_pipeline.insert(2, {
+        new_pipeline.insert(1, {
             "$sort": {
                 "job_number": -1
             }

@@ -136,7 +136,7 @@ pipeline: list[dict[str, Any]] = [
 
 async def get_employee_details(employee_id: ObjectId):
     new_pipeline = copy.deepcopy(pipeline)
-    new_pipeline.insert(1, {
+    new_pipeline.insert(0, {
         "$match": {
             "_id": employee_id
         }
@@ -151,7 +151,7 @@ async def get_all_employees(data: dict = Depends(security.get_current_user)):
     try:
         company_id = ObjectId(data.get("company_id"))
         all_employees_pipeline = copy.deepcopy(pipeline)
-        all_employees_pipeline.insert(1, {
+        all_employees_pipeline.insert(0, {
             "$match": {
                 "company_id": company_id
             }

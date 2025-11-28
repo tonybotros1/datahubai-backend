@@ -76,7 +76,7 @@ pipeline: list[Dict[str, Any]] = [
 
 async def get_currency_details(currency_id: ObjectId):
     new_pipeline = pipeline.copy()
-    new_pipeline.insert(1,
+    new_pipeline.insert(0,
                         {
                             "$match": {
                                 "_id": currency_id
@@ -94,7 +94,7 @@ async def get_all_currencies(data: dict = Depends(security.get_current_user)):
     try:
         company_id = data.get("company_id")
         new_pipeline = pipeline.copy()
-        new_pipeline.insert(1,
+        new_pipeline.insert(0,
                             {
                                 "$match": {
                                     "company_id": ObjectId(company_id)
@@ -194,7 +194,7 @@ async def get_all_currencies_for_drop_down_menu(data: dict = Depends(security.ge
     try:
         company_id = ObjectId(data.get("company_id"))
         new_pipeline = pipeline.copy()
-        new_pipeline.insert(1, {
+        new_pipeline.insert(0, {
             "$match": {
                 "company_id": company_id, "status": True
             }

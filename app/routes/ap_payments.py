@@ -454,7 +454,7 @@ async def get_all_vendor_invoices(vendor_id: str, data: dict = Depends(security.
 
 async def get_payment_details(receipt_id: ObjectId):
     new_pipeline = ap_payment_details_pipeline.copy()
-    new_pipeline.insert(1, {
+    new_pipeline.insert(0, {
         "$match": {
             "_id": receipt_id
         }
@@ -763,7 +763,7 @@ async def search_engine_for_ap_payments(
         if date_filter:
             match_stage.update(date_filter)
 
-        search_pipeline.insert(1, {"$match": match_stage})
+        search_pipeline.insert(0, {"$match": match_stage})
 
         # 3️⃣ Add computed field
         search_pipeline.append({

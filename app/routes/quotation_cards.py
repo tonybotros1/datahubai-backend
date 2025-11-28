@@ -646,7 +646,7 @@ def serializer(doc: dict) -> dict:
 
 async def get_quotation_card_details(quotation_card_id: ObjectId):
     new_pipeline = pipeline.copy()
-    new_pipeline.insert(1, {
+    new_pipeline.insert(0, {
         "$match": {
             "_id": quotation_card_id
         }
@@ -1499,7 +1499,7 @@ async def add_new_internal_note_for_job_card(quotation_id: str, note_type: str =
         new_note = await quotation_cards_internal_notes_collection.insert_one(internal_note_dict)
         new_internal_note_pipeline = returning_internal_note_pipeline(company_id=company_id, user_id=user_id,
                                                                       quotation_id=ObjectId(quotation_id))
-        new_internal_note_pipeline.insert(1, {
+        new_internal_note_pipeline.insert(0, {
             "$match": {
                 "_id": new_note.inserted_id
             }

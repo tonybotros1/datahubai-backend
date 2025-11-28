@@ -161,7 +161,7 @@ pipeline: List[dict[str, Any]] = [
 async def get_ap_invoice_details(invoice_id: ObjectId):
     try:
         new_pipeline = copy.deepcopy(pipeline)
-        new_pipeline.insert(1, {
+        new_pipeline.insert(0, {
             "$match": {
                 "_id": invoice_id
             }
@@ -458,7 +458,7 @@ async def search_engine(filtered_invoices: APInvoicesSearch, data: dict = Depend
         if date_filter:
             match_stage.update(date_filter)
 
-        search_pipeline.insert(1, {"$match": match_stage})
+        search_pipeline.insert(0, {"$match": match_stage})
 
         search_pipeline.append({
             '$addFields': {

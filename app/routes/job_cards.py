@@ -662,7 +662,7 @@ def serializer(doc: dict) -> dict:
 
 async def get_job_card_details(job_card_id: ObjectId):
     new_pipeline = copy.deepcopy(pipeline)
-    new_pipeline.insert(1, {
+    new_pipeline.insert(0, {
         "$match": {
             "_id": job_card_id
         }
@@ -1801,12 +1801,12 @@ async def get_all_job_cards(data: dict = Depends(security.get_current_user)):
     try:
         company_id = ObjectId(data["company_id"])
         new_pipeline_for_all_jobs = copy.deepcopy(pipeline)
-        new_pipeline_for_all_jobs.insert(1, {
+        new_pipeline_for_all_jobs.insert(0, {
             "$match": {
                 "company_id": company_id
             }
         })
-        new_pipeline_for_all_jobs.insert(2, {
+        new_pipeline_for_all_jobs.insert(1, {
             "$sort": {
                 "job_number": -1
             }

@@ -737,7 +737,7 @@ class SearchReceivingModel(BaseModel):
 
 async def get_receiving_details(receiving_id: ObjectId):
     new_pipeline = copy.deepcopy(receiving_details_pipeline)
-    new_pipeline.insert(1, {
+    new_pipeline.insert(0, {
         "$match": {
             "_id": receiving_id
         }
@@ -749,7 +749,7 @@ async def get_receiving_details(receiving_id: ObjectId):
 
 async def get_receiving_items_details(receiving_id: ObjectId):
     new_pipeline = copy.deepcopy(receiving_items_details_for_selected_receiving_doc_pipeline)
-    new_pipeline.insert(1, {
+    new_pipeline.insert(0, {
         "$match": {
             "_id": receiving_id
         }
@@ -1048,7 +1048,7 @@ async def search_engine_for_receiving(
         if date_filter:
             match_stage.update(date_filter)
 
-        search_pipeline.insert(1, {"$match": match_stage})
+        search_pipeline.insert(0, {"$match": match_stage})
 
         # 3️⃣ Add computed field
         search_pipeline.append({

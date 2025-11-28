@@ -223,7 +223,7 @@ async def get_company_details(company_id: ObjectId):
     try:
 
         new_pipeline = pipeline.copy()
-        new_pipeline.insert(1, {
+        new_pipeline.insert(0, {
             "$match": {
                 "_id": company_id
             }

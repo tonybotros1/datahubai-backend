@@ -577,7 +577,7 @@ async def get_all_customer_invoices(customer_id: str, data: dict = Depends(secur
 
 async def get_receipt_details(receipt_id: ObjectId):
     new_pipeline = ar_receipt_details_pipeline.copy()
-    new_pipeline.insert(1, {
+    new_pipeline.insert(0, {
         "$match": {
             "_id": receipt_id
         }
@@ -889,7 +889,7 @@ async def search_engine_for_ar_receipts(
         if date_filter:
             match_stage.update(date_filter)
 
-        search_pipeline.insert(1, {"$match": match_stage})
+        search_pipeline.insert(0, {"$match": match_stage})
 
         # 3️⃣ Add computed field
         search_pipeline.append({
