@@ -17,6 +17,7 @@ from app.widgets.upload_images import upload_image, delete_image_from_server
 router = APIRouter()
 issuing_collection = get_collection("issuing")
 inventory_items_collection = get_collection("inventory_items")
+converters_collection = get_collection("converters")
 
 
 def serializer(doc: dict) -> dict:
@@ -336,6 +337,179 @@ items_details_pipeline = [
     }
 ]
 
+converters_details_pipeline: list[dict[str, Any]] = [
+    {
+        '$match': {
+            'status': 'Posted'
+        }
+    }, {
+        '$lookup': {
+            'from': 'issuing_converters_details',
+            'localField': '_id',
+            'foreignField': 'converter_id',
+            'as': 'used_details'
+        }
+    }, {
+        '$match': {
+            'used_details': {
+                '$eq': []
+            }
+        }
+    }, {
+        '$project': {
+            'used_details': 0
+        }
+    }, {
+        '$lookup': {
+            'from': 'issuing',
+            'let': {
+                'converter_id': '$_id'
+            },
+            'pipeline': [
+                {
+                    '$match': {
+                        '$expr': {
+                            '$and': [
+                                {
+                                    '$eq': [
+                                        '$converter_id', '$$converter_id'
+                                    ]
+                                }, {
+                                    '$eq': [
+                                        '$status', 'Posted'
+                                    ]
+                                }
+                            ]
+                        }
+                    }
+                }, {
+                    '$lookup': {
+                        'from': 'issuing_items_details',
+                        'let': {
+                            'issue_id': '$_id'
+                        },
+                        'pipeline': [
+                            {
+                                '$match': {
+                                    '$expr': {
+                                        '$eq': [
+                                            '$issue_id', '$$issue_id'
+                                        ]
+                                    }
+                                }
+                            }, {
+                                '$lookup': {
+                                    'from': 'inventory_items',
+                                    'localField': 'inventory_item_id',
+                                    'foreignField': '_id',
+                                    'as': 'inventory_details'
+                                }
+                            }, {
+                                '$unwind': {
+                                    'path': '$inventory_details',
+                                    'preserveNullAndEmptyArrays': True
+                                }
+                            }, {
+                                '$addFields': {
+                                    'item_code': {
+                                        '$ifNull': [
+                                            '$inventory_details.code', None
+                                        ]
+                                    },
+                                    'item_name': {
+                                        '$ifNull': [
+                                            '$inventory_details.name', None
+                                        ]
+                                    }
+                                }
+                            }, {
+                                '$project': {
+                                    'inventory_details': 0
+                                }
+                            }
+                        ],
+                        'as': 'items_details'
+                    }
+                }, {
+                    '$unwind': '$items_details'
+                }, {
+                    '$addFields': {
+                        'item_name': {
+                            '$ifNull': [
+                                '$items_details.item_name', None
+                            ]
+                        },
+                        'item_code': {
+                            '$ifNull': [
+                                '$items_details.item_code', None
+                            ]
+                        },
+                        'quantity': {
+                            '$ifNull': [
+                                '$items_details.quantity', 0
+                            ]
+                        },
+                        'price': {
+                            '$ifNull': [
+                                '$items_details.price', 0
+                            ]
+                        }
+                    }
+                }, {
+                    '$addFields': {
+                        'total': {
+                            '$multiply': [
+                                '$quantity', '$price'
+                            ]
+                        }
+                    }
+                }, {
+                    '$project': {
+                        'items_details': 0,
+                        'issue_type': 0,
+                        'job_card_id': 0,
+                        'converter_id': 0,
+                        'received_by': 0,
+                        'note': 0,
+                        'status': 0,
+                        'createdAt': 0,
+                        'updatedAt': 0
+                    }
+                }
+            ],
+            'as': 'issues'
+        }
+    }, {
+        '$project': {
+            'date': 0,
+            'description': 0,
+            'status': 0,
+            'company_id': 0,
+            'updatedAt': 0,
+            'createdAt': 0
+        }
+    }, {
+        '$addFields': {
+            'last_price': {
+                '$sum': '$issues.total'
+            },
+            'final_quantity': 1
+        }
+    }, {
+        '$addFields': {
+            'total': {
+                '$multiply': [
+                    '$last_price', '$final_quantity'
+                ]
+            }
+        }
+    }, {
+        '$project': {
+            'issues': 0
+        }
+    }
+]
+
 
 @router.get("/get_items_details_section")
 async def get_items_details_section(data: dict = Depends(security.get_current_user)):
@@ -349,8 +523,31 @@ async def get_items_details_section(data: dict = Depends(security.get_current_us
         })
         cursor = await inventory_items_collection.aggregate(new_pipeline)
         results = await cursor.to_list(None)
+        print(results[0])
         serialized = [serializer(r) for r in results]
         return {"items_details": serialized}
+
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/get_converters_details_section")
+async def get_converters_details_section(data: dict = Depends(security.get_current_user)):
+    try:
+        company_id = ObjectId(data.get("company_id"))
+        new_pipeline = copy.deepcopy(converters_details_pipeline)
+        new_pipeline.insert(0, {
+            "$match": {
+                "company_id": company_id
+            }
+        })
+        cursor = await converters_collection.aggregate(new_pipeline)
+        results = await cursor.to_list(None)
+        serialized = [serializer(r) for r in results]
+        return {"converters_details": serialized}
 
 
     except HTTPException:
