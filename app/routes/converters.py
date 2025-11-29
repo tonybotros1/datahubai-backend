@@ -252,24 +252,6 @@ async def delete_converter(converter_id: str, _: dict = Depends(security.get_cur
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-#
-# @router.patch("/update_converter/{converter_id}")
-# async def update_converter(converter_id: str, converter: Converter, _: dict = Depends(security.get_current_user)):
-#     try:
-#         converter_id = ObjectId(converter_id)
-#         converter = converter.model_dump(exclude_unset=True)
-#         converter['updatedAt'] = security.now_utc()
-#
-#         result = await converters_collection.update_one({"_id": converter_id}, {"$set": converter})
-#         if result.modified_count == 0:
-#             raise HTTPException(status_code=404, detail="Converter not found")
-#
-#
-#     except HTTPException:
-#         raise
-#     except Exception as e:
-#         raise HTTPException(status_code=500, detail=str(e))
-
 
 @router.get("/get_converter_status/{converter_id}")
 async def get_converter_status(converter_id: str, _: dict = Depends(security.get_current_user)):
