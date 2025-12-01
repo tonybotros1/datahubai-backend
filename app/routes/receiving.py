@@ -896,26 +896,31 @@ async def update_receiving_items(
                 modified_list.append((item_id, item))
 
         async with  database.client.start_session() as s:
-            await s.start_transaction()
-            if deleted_list:
-                await receiving_items_collection.delete_many(
-                    {"_id": {"$in": deleted_list}}, session=s
-                )
+            try:
+                await s.start_transaction()
+                if deleted_list:
+                    await receiving_items_collection.delete_many(
+                        {"_id": {"$in": deleted_list}}, session=s
+                    )
 
-            if added_list:
-                await receiving_items_collection.insert_many(
-                    added_list, session=s
-                )
+                if added_list:
+                    await receiving_items_collection.insert_many(
+                        added_list, session=s
+                    )
 
-            for item_id, item_data in modified_list:
-                item_data.pop("id", None)
-                await receiving_items_collection.update_one(
-                    {"_id": item_id},
-                    {"$set": item_data},
-                    session=s
-                )
+                for item_id, item_data in modified_list:
+                    item_data.pop("id", None)
+                    await receiving_items_collection.update_one(
+                        {"_id": item_id},
+                        {"$set": item_data},
+                        session=s
+                    )
 
-            await s.commit_transaction()
+                await s.commit_transaction()
+            except Exception as e:
+                await s.abort_transaction()
+                raise HTTPException(status_code=500, detail=str(e))
+
         updated_items = []
         if receiving_id:
             updated_items = serializer(await get_receiving_items_details(receiving_id))
@@ -926,7 +931,6 @@ async def update_receiving_items(
 
     except Exception as e:
         print(e)
-        await s.abort_transaction()
         raise HTTPException(status_code=500, detail=str(e))
 
 
