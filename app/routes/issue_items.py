@@ -876,6 +876,7 @@ async def get_issuing_details(receiving_id: ObjectId):
     result = await cursor.next()
     return result
 
+
 @router.get("/get_items_details_section")
 async def get_items_details_section(data: dict = Depends(security.get_current_user)):
     try:
@@ -888,7 +889,6 @@ async def get_items_details_section(data: dict = Depends(security.get_current_us
         })
         cursor = await inventory_items_collection.aggregate(new_pipeline)
         results = await cursor.to_list(None)
-        print(results[0])
         serialized = [serializer(r) for r in results]
         return {"items_details": serialized}
 
@@ -972,7 +972,6 @@ async def add_new_issuing(issue: IssuingModel, data: dict = Depends(security.get
 
             if items_details:
                 for inv in items_details:
-                    print(inv)
                     if inv.get("inventory_item_id"):
                         inv["inventory_item_id"] = ObjectId(inv["inventory_item_id"])
                     inv["createdAt"] = security.now_utc()
@@ -994,7 +993,6 @@ async def add_new_issuing(issue: IssuingModel, data: dict = Depends(security.get
 
             if converters_details:
                 for inv in converters_details:
-                    print(inv)
                     if inv.get("converter_id"):
                         inv["converter_id"] = ObjectId(inv["converter_id"])
                     inv["createdAt"] = security.now_utc()
@@ -1021,7 +1019,6 @@ async def add_new_issuing(issue: IssuingModel, data: dict = Depends(security.get
                         'success'] else None}
 
         except Exception as e:
-            print(e)
             await session.abort_transaction()
             raise HTTPException(status_code=500, detail=str(e))
 
@@ -1035,7 +1032,7 @@ async def update_issuing(issue_id: str, issuing: IssuingModel, _: dict = Depends
         iss_ids = ["branch", "issue_type", "received_by", "job_card_id", "converter_id"]
         for field in iss_ids:
             if issuing.get(field):
-                issuing[field] = ObjectId(issuing[field])
+                issuing[field] = ObjectId(issuing[field]) if issuing[field] else None
 
         issuing.update({
             "updatedAt": security.now_utc(),
@@ -1049,7 +1046,6 @@ async def update_issuing(issue_id: str, issuing: IssuingModel, _: dict = Depends
         return {"issuing": serialized}
 
     except Exception as e:
-        print(e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -1063,14 +1059,14 @@ async def update_issuing_items_details(
         items = [item.model_dump(exclude_unset=True) for item in items]
         issuing_id = ObjectId(items[0]["issue_id"]) if items else None
         if not issuing_id:
-            raise HTTPException(status_code=404,detail="Issuing ID not found")
+            raise HTTPException(status_code=404, detail="Issuing ID not found")
         added_list = []
         deleted_list = []
         modified_list = []
 
         for item in items:
             if item.get("is_deleted"):
-                if "id" not in item:
+                if "id" not in item or not ObjectId.is_valid(item["id"]):
                     continue
                 deleted_list.append(ObjectId(item["id"]))
 
@@ -1090,7 +1086,7 @@ async def update_issuing_items_details(
 
 
             elif item.get("is_modified") and not item.get("is_deleted") and not item.get("is_added"):
-                if "id" not in item:
+                if "id" not in item or not ObjectId.is_valid(item["id"]):
                     continue
                 item_id = ObjectId(item["id"])
                 item["updatedAt"] = security.now_utc()
@@ -1126,7 +1122,6 @@ async def update_issuing_items_details(
 
                 await s.commit_transaction()
             except Exception as e:
-                print(e)
                 await s.abort_transaction()
                 raise HTTPException(status_code=500, detail=str(e))
 
@@ -1139,9 +1134,7 @@ async def update_issuing_items_details(
         # return {"updated_items": updated_items}
 
     except Exception as e:
-        print(f"error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-
 
 
 @router.patch("/update_issuing_converters_details")
@@ -1154,7 +1147,7 @@ async def update_issuing_converters_details(
         items = [item.model_dump(exclude_unset=True) for item in items]
         issuing_id = ObjectId(items[0]["issue_id"]) if items else None
         if not issuing_id:
-            raise HTTPException(status_code=404,detail="Issuing ID not found")
+            raise HTTPException(status_code=404, detail="Issuing ID not found")
         added_list = []
         deleted_list = []
         modified_list = []
@@ -1196,7 +1189,6 @@ async def update_issuing_converters_details(
 
         async with  database.client.start_session() as s:
             try:
-                print(modified_list)
                 await s.start_transaction()
                 if deleted_list:
                     await issuing_converters_details_collection.delete_many(
@@ -1223,9 +1215,7 @@ async def update_issuing_converters_details(
 
 
     except Exception as e:
-        print(e)
         raise HTTPException(status_code=500, detail=str(e))
-
 
 
 @router.delete("/delete_issuing/{issuing_id}")
@@ -1255,7 +1245,6 @@ async def delete_issuing(issuing_id: str, _: dict = Depends(security.get_current
             raise
 
         except Exception as e:
-            print(e)
             await session.abort_transaction()
             raise HTTPException(status_code=500, detail=f"Delete failed: {str(e)}")
 
@@ -1325,10 +1314,16 @@ async def search_engine_for_issuing(
 
         # 3️⃣ Add computed field
         search_pipeline.append({
-            "$addFields": {
-                "totals": {"$sum": "$items_details.total"},
-                "vats": {"$sum": "$items_details.vat"},
-                "nets": {"$sum": "$items_details.net"},
+            '$addFields': {
+                'totals': {
+                    '$add': [
+                        {
+                            '$sum': '$items_details_section.total'
+                        }, {
+                            '$sum': '$converters_details_section.total'
+                        }
+                    ]
+                }
             }
         })
         search_pipeline.append({
@@ -1341,8 +1336,6 @@ async def search_engine_for_issuing(
                         "$group": {
                             "_id": None,
                             "grand_total": {"$sum": "$totals"},
-                            "grand_vat": {"$sum": "$vats"},
-                            "grand_net": {"$sum": "$nets"},
                         }
                     },
                     {
@@ -1361,7 +1354,7 @@ async def search_engine_for_issuing(
             data = result[0]
             receiving = [serializer(r) for r in data.get("issuing", [])]
             totals = data.get("grand_totals", [])
-            grand_totals = totals[0] if totals else {"grand_total": 0, "grand_vat": 0, "grand_net": 0}
+            grand_totals = totals[0] if totals else {"grand_total": 0}
         else:
             receiving = []
             grand_totals = {"grand_totals": 0}
@@ -1375,5 +1368,4 @@ async def search_engine_for_issuing(
     except HTTPException:
         raise
     except Exception as e:
-        print(e)
         raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")

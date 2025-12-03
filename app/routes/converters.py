@@ -58,16 +58,8 @@ converter_pipeline: list[dict[str, Any]] = [
                 {
                     '$match': {
                         '$expr': {
-                            '$and': [
-                                {
-                                    '$eq': [
-                                        '$converter_id', '$$converter_id'
-                                    ]
-                                }, {
-                                    '$eq': [
-                                        '$status', 'Posted'
-                                    ]
-                                }
+                            '$eq': [
+                                '$converter_id', '$$converter_id'
                             ]
                         }
                     }
@@ -160,7 +152,6 @@ converter_pipeline: list[dict[str, Any]] = [
                         'converter_id': 0,
                         'received_by': 0,
                         'note': 0,
-                        'status': 0,
                         'createdAt': 0,
                         'updatedAt': 0
                     }
