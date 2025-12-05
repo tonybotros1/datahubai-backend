@@ -82,6 +82,8 @@ class CarTradingSearch(BaseModel):
     engine_size: Optional[PyObjectId] = None
     bought_from: Optional[PyObjectId] = None
     sold_to: Optional[PyObjectId] = None
+    sold_by: Optional[PyObjectId] = None
+    bought_by: Optional[PyObjectId] = None
     status: Optional[str] = None
     from_date: Optional[datetime] = None
     to_date: Optional[datetime] = None
@@ -105,6 +107,8 @@ class CarTradingModel(BaseModel):
     sold_to: Optional[PyObjectId] = None
     note: Optional[str] = None
     status: Optional[str] = None
+    bought_by: Optional[PyObjectId] = None
+    sold_by: Optional[PyObjectId] = None
     items: Optional[List[CarTradingItemsModel]] = None
 
     model_config = {
@@ -758,6 +762,8 @@ async def add_new_trade(trade: CarTradingModel, data: dict = Depends(security.ge
                 "bought_from": trade.bought_from if trade.bought_from else "",
                 "sold_to": trade.sold_to if trade.sold_to else "",
                 "note": trade.note,
+                "bought_by": trade.bought_by if trade.bought_by else "",
+                "sold_by": trade.sold_by if trade.sold_by else "",
                 "createdAt": datetime.now(timezone.utc),
                 "updatedAt": datetime.now(timezone.utc),
             }
@@ -915,6 +921,10 @@ async def search_engine_for_car_trading(
             match_stage["engine_size"] = filter_trades.engine_size
         if filter_trades.bought_from:
             match_stage["bought_from"] = filter_trades.bought_from
+        if filter_trades.bought_by:
+            match_stage["bought_by"] = filter_trades.bought_by
+        if filter_trades.sold_by:
+            match_stage["sold_by"] = filter_trades.sold_by
         if filter_trades.sold_to:
             match_stage["sold_to"] = filter_trades.sold_to
         if filter_trades.status:
@@ -935,6 +945,8 @@ async def search_engine_for_car_trading(
             ("year", "all_lists_values"),
             ("bought_from", "all_lists_values"),
             ("sold_to", "all_lists_values"),
+            ("sold_by", "all_lists_values"),
+            ("bought_by", "all_lists_values"),
         ]
 
         for local_field, collection in lookups:
@@ -1019,6 +1031,8 @@ async def search_engine_for_car_trading(
                 "car_engine_size": {"$first": "$engine_size"},
                 "car_bought_from": {"$first": "$bought_from"},
                 "car_sold_to": {"$first": "$sold_to"},
+                "car_sold_by": {"$first": "$sold_by"},
+                "car_bought_by": {"$first": "$bought_by"},
                 "trade_items": {
                     "$push": {
                         "$cond": [
@@ -1112,6 +1126,10 @@ async def search_engine_for_car_trading(
                 "bought_from": {"$ifNull": ["$car_bought_from.name", ""]},
                 "sold_to_id": {"$ifNull": ["$car_sold_to._id", ""]},
                 "sold_to": {"$ifNull": ["$car_sold_to.name", ""]},
+                "sold_by": {"$ifNull": ["$car_sold_by.name", ""]},
+                "bought_by": {"$ifNull": ["$car_bought_by.name", ""]},
+                "sold_by_id": {"$ifNull": ["$car_sold_by._id", ""]},
+                "bought_by_id": {"$ifNull": ["$car_bought_by._id", ""]},
                 "note": {"$ifNull": ["$note", ""]},
                 "date": {"$ifNull": ["$date", ""]},
                 "trade_items": {"$ifNull": ["$trade_items", []]},
@@ -1158,6 +1176,7 @@ async def search_engine_for_car_trading(
             return [{"trades": [], "grand_total_pay": 0, "grand_total_receive": 0, "grand_net": 0}]
 
     except Exception as e:
+        print(e)
         raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
 
 
