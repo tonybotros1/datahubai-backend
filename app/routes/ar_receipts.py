@@ -138,9 +138,35 @@ ar_receipt_details_pipeline = [
                     }
                 }, {
                     '$project': {
+                        'receipt_id': 1,
                         'receipt_invoice_id': '$_id',
                         'job_id': 1,
                         'amount': 1
+                    }
+                }, {
+                    '$lookup': {
+                        'from': 'all_receipts_invoices',
+                        'let': {
+                            'jobId': '$job_id'
+                        },
+                        'pipeline': [
+                            {
+                                '$match': {
+                                    '$expr': {
+                                        '$eq': [
+                                            '$job_id', '$$jobId'
+                                        ]
+                                    }
+                                }
+                            }
+                        ],
+                        'as': 'all_receipts_for_job'
+                    }
+                }, {
+                    '$addFields': {
+                        'total_paid_for_job': {
+                            '$sum': '$all_receipts_for_job.amount'
+                        }
                     }
                 }, {
                     '$lookup': {
@@ -156,14 +182,6 @@ ar_receipt_details_pipeline = [
                                             '$_id', '$$job_id'
                                         ]
                                     }
-                                }
-                            }, {
-                                '$project': {
-                                    'car_brand': 1,
-                                    'car_model': 1,
-                                    'invoice_number': 1,
-                                    'invoice_date': 1,
-                                    'plate_number': 1
                                 }
                             }
                         ],
@@ -189,10 +207,6 @@ ar_receipt_details_pipeline = [
                                         ]
                                     }
                                 }
-                            }, {
-                                '$project': {
-                                    'name': 1
-                                }
                             }
                         ],
                         'as': 'brand_details'
@@ -217,10 +231,6 @@ ar_receipt_details_pipeline = [
                                         ]
                                     }
                                 }
-                            }, {
-                                '$project': {
-                                    'name': 1
-                                }
                             }
                         ],
                         'as': 'model_details'
@@ -244,10 +254,6 @@ ar_receipt_details_pipeline = [
                                             '$job_card_id', '$$job_id'
                                         ]
                                     }
-                                }
-                            }, {
-                                '$project': {
-                                    'net': 1
                                 }
                             }
                         ],
@@ -274,14 +280,12 @@ ar_receipt_details_pipeline = [
                     '$addFields': {
                         'outstanding_amount': {
                             '$subtract': [
-                                '$net_amount', '$receipt_amount'
+                                '$net_amount', {
+                                    '$ifNull': [
+                                        '$total_paid_for_job', 0
+                                    ]
+                                }
                             ]
-                        }
-                    }
-                }, {
-                    '$match': {
-                        'outstanding_amount': {
-                            '$gt': 0
                         }
                     }
                 }, {
@@ -291,6 +295,7 @@ ar_receipt_details_pipeline = [
                 }, {
                     '$project': {
                         '_id': 1,
+                        'receipt_id': 1,
                         'is_selected': {
                             '$literal': True
                         },
@@ -353,7 +358,9 @@ ar_receipt_details_pipeline = [
                 ]
             },
             'bank_name_id': {
-                '$ifNull': ['$bank_details._id', None]
+                '$ifNull': [
+                    '$bank_details._id', None
+                ]
             }
         }
     }, {
@@ -657,6 +664,7 @@ async def update_receipt_invoices(
     try:
         company_id = ObjectId(data["company_id"])
         items = [item.model_dump(exclude_unset=True) for item in items]
+        receipt_id = ObjectId(items[0].get('receipt_id',None)) if items else None
 
         added_list = []
         deleted_list = []
@@ -664,16 +672,12 @@ async def update_receipt_invoices(
         updated_list = []
 
         for item in items:
-            print(item)
             if item.get("is_deleted"):
-                if "id" not in item:
+                if not item.get("id"):
                     continue
-                print('yes deleted')
-                print(item['id'])
                 deleted_list.append(ObjectId(item["id"]))
 
             elif item.get("is_added") and not item.get("is_deleted"):
-                print('yes added')
                 item.pop("id", None)
                 item['receipt_id'] = ObjectId(item['receipt_id']) if item['receipt_id'] else None
                 item['company_id'] = company_id
@@ -691,8 +695,6 @@ async def update_receipt_invoices(
                 if "id" not in item:
                     continue
                 item_id = ObjectId(item["id"])
-                print('yes modified')
-                print(item_id)
                 item["updatedAt"] = security.now_utc()
                 if "job_id" in item:
                     item.pop("job_id", None)
@@ -734,7 +736,14 @@ async def update_receipt_invoices(
                     {"_id": str(item_id), "job_id": str(item_data["job_id"]) if item_data.get("job_id") else None})
 
             await s.commit_transaction()
-        return {"updated_items": updated_list, "deleted_items": [str(d) for d in deleted_list]}
+        if receipt_id:
+            new_receipt = await get_receipt_details(receipt_id)
+            serialized = serializer(new_receipt)
+            return {"receipt": serialized}
+        else:
+            return {"receipt": {}}
+
+        # return {"updated_items": updated_list, "deleted_items": [str(d) for d in deleted_list]}
 
     except Exception as e:
         print(e)

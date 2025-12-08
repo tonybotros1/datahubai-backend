@@ -1132,7 +1132,12 @@ async def search_engine_for_car_trading(
                 "bought_by_id": {"$ifNull": ["$car_bought_by._id", ""]},
                 "note": {"$ifNull": ["$note", ""]},
                 "date": {"$ifNull": ["$date", ""]},
-                "trade_items": {"$ifNull": ["$trade_items", []]},
+                "trade_items": {
+                    "$sortArray": {
+                        "input": {"$ifNull": ["$trade_items", []]},
+                        "sortBy": {"date": 1}  # 1 = ASC, -1 = DESC
+                    }
+                },
                 "buy_date": {"$ifNull": ["$buy_date", ""]},
                 "sell_date": {"$ifNull": ["$sell_date", ""]},
                 "total_pay": {"$toDouble": {"$ifNull": ["$total_pay", 0]}},
