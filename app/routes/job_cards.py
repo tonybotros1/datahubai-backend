@@ -774,9 +774,11 @@ async def delete_job_card(job_id: str, _: dict = Depends(security.get_current_us
                     for image in inspection_report['car_images']:
                         if 'image_public_id' in image and image['image_public_id']:
                             await delete_image_from_server(image['image_public_id'])
-                if 'customer_signature_public_id' in inspection_report and inspection_report['customer_signature_public_id']:
+                if 'customer_signature_public_id' in inspection_report and inspection_report[
+                    'customer_signature_public_id']:
                     await delete_image_from_server(inspection_report['customer_signature_public_id'])
-                if 'advisor_signature_public_id' in inspection_report and inspection_report['advisor_signature_public_id']:
+                if 'advisor_signature_public_id' in inspection_report and inspection_report[
+                    'advisor_signature_public_id']:
                     await delete_image_from_server(inspection_report['advisor_signature_public_id'])
                 if 'car_dialog_public_id' in inspection_report and inspection_report['car_dialog_public_id']:
                     await delete_image_from_server(inspection_report['car_dialog_public_id'])
@@ -874,6 +876,11 @@ async def update_job_card(job_id: str, job_data: JobCard, data: dict = Depends(s
         result = await job_cards_collection.update_one({"_id": job_id}, {"$set": job_data_dict})
         if result.modified_count == 0:
             raise HTTPException(status_code=404)
+
+        updated = await get_job_card_details(job_id)
+        serialized = serializer(updated)
+        return {"job_card": serialized}
+
 
 
     except Exception as e:

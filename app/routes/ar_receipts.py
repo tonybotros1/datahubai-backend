@@ -373,212 +373,217 @@ ar_receipt_details_pipeline = [
     }
 ]
 
+all_customer_invoices_pipeline = [
+    {
+        '$lookup': {
+            'from': 'all_brands',
+            'let': {
+                'brand_id': '$car_brand'
+            },
+            'pipeline': [
+                {
+                    '$match': {
+                        '$expr': {
+                            '$eq': [
+                                '$_id', '$$brand_id'
+                            ]
+                        }
+                    }
+                }, {
+                    '$project': {
+                        'name': 1
+                    }
+                }
+            ],
+            'as': 'brand_details'
+        }
+    }, {
+        '$unwind': {
+            'path': '$brand_details',
+            'preserveNullAndEmptyArrays': True
+        }
+    }, {
+        '$lookup': {
+            'from': 'all_brand_models',
+            'let': {
+                'model_id': '$car_model'
+            },
+            'pipeline': [
+                {
+                    '$match': {
+                        '$expr': {
+                            '$eq': [
+                                '$_id', '$$model_id'
+                            ]
+                        }
+                    }
+                }, {
+                    '$project': {
+                        'name': 1
+                    }
+                }
+            ],
+            'as': 'model_details'
+        }
+    }, {
+        '$unwind': {
+            'path': '$model_details',
+            'preserveNullAndEmptyArrays': True
+        }
+    }, {
+        '$lookup': {
+            'from': 'job_cards_invoice_items',
+            'let': {
+                'job_id': '$_id'
+            },
+            'pipeline': [
+                {
+                    '$match': {
+                        '$expr': {
+                            '$eq': [
+                                '$job_card_id', '$$job_id'
+                            ]
+                        }
+                    }
+                }, {
+                    '$project': {
+                        'net': 1
+                    }
+                }
+            ],
+            'as': 'invoice_items_details'
+        }
+    }, {
+        '$addFields': {
+            'net_amount': {
+                '$sum': {
+                    '$map': {
+                        'input': '$invoice_items_details',
+                        'as': 'item',
+                        'in': {
+                            '$ifNull': [
+                                '$$item.net', 0
+                            ]
+                        }
+                    }
+                }
+            }
+        }
+    }, {
+        '$lookup': {
+            'from': 'all_receipts_invoices',
+            'localField': '_id',
+            'foreignField': 'job_id',
+            'as': 'receipts_invoices_details'
+        }
+    }, {
+        '$addFields': {
+            'received': {
+                '$sum': {
+                    '$map': {
+                        'input': '$receipts_invoices_details',
+                        'as': 'receipt',
+                        'in': {
+                            '$ifNull': [
+                                '$$receipt.amount', 0
+                            ]
+                        }
+                    }
+                }
+            }
+        }
+    }, {
+        '$addFields': {
+            'final_outstanding': {
+                '$subtract': [
+                    '$net_amount', '$received'
+                ]
+            }
+        }
+    }, {
+        '$match': {
+            'final_outstanding': {
+                '$gt': 0
+            }
+        }
+    }, {
+        '$project': {
+            '_id': 0,
+            'is_selected': {
+                '$literal': False
+            },
+            'job_id': '$_id',
+            'invoice_number': 1,
+            'invoice_date': {
+                '$dateToString': {
+                    'format': '%d-%m-%Y',
+                    'date': '$invoice_date'
+                }
+            },
+            'invoice_amount': {
+                '$toString': '$net_amount'
+            },
+            'receipt_amount': {
+                '$toString': '$received'
+            },
+            'outstanding_amount': {
+                '$toString': '$final_outstanding'
+            },
+            'notes': {
+                '$concat': [
+                    'Invoice Number: ', {
+                        '$ifNull': [
+                            '$invoice_number', ''
+                        ]
+                    }, ', ', 'Invoice Date: ', {
+                        '$dateToString': {
+                            'format': '%d-%m-%Y',
+                            'date': '$invoice_date'
+                        }
+                    }, ', ', 'Brand: ', {
+                        '$ifNull': [
+                            '$brand_details.name', ''
+                        ]
+                    }, ', ', 'Model: ', {
+                        '$ifNull': [
+                            '$model_details.name', ''
+                        ]
+                    }, ', ', 'Plate Number: ', {
+                        '$ifNull': [
+                            '$plate_number', ''
+                        ]
+                    }
+                ]
+            }
+        }
+    }
+]
+
 
 @router.get("/get_all_customer_invoices/{customer_id}")
 async def get_all_customer_invoices(customer_id: str, data: dict = Depends(security.get_current_user)):
     try:
         customer_id = ObjectId(customer_id)
         company_id = ObjectId(data.get("company_id"))
-        customer_invoices_pipeline = [
-            {
-                '$match': {
-                    'company_id': company_id,
-                    'customer': customer_id,
-                    'job_status_1': 'Posted'
-                }
-            }, {
-                '$lookup': {
-                    'from': 'all_brands',
-                    'let': {
-                        'brand_id': '$car_brand'
-                    },
-                    'pipeline': [
-                        {
-                            '$match': {
-                                '$expr': {
-                                    '$eq': [
-                                        '$_id', '$$brand_id'
-                                    ]
-                                }
-                            }
-                        }, {
-                            '$project': {
-                                'name': 1
-                            }
-                        }
-                    ],
-                    'as': 'brand_details'
-                }
-            }, {
-                '$unwind': {
-                    'path': '$brand_details',
-                    'preserveNullAndEmptyArrays': True
-                }
-            }, {
-                '$lookup': {
-                    'from': 'all_brand_models',
-                    'let': {
-                        'model_id': '$car_model'
-                    },
-                    'pipeline': [
-                        {
-                            '$match': {
-                                '$expr': {
-                                    '$eq': [
-                                        '$_id', '$$model_id'
-                                    ]
-                                }
-                            }
-                        }, {
-                            '$project': {
-                                'name': 1
-                            }
-                        }
-                    ],
-                    'as': 'model_details'
-                }
-            }, {
-                '$unwind': {
-                    'path': '$model_details',
-                    'preserveNullAndEmptyArrays': True
-                }
-            }, {
-                '$lookup': {
-                    'from': 'job_cards_invoice_items',
-                    'let': {
-                        'job_id': '$_id'
-                    },
-                    'pipeline': [
-                        {
-                            '$match': {
-                                '$expr': {
-                                    '$eq': [
-                                        '$job_card_id', '$$job_id'
-                                    ]
-                                }
-                            }
-                        }, {
-                            '$project': {
-                                'net': 1
-                            }
-                        }
-                    ],
-                    'as': 'invoice_items_details'
-                }
-            }, {
-                '$addFields': {
-                    'net_amount': {
-                        '$sum': {
-                            '$map': {
-                                'input': '$invoice_items_details',
-                                'as': 'item',
-                                'in': {
-                                    '$ifNull': [
-                                        '$$item.net', 0
-                                    ]
-                                }
-                            }
-                        }
-                    }
-                }
-            }, {
-                '$lookup': {
-                    'from': 'all_receipts_invoices',
-                    'localField': '_id',
-                    'foreignField': 'job_id',
-                    'as': 'receipts_invoices_details'
-                }
-            }, {
-                '$addFields': {
-                    'received': {
-                        '$sum': {
-                            '$map': {
-                                'input': '$receipts_invoices_details',
-                                'as': 'receipt',
-                                'in': {
-                                    '$ifNull': [
-                                        '$$receipt.amount', 0
-                                    ]
-                                }
-                            }
-                        }
-                    }
-                }
-            }, {
-                '$addFields': {
-                    'final_outstanding': {
-                        '$subtract': [
-                            '$net_amount', '$received'
-                        ]
-                    }
-                }
-            }, {
-                '$match': {
-                    'final_outstanding': {
-                        '$gt': 0
-                    }
-                }
-            }, {
-                '$project': {
-                    '_id': 0,
-                    'is_selected': {
-                        '$literal': False
-                    },
-                    'job_id': '$_id',
-                    'invoice_number': 1,
-                    'invoice_date': {
-                        '$dateToString': {
-                            'format': '%d-%m-%Y',
-                            'date': '$invoice_date'
-                        }
-                    },
-                    'invoice_amount': {
-                        '$toString': '$net_amount'
-                    },
-                    'receipt_amount': {
-                        '$toString': '$received'
-                    },
-                    'outstanding_amount': {
-                        '$toString': '$final_outstanding'
-                    },
-                    'notes': {
-                        '$concat': [
-                            'Invoice Number: ', {
-                                '$ifNull': [
-                                    '$invoice_number', ''
-                                ]
-                            }, ', ', 'Invoice Date: ', {
-                                '$dateToString': {
-                                    'format': '%d-%m-%Y',
-                                    'date': '$invoice_date'
-                                }
-                            }, ', ', 'Brand: ', {
-                                '$ifNull': [
-                                    '$brand_details.name', ''
-                                ]
-                            }, ', ', 'Model: ', {
-                                '$ifNull': [
-                                    '$model_details.name', ''
-                                ]
-                            }, ', ', 'Plate Number: ', {
-                                '$ifNull': [
-                                    '$plate_number', ''
-                                ]
-                            }
-                        ]
-                    }
-                }
-            }
-        ]
+        customer_invoices_pipeline = copy.deepcopy(all_customer_invoices_pipeline)
+        customer_invoices_pipeline.insert(0,
+                                          {
+                                              '$match': {
+                                                  'company_id': company_id,
+                                                  'customer': customer_id,
+                                                  'job_status_1': 'Posted'
+                                              }
+                                          },
+                                          )
         cursor = await job_cards_collection.aggregate(customer_invoices_pipeline)
         results = await cursor.to_list(None)
         serialized = [serializer(r) for r in results]
         return {"invoices": serialized}
 
-
     except HTTPException:
         raise
     except Exception as e:
+        print(e)
         raise HTTPException(status_code=500, detail=f"failed: {str(e)}")
 
 
@@ -592,6 +597,83 @@ async def get_receipt_details(receipt_id: ObjectId):
     cursor = await receipts_collection.aggregate(new_pipeline)
     result = await cursor.next()
     return result
+
+
+async def get_receipt_invoice_for_current_job_card(job_id: ObjectId):
+    try:
+        customer_invoices_pipeline = copy.deepcopy(all_customer_invoices_pipeline)
+        customer_invoices_pipeline.insert(0,
+                                          {
+                                              '$match': {
+                                                  "_id": job_id,
+                                              }
+                                          },
+                                          )
+        cursor = await job_cards_collection.aggregate(customer_invoices_pipeline)
+        try:
+            result = await cursor.__anext__()  # safe next()
+        except StopAsyncIteration:
+            return None  # no results found
+        serialized = serializer(result)
+        return  serialized
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"failed: {str(e)}")
+
+
+@router.post('/create_receipt_for_job_card/{job_id}/{customer_id}')
+async def create_receipt_for_job_card(job_id: str, customer_id: str,
+                                      data: dict = Depends(security.get_current_user)):
+    async with database.client.start_session() as session:
+        try:
+            await session.start_transaction()
+            company_id = ObjectId(data.get('company_id'))
+            job_id = ObjectId(job_id)
+            customer_id = ObjectId(customer_id)
+            invoice = await get_receipt_invoice_for_current_job_card(job_id)
+            if not invoice:
+                raise HTTPException(status_code=422, detail=f"invoice amount is zero")
+            new_receipt_counter = await create_custom_counter("RN", "R", data, session)
+            receipt_dict = {
+                "company_id": company_id,
+                "customer": customer_id,
+                "status": "New",
+                "receipt_date": security.now_utc(),
+                "receipt_number": new_receipt_counter['final_counter'] if new_receipt_counter[
+                    'success'] else None,
+                "createdAt": security.now_utc(),
+                "updatedAt": security.now_utc(),
+            }
+            result = await receipts_collection.insert_one(receipt_dict, session=session)
+            if not result.inserted_id:
+                raise HTTPException(status_code=500, detail="Failed to insert receipt")
+
+
+            receipt_invoice_dict = {
+                "receipt_id": result.inserted_id,
+                "company_id": company_id,
+                "job_id": job_id,
+                "amount": float(invoice.get('outstanding_amount',0)),
+                "createdAt": security.now_utc(),
+                "updatedAt": security.now_utc(),
+            }
+            await receipts_invoices_collection.insert_one(receipt_invoice_dict, session=session)
+            await session.commit_transaction()
+            new_receipt = await get_receipt_details(result.inserted_id)
+            serialized = serializer(new_receipt)
+            return {"receipt": serialized}
+
+
+        except HTTPException as http_ex:
+            await session.abort_transaction()
+            raise http_ex  # keep original status code
+
+        except Exception as e:
+            print(e)
+            await session.abort_transaction()
+            raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/add_new_receipt")
@@ -664,7 +746,7 @@ async def update_receipt_invoices(
     try:
         company_id = ObjectId(data["company_id"])
         items = [item.model_dump(exclude_unset=True) for item in items]
-        receipt_id = ObjectId(items[0].get('receipt_id',None)) if items else None
+        receipt_id = ObjectId(items[0].get('receipt_id', None)) if items else None
 
         added_list = []
         deleted_list = []
