@@ -71,7 +71,8 @@ ap_payment_details_pipeline: list[dict[str, Any]] = [
                     '$project': {
                         'payment_invoice_id': '$_id',
                         'ap_invoices_id': 1,
-                        'amount': 1
+                        'amount': 1,
+                        'payment_id': 1
                     }
                 }, {
                     '$lookup': {
@@ -195,6 +196,7 @@ ap_payment_details_pipeline: list[dict[str, Any]] = [
                         'is_selected': {
                             '$literal': True
                         },
+                        'payment_id': 1,
                         'ap_invoice_id': '$ap_inv_details._id',
                         'invoice_number': '$ap_inv_details.invoice_number',
                         'invoice_date': '$invoice_date_str',
@@ -529,93 +531,96 @@ async def update_payment_invoices(
         items: list[Invoices],
         data: dict = Depends(security.get_current_user)
 ):
-    try:
-        company_id = ObjectId(data["company_id"])
-        items = [item.model_dump(exclude_unset=True) for item in items]
-
-        added_list = []
-        deleted_list = []
-        modified_list = []
-        updated_list = []
-
-        for item in items:
-            print(item)
-            if item.get("is_deleted"):
-                if "id" not in item:
-                    continue
-                print('yes deleted')
-                print(item['id'])
-                deleted_list.append(ObjectId(item["id"]))
-
-            elif item.get("is_added") and not item.get("is_deleted"):
-                print('yes added')
-                item.pop("id", None)
-                item['payment_id'] = ObjectId(item['payment_id']) if item['payment_id'] else None
-                item['company_id'] = company_id
-                item['ap_invoice_id'] = ObjectId(item['ap_invoice_id']) if item['ap_invoice_id'] else None
-                item["createdAt"] = security.now_utc()
-                item["updatedAt"] = security.now_utc()
-                item['amount'] = item['amount']
-                item.pop("is_deleted", None)
-                item.pop("is_added", None)
-                item.pop("is_modified", None)
-                added_list.append(item)
-
-
-            elif item.get("is_modified") and not item.get("is_deleted") and not item.get("is_added"):
-                if "id" not in item:
-                    continue
-                item_id = ObjectId(item["id"])
-                print('yes modified')
-                print(item_id)
-                item["updatedAt"] = security.now_utc()
-                if "ap_invoice_id" in item:
-                    item.pop("ap_invoice_id", None)
-                if "payment_id" in item:
-                    item.pop("payment_id", None)
-                item["amount"] = item["amount"] if item["amount"] else None
-                item.pop("is_deleted", None)
-                item.pop("is_added", None)
-                item.pop("is_modified", None)
-                modified_list.append((item_id, item))
-
-        async with  database.client.start_session() as s:
+    async with  database.client.start_session() as s:
+        try:
             await s.start_transaction()
-            if deleted_list:
-                await ap_payment_invoices_collection.delete_many(
-                    {"_id": {"$in": deleted_list}}, session=s
-                )
+            company_id = ObjectId(data["company_id"])
+            items = [item.model_dump(exclude_unset=True) for item in items]
+            print(items)
+            payment_id = ObjectId(items[0].get('payment_id', None)) if items else None
 
-            if added_list:
-                added_invoices = await ap_payment_invoices_collection.insert_many(
-                    added_list, session=s
-                )
-                inserted_ids = added_invoices.inserted_ids
-                for item, new_id in zip(added_list, inserted_ids):
-                    response_item = {
-                        "_id": str(new_id),
-                        "ap_invoice_id": str(item.get("ap_invoice_id")),
-                    }
-                    updated_list.append(response_item)
+            added_list = []
+            deleted_list = []
+            modified_list = []
+            updated_list = []
 
-            for item_id, item_data in modified_list:
-                item_data.pop("id", None)
-                await ap_payment_invoices_collection.update_one(
-                    {"_id": item_id},
-                    {"$set": item_data},
-                    session=s
-                )
-                updated_list.append(
-                    {"_id": str(item_id),
-                     "ap_invoice_id": str(item_data["ap_invoice_id"]) if item_data.get("ap_invoice_id") else None})
+            for item in items:
+                if item.get("is_deleted"):
+                    print('yes')
+                    if not item.get('id'):
+                        continue
+                    deleted_list.append(ObjectId(item["id"]))
 
-            await s.commit_transaction()
-        return {"updated_items": updated_list, "deleted_items": [str(d) for d in deleted_list]}
+                elif item.get("is_added") and not item.get("is_deleted"):
+                    item.pop("id", None)
+                    item['payment_id'] = ObjectId(item['payment_id']) if item['payment_id'] else None
+                    item['company_id'] = company_id
+                    item['ap_invoices_id'] = ObjectId(item['ap_invoices_id']) if item['ap_invoices_id'] else None
+                    item["createdAt"] = security.now_utc()
+                    item["updatedAt"] = security.now_utc()
+                    item['amount'] = item['amount']
+                    item.pop("is_deleted", None)
+                    item.pop("is_added", None)
+                    item.pop("is_modified", None)
+                    added_list.append(item)
 
-    except Exception as e:
-        print(e)
-        await s.abort_transaction()
-        raise HTTPException(status_code=500, detail=str(e))
+
+                elif item.get("is_modified") and not item.get("is_deleted") and not item.get("is_added"):
+                    if "id" not in item:
+                        continue
+                    item_id = ObjectId(item["id"])
+                    item["updatedAt"] = security.now_utc()
+                    if item.get("ap_invoices_id"):
+                        item.pop("ap_invoices_id", None)
+                    if "payment_id" in item:
+                        item.pop("payment_id", None)
+                    item["amount"] = item["amount"] if item["amount"] else None
+                    item.pop("is_deleted", None)
+                    item.pop("is_added", None)
+                    item.pop("is_modified", None)
+                    modified_list.append((item_id, item))
+
+                if deleted_list:
+                    print(deleted_list)
+                    await ap_payment_invoices_collection.delete_many(
+                        {"_id": {"$in": deleted_list}}, session=s
+                    )
+
+                if added_list:
+                    added_invoices = await ap_payment_invoices_collection.insert_many(
+                        added_list, session=s
+                    )
+                    inserted_ids = added_invoices.inserted_ids
+                    for item, new_id in zip(added_list, inserted_ids):
+                        response_item = {
+                            "_id": str(new_id),
+                            "ap_invoice_id": str(item.get("ap_invoice_id")),
+                        }
+                        updated_list.append(response_item)
+
+                for item_id, item_data in modified_list:
+                    item_data.pop("id", None)
+                    await ap_payment_invoices_collection.update_one(
+                        {"_id": item_id},
+                        {"$set": item_data},
+                        session=s
+                    )
+                    updated_list.append(
+                        {"_id": str(item_id),
+                         "ap_invoice_id": str(item_data["ap_invoice_id"]) if item_data.get("ap_invoice_id") else None})
+
+                await s.commit_transaction()
+            if payment_id:
+                new_payment = await get_payment_details(payment_id)
+                serialized = serializer(new_payment)
+                return {"payment": serialized}
+            else:
+                return {"payment": {}}
+
+        except Exception as e:
+            print(e)
+            await s.abort_transaction()
+            raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.patch("/update_ap_payment/{payment_id}")
