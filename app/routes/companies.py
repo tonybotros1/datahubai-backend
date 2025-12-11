@@ -1,7 +1,6 @@
 from datetime import datetime
 from bson import ObjectId
 from fastapi import APIRouter, Depends, HTTPException, status, Form, UploadFile, File, Body
-from pip._internal.network import session
 from pymongo.errors import DuplicateKeyError, PyMongoError
 from app import database
 from app.core import security

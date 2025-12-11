@@ -302,8 +302,8 @@ async def create_job_from_inspection_report(job_date: Optional[datetime] = Form(
             job_card_section_dict = {
                 "company_id": company_id,
                 "job_date": job_date,
-                "job_status_1": "New",
-                "job_status_2": "New",
+                "job_status_1": "Draft",
+                "job_status_2": "Draft",
                 "job_number": new_job_counter['final_counter'] if new_job_counter['success'] else None,
                 "technician": ObjectId(technician) if technician else None,
                 "customer": ObjectId(customer) if customer else None,
