@@ -1302,6 +1302,43 @@ async def search_engine_for_job_cards(filter_jobs: JobCardSearch, data: dict = D
         })
 
         search_pipeline.append({
+            '$lookup': {
+                'from': 'all_receipts_invoices',
+                'localField': '_id',
+                'foreignField': 'job_id',
+                'as': 'receipts_invoices_details'
+            }
+        })
+        search_pipeline.append({
+            '$addFields': {
+                'paid': {
+                    '$sum': {
+                        '$map': {
+                            'input': '$receipts_invoices_details',
+                            'as': 'receipt',
+                            'in': {
+                                '$ifNull': [
+                                    '$$receipt.amount', 0
+                                ]
+                            }
+                        }
+                    }
+                },
+
+            }
+        })
+
+        search_pipeline.append({
+            '$addFields': {
+                'final_outstanding': {
+                    '$subtract': [
+                        '$total_net', '$paid'
+                    ]
+                }
+            }
+        })
+
+        search_pipeline.append({
             '$addFields': {
                 'car_brand_name': {
                     '$ifNull': [
@@ -1395,7 +1432,9 @@ async def search_engine_for_job_cards(filter_jobs: JobCardSearch, data: dict = D
                             "_id": None,
                             "grand_total": {"$sum": "$total_amount"},
                             "grand_vat": {"$sum": "$total_vat"},
-                            "grand_net": {"$sum": "$total_net"}
+                            "grand_net": {"$sum": "$total_net"},
+                            "grand_paid": {"$sum": "$paid"},
+                            "grand_outstanding": {"$sum": "$final_outstanding"},
                         }
                     },
                     {
