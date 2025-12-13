@@ -76,6 +76,31 @@ ap_payment_details_pipeline: list[dict[str, Any]] = [
                     }
                 }, {
                     '$lookup': {
+                        'from': 'all_payments_invoices',
+                        'let': {
+                            'apInvoiceId': '$ap_invoices_id'
+                        },
+                        'pipeline': [
+                            {
+                                '$match': {
+                                    '$expr': {
+                                        '$eq': [
+                                            '$ap_invoices_id', '$$apInvoiceId'
+                                        ]
+                                    }
+                                }
+                            }
+                        ],
+                        'as': 'all_payments_for_ap_invoice'
+                    }
+                }, {
+                    '$addFields': {
+                        'total_paid_for_payment': {
+                            '$sum': '$all_payments_for_ap_invoice.amount'
+                        }
+                    }
+                }, {
+                    '$lookup': {
                         'from': 'ap_invoices',
                         'let': {
                             'ap_inv_id': '$ap_invoices_id'
@@ -176,14 +201,12 @@ ap_payment_details_pipeline: list[dict[str, Any]] = [
                     '$addFields': {
                         'outstanding_amount': {
                             '$subtract': [
-                                '$amounts', '$payment_amount'
+                                '$amounts', {
+                                    '$ifNull': [
+                                        '$total_paid_for_payment', 0
+                                    ]
+                                }
                             ]
-                        }
-                    }
-                }, {
-                    '$match': {
-                        'outstanding_amount': {
-                            '$gt': 0
                         }
                     }
                 }, {

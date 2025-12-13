@@ -1453,10 +1453,10 @@ async def search_engine_for_job_cards(filter_jobs: JobCardSearch, data: dict = D
             data = result[0]
             job_cards = [serializer(r) for r in data.get("job_cards", [])]
             totals = data.get("grand_totals", [])
-            grand_totals = totals[0] if totals else {"grand_total": 0, "grand_vat": 0, "grand_net": 0}
+            grand_totals = totals[0] if totals else {"grand_total": 0, "grand_vat": 0, "grand_net": 0,"grand_paid": 0, "grand_outstanding": 0}
         else:
             job_cards = []
-            grand_totals = {"grand_total": 0, "grand_vat": 0, "grand_net": 0}
+            grand_totals = {"grand_total": 0, "grand_vat": 0, "grand_net": 0,"grand_paid": 0, "grand_outstanding": 0}
 
         return {
             "job_cards": job_cards,
