@@ -45,6 +45,7 @@ class InvoiceItems(BaseModel):
 
 class JobCard(BaseModel):
     label: Optional[str] = None
+    is_sales: Optional[bool] = None
     job_status_1: Optional[str] = None
     job_status_2: Optional[str] = None
     car_brand_logo: Optional[str] = None
@@ -101,6 +102,7 @@ class JobCardSearch(BaseModel):
     car_model: Optional[PyObjectId] = None
     plate_number: Optional[str] = None
     vin: Optional[str] = None
+    lpo: Optional[str] = None
     customer_name: Optional[PyObjectId] = None
     status: Optional[str] = None
     from_date: Optional[datetime] = None
@@ -1015,17 +1017,25 @@ async def search_engine_for_job_cards(filter_jobs: JobCardSearch, data: dict = D
         if filter_jobs.car_model:
             match_stage["car_model"] = filter_jobs.car_model
         if filter_jobs.job_number:
-            match_stage["job_number"] = {"$regex": filter_jobs.job_number, "$options": "i"}
+            # match_stage["job_number"] = {"$regex": filter_jobs.job_number, "$options": "i"}
+            match_stage["job_number"] = filter_jobs.job_number
         if filter_jobs.invoice_number:
-            match_stage["invoice_number"] = {"$regex": filter_jobs.invoice_number, "$options": "i"}
+            # match_stage["invoice_number"] = {"$regex": filter_jobs.invoice_number, "$options": "i"}
+            match_stage["invoice_number"] = filter_jobs.invoice_number
         if filter_jobs.plate_number:
-            match_stage["plate_number"] = {"$regex": filter_jobs.plate_number, "$options": "i"}
+            # match_stage["plate_number"] = {"$regex": filter_jobs.plate_number, "$options": "i"}
+            match_stage["plate_number"] = filter_jobs.plate_number
         if filter_jobs.vin:
             match_stage["vehicle_identification_number"] = {"$regex": filter_jobs.vin, "$options": "i"}
+        if filter_jobs.lpo:
+            match_stage["lpo_number"] = {"$regex": filter_jobs.lpo, "$options": "i"}
         if filter_jobs.customer_name:
             match_stage["customer"] = filter_jobs.customer_name
         if filter_jobs.status:
-            match_stage["job_status_1"] = filter_jobs.status
+            if filter_jobs.status == 'Posted':
+                match_stage["job_status_1"] = filter_jobs.status
+            else:
+                match_stage["job_status_2"] = filter_jobs.status
 
         search_pipeline.append({"$match": match_stage})
 
@@ -1453,10 +1463,11 @@ async def search_engine_for_job_cards(filter_jobs: JobCardSearch, data: dict = D
             data = result[0]
             job_cards = [serializer(r) for r in data.get("job_cards", [])]
             totals = data.get("grand_totals", [])
-            grand_totals = totals[0] if totals else {"grand_total": 0, "grand_vat": 0, "grand_net": 0,"grand_paid": 0, "grand_outstanding": 0}
+            grand_totals = totals[0] if totals else {"grand_total": 0, "grand_vat": 0, "grand_net": 0, "grand_paid": 0,
+                                                     "grand_outstanding": 0}
         else:
             job_cards = []
-            grand_totals = {"grand_total": 0, "grand_vat": 0, "grand_net": 0,"grand_paid": 0, "grand_outstanding": 0}
+            grand_totals = {"grand_total": 0, "grand_vat": 0, "grand_net": 0, "grand_paid": 0, "grand_outstanding": 0}
 
         return {
             "job_cards": job_cards,
