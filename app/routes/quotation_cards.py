@@ -793,6 +793,9 @@ async def update_quotation_card(quotation_id: str, quotation_data: QuotationCard
         if result.modified_count == 0:
             raise HTTPException(status_code=404)
 
+        updated = await get_quotation_card_details(quotation_id)
+        serialized = serializer(updated)
+        return {"quotation_card": serialized}
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
