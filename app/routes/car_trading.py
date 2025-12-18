@@ -95,6 +95,8 @@ class CarTradingSearch(BaseModel):
 
 class CarTradingModel(BaseModel):
     date: Optional[datetime] = None
+    warranty_end_date: Optional[datetime] = None
+    service_contract_end_date: Optional[datetime] = None
     mileage: Optional[float] = None
     color_out: Optional[PyObjectId] = None
     color_in: Optional[PyObjectId] = None
@@ -750,6 +752,8 @@ async def add_new_trade(trade: CarTradingModel, data: dict = Depends(security.ge
             trade_dict = {
                 "company_id": company_id if company_id else "",
                 "date": trade.date,
+                "warranty_end_date": trade.warranty_end_date,
+                "service_contract_end_date": trade.service_contract_end_date,
                 "mileage": trade.mileage,
                 "color_in": trade.color_in if trade.color_in else "",
                 "color_out": trade.color_out if trade.color_out else "",
@@ -1019,6 +1023,8 @@ async def search_engine_for_car_trading(
             "$group": {
                 "_id": "$_id",
                 "date": {"$first": "$date"},
+                "warranty_end_date": {"$first": "$warranty_end_date"},
+                "service_contract_end_date": {"$first": "$service_contract_end_date"},
                 "note": {"$first": "$note"},
                 "status": {"$first": "$status"},
                 "mileage": {"$first": "$mileage"},
@@ -1132,6 +1138,8 @@ async def search_engine_for_car_trading(
                 "bought_by_id": {"$ifNull": ["$car_bought_by._id", ""]},
                 "note": {"$ifNull": ["$note", ""]},
                 "date": {"$ifNull": ["$date", ""]},
+                "warranty_end_date": {"$ifNull": ["$warranty_end_date", ""]},
+                "service_contract_end_date": {"$ifNull": ["$service_contract_end_date", ""]},
                 "trade_items": {
                     "$sortArray": {
                         "input": {"$ifNull": ["$trade_items", []]},

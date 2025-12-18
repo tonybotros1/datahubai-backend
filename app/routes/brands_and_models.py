@@ -191,7 +191,7 @@ async def add_new_model(brand_id: str, name: str = Body(..., embed=True),
         model_dict = {
             "name": name,
             "status": True,
-            "brand_id": brand_id,
+            "brand_id": ObjectId(brand_id),
             "createdAt": datetime.now(timezone.utc),
             "updatedAt": datetime.now(timezone.utc),
         }
