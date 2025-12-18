@@ -93,6 +93,15 @@ class CarTradingSearch(BaseModel):
     this_year: Optional[bool] = False
 
 
+class ExpensesSearchModel(BaseModel):
+    from_date: Optional[datetime] = None
+    to_date: Optional[datetime] = None
+    all: Optional[bool] = False
+    today: Optional[bool] = False
+    this_month: Optional[bool] = False
+    this_year: Optional[bool] = False
+
+
 class CarTradingModel(BaseModel):
     date: Optional[datetime] = None
     warranty_end_date: Optional[datetime] = None
@@ -588,11 +597,47 @@ async def get_general_expenses_details(type_id: ObjectId):
         raise e
 
 
-@router.get("/get_general_expenses_summary")
-async def get_general_expenses_summary(data: dict = Depends(security.get_current_user)):
+@router.post("/get_general_expenses_summary")
+async def get_general_expenses_summary(filter_expenses: ExpensesSearchModel,
+                                       data: dict = Depends(security.get_current_user)):
     company_id = ObjectId(data.get("company_id"))
-    pipeline = [
-        {'$match': {'company_id': company_id}},
+
+    expenses_search_pipeline = []
+    expenses_search_pipeline.insert(0, {'$match': {'company_id': company_id}})
+
+    now = datetime.now(timezone.utc)
+    date_field = "date"
+    date_filter = {}
+    if filter_expenses.today:
+        start = datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
+        end = start + timedelta(days=1)
+        print(start, end)
+        date_filter[date_field] = {"$gte": start, "$lt": end}
+
+    elif filter_expenses.this_month:
+        start = datetime(now.year, now.month, 1, tzinfo=timezone.utc)
+        end = datetime(now.year + (now.month // 12), ((now.month % 12) + 1), 1)
+        date_filter[date_field] = {"$gte": start, "$lt": end}
+
+    elif filter_expenses.this_year:
+        start = datetime(now.year, 1, 1, tzinfo=timezone.utc)
+        end = datetime(now.year + 1, 1, 1)
+        date_filter[date_field] = {"$gte": start, "$lt": end}
+
+    elif filter_expenses.from_date or filter_expenses.to_date:
+        date_filter[date_field] = {}
+        if filter_expenses.from_date:
+            print("from date")
+            date_filter[date_field]["$gte"] = filter_expenses.from_date
+        if filter_expenses.to_date:
+            print("to date")
+            date_filter[date_field]["$lte"] = filter_expenses.to_date
+        print(date_filter)
+
+    if date_filter:
+        expenses_search_pipeline.append({"$match": date_filter})
+
+    expenses_search_pipeline.append(
         {
             "$group": {
                 "_id": None,
@@ -601,21 +646,230 @@ async def get_general_expenses_summary(data: dict = Depends(security.get_current
                 "count": {"$sum": 1}  # count all documents
             }
         },
+    )
+    expenses_search_pipeline.append(
         {
             "$addFields": {
                 "total_net": {"$subtract": ["$total_receive", "$total_pay"]}
             }
         }
-    ]
+    )
 
-    cursor = await all_general_expenses_collection.aggregate(pipeline)
+    expenses_search_pipeline.append(
+        {
+            '$lookup': {
+                'from': 'all_trades',
+                'let': {
+                    'companyId': company_id
+                },
+                'pipeline': [
+                    {
+                        '$match': {
+                            '$expr': {
+                                '$and': [
+                                    {
+                                        '$eq': [
+                                            '$company_id', '$$companyId'
+                                        ]
+                                    }, {
+                                        '$eq': [
+                                            '$status', 'Sold'
+                                        ]
+                                    }
+                                ]
+                            }
+                        }
+                    }, {
+                        '$lookup': {
+                            'from': 'all_trades_items',
+                            'let': {
+                                'trade_id': '$_id'
+                            },
+                            'pipeline': [
+                                {
+                                    '$match': {
+                                        '$expr': {
+                                            '$eq': [
+                                                '$trade_id', '$$trade_id'
+                                            ]
+                                        }
+                                    }
+                                }, {
+                                    '$lookup': {
+                                        'from': 'all_lists_values',
+                                        'let': {
+                                            'item_id': '$item'
+                                        },
+                                        'pipeline': [
+                                            {
+                                                '$match': {
+                                                    '$expr': {
+                                                        '$eq': [
+                                                            '$_id', '$$item_id'
+                                                        ]
+                                                    }
+                                                }
+                                            }, {
+                                                '$project': {
+                                                    'name': 1
+                                                }
+                                            }
+                                        ],
+                                        'as': 'item_detail'
+                                    }
+                                }, {
+                                    '$unwind': {
+                                        'path': '$item_detail',
+                                        'preserveNullAndEmptyArrays': True
+                                    }
+                                }, {
+                                    '$addFields': {
+                                        'buy_date_tmp': {
+                                            '$cond': [
+                                                {
+                                                    '$eq': [
+                                                        '$item_detail.name', 'BUY'
+                                                    ]
+                                                }, '$date', None
+                                            ]
+                                        },
+                                        'sell_date_tmp': {
+                                            '$cond': [
+                                                {
+                                                    '$eq': [
+                                                        '$item_detail.name', 'SELL'
+                                                    ]
+                                                }, '$date', None
+                                            ]
+                                        }
+                                    }
+                                }
+                            ],
+                            'as': 'trade_items'
+                        }
+                    },
+                    {
+                        '$match': {
+                            '$expr': {
+                                '$or': [
+                                    # If no date filter was created, allow all trades (True)
+                                    {'$eq': [len(date_filter), 0]},
+                                    # If date filter exists, check if any item in trade_items matches the range
+                                    {
+                                        '$gt': [
+                                            {
+                                                '$size': {
+                                                    '$filter': {
+                                                        'input': '$trade_items',
+                                                        'as': 'item',
+                                                        'cond': {
+                                                            '$and': [
+                                                                {'$ne': ['$$item.sell_date_tmp', None]},
+                                                                {'$gte': ['$$item.sell_date_tmp',
+                                                                          date_filter.get("date", {}).get("$gte",
+                                                                                                          datetime(1, 1,
+                                                                                                                   1,
+                                                                                                                   tzinfo=timezone.utc))]},
+                                                                {'$lt': ['$$item.sell_date_tmp',
+                                                                         date_filter.get("date", {}).get("$lt",
+                                                                                                         datetime(9999,
+                                                                                                                  12,
+                                                                                                                  31,
+                                                                                                                  tzinfo=timezone.utc)) if "$lt" in date_filter.get(
+                                                                             "date", {}) else datetime(9999, 12, 31,
+                                                                                                       tzinfo=timezone.utc)]},
+                                                                # Handle $lte if you used it in from_date/to_date
+                                                                {'$lte': ['$$item.sell_date_tmp',
+                                                                          date_filter.get("date", {}).get("$lte",
+                                                                                                          datetime(9999,
+                                                                                                                   12,
+                                                                                                                   31,
+                                                                                                                   tzinfo=timezone.utc))]}
+                                                            ]
+                                                        }
+                                                    }
+                                                }
+                                            }, 0
+                                        ]
+                                    }
+                                ]
+                            }
+                        }
+                    },
+                    {
+                        '$unwind': '$trade_items'
+                    }, {
+                        '$group': {
+                            '_id': None,
+                            'total_trades_pay': {
+                                '$sum': {
+                                    '$ifNull': [
+                                        '$trade_items.pay', 0
+                                    ]
+                                }
+                            },
+                            'total_trades_receive': {
+                                '$sum': {
+                                    '$ifNull': [
+                                        '$trade_items.receive', 0
+                                    ]
+                                }
+                            }
+                        }
+                    }, {
+                        '$addFields': {
+                            'total_trades_net': {
+                                '$subtract': [
+                                    '$total_trades_receive', '$total_trades_pay'
+                                ]
+                            }
+                        }
+                    }
+                ],
+                'as': 'trades'
+            }
+        }
+    )
+
+    expenses_search_pipeline.append({
+        '$addFields': {
+            'total_trades_net': {
+                '$ifNull': [
+                    {
+                        '$arrayElemAt': [
+                            '$trades.total_trades_net', 0
+                        ]
+                    }, 0
+                ]
+            }
+        }
+    })
+    expenses_search_pipeline.append({
+        '$addFields': {
+            'net_profit': {
+                '$add': [
+                    '$total_trades_net', '$total_net'
+                ]
+            }
+        }
+    })
+
+    expenses_search_pipeline.append({
+        '$project': {
+            'trades': 0,
+            'total_trades_net': 0
+        }
+    })
+
+    cursor = await all_general_expenses_collection.aggregate(expenses_search_pipeline)
     result = await cursor.to_list(None)
 
     summary = result[0] if result else {
         "total_pay": 0,
         "total_receive": 0,
         "total_net": 0,
-        "count": 0
+        "count": 0,
+        "net_profit": 0
     }
 
     return {"summary": summary}
@@ -1214,6 +1468,238 @@ async def delete_trade(trade_id: str, _: dict = Depends(security.get_current_use
                 raise HTTPException(status_code=404, detail="Trade not found")
 
         return {"message": "Trade and its items deleted successfully"}
+
+    except PyMongoError as e:
+        print(e)
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+    except Exception as e:
+        print(e)
+        raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
+
+
+@router.get("/get_cash_on_hand")
+async def get_cash_on_hand(data: dict = Depends(security.get_current_user)):
+    try:
+        company_id = ObjectId(data.get("company_id"))
+        cash_on_hand_pipeline = [
+            {
+                '$match': {
+                    'company_id': company_id
+                }
+            }, {
+                '$lookup': {
+                    'from': 'all_trades_items',
+                    'localField': '_id',
+                    'foreignField': 'trade_id',
+                    'as': 'trade_items'
+                }
+            }, {
+                '$addFields': {
+                    'total_pay': {
+                        '$sum': {
+                            '$ifNull': [
+                                '$trade_items.pay', 0
+                            ]
+                        }
+                    },
+                    'total_receive': {
+                        '$sum': {
+                            '$ifNull': [
+                                '$trade_items.receive', 0
+                            ]
+                        }
+                    }
+                }
+            }, {
+                '$addFields': {
+                    'total_cars_net': {
+                        '$subtract': [
+                            '$total_receive', '$total_pay'
+                        ]
+                    }
+                }
+            }, {
+                '$group': {
+                    '_id': None,
+                    'total_cars_net': {
+                        '$sum': '$total_cars_net'
+                    }
+                }
+            }, {
+                '$lookup': {
+                    'from': 'all_capitals',
+                    'let': {
+                        'companyId': company_id
+                    },
+                    'pipeline': [
+                        {
+                            '$match': {
+                                '$expr': {
+                                    '$eq': [
+                                        '$company_id', '$$companyId'
+                                    ]
+                                }
+                            }
+                        }, {
+                            '$group': {
+                                '_id': None,
+                                'total_capitals_pay': {
+                                    '$sum': '$pay'
+                                },
+                                'total_capitals_receive': {
+                                    '$sum': '$receive'
+                                }
+                            }
+                        }, {
+                            '$addFields': {
+                                'total_capitals_net': {
+                                    '$subtract': [
+                                        '$total_capitals_receive', '$total_capitals_pay'
+                                    ]
+                                }
+                            }
+                        }
+                    ],
+                    'as': 'capitals'
+                }
+            }, {
+                '$addFields': {
+                    'total_capitals_net': {
+                        '$ifNull': [
+                            {
+                                '$arrayElemAt': [
+                                    '$capitals.total_capitals_net', 0
+                                ]
+                            }, 0
+                        ]
+                    }
+                }
+            }, {
+                '$lookup': {
+                    'from': 'all_outstanding',
+                    'let': {
+                        'companyId': company_id
+                    },
+                    'pipeline': [
+                        {
+                            '$match': {
+                                '$expr': {
+                                    '$eq': [
+                                        '$company_id', '$$companyId'
+                                    ]
+                                }
+                            }
+                        }, {
+                            '$group': {
+                                '_id': None,
+                                'total_outstanding_pay': {
+                                    '$sum': '$pay'
+                                },
+                                'total_outstanding_receive': {
+                                    '$sum': '$receive'
+                                }
+                            }
+                        }, {
+                            '$addFields': {
+                                'total_outstanding_net': {
+                                    '$subtract': [
+                                        '$total_outstanding_receive', '$total_outstanding_pay'
+                                    ]
+                                }
+                            }
+                        }
+                    ],
+                    'as': 'outstanding'
+                }
+            }, {
+                '$lookup': {
+                    'from': 'all_general_expenses',
+                    'let': {
+                        'companyId': company_id
+                    },
+                    'pipeline': [
+                        {
+                            '$match': {
+                                '$expr': {
+                                    '$eq': [
+                                        '$company_id', '$$companyId'
+                                    ]
+                                }
+                            }
+                        }, {
+                            '$group': {
+                                '_id': None,
+                                'total_expenses_pay': {
+                                    '$sum': '$pay'
+                                },
+                                'total_expenses_receive': {
+                                    '$sum': '$receive'
+                                }
+                            }
+                        }, {
+                            '$addFields': {
+                                'total_expenses_net': {
+                                    '$subtract': [
+                                        '$total_expenses_receive', '$total_expenses_pay'
+                                    ]
+                                }
+                            }
+                        }
+                    ],
+                    'as': 'expenses'
+                }
+            }, {
+                '$addFields': {
+                    'total_capitals_net': {
+                        '$ifNull': [
+                            {
+                                '$arrayElemAt': [
+                                    '$capitals.total_capitals_net', 0
+                                ]
+                            }, 0
+                        ]
+                    },
+                    'total_outstanding_net': {
+                        '$ifNull': [
+                            {
+                                '$arrayElemAt': [
+                                    '$outstanding.total_outstanding_net', 0
+                                ]
+                            }, 0
+                        ]
+                    },
+                    'total_expenses_net': {
+                        '$ifNull': [
+                            {
+                                '$arrayElemAt': [
+                                    '$expenses.total_expenses_net', 0
+                                ]
+                            }, 0
+                        ]
+                    }
+                }
+            }, {
+                '$addFields': {
+                    'final_net': {
+                        '$add': [
+                            '$total_cars_net', '$total_capitals_net', '$total_outstanding_net', '$total_expenses_net'
+                        ]
+                    }
+                }
+            }, {
+                '$project': {
+                    '_id': 0,
+                    'total_cars_net': 1,
+                    'total_capitals_net': 1,
+                    'total_outstanding_net': 1,
+                    'total_expenses_net': 1,
+                    'final_net': 1
+                }
+            }
+        ]
+        cursor = await all_trades_collection.aggregate(cash_on_hand_pipeline)
+        result = await cursor.next()
+        return {"totals": result}
 
     except PyMongoError as e:
         print(e)
