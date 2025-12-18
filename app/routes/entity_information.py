@@ -399,6 +399,7 @@ pipeline: list[Dict[str, Any]] = [
         '$project': {
             '_id': 1,
             'entity_name': 1,
+            'warranty_days': 1,
             'entity_code': 1,
             'entity_status': 1,
             'trn': 1,
@@ -461,7 +462,7 @@ async def get_all_customers(data: dict = Depends(security.get_current_user)):
             "$match": {
                 "company_id": company_id,
                 "entity_code": "Customer",
-                "status":True
+                "status": True
             }
         })
         cursor = await entity_information_collection.aggregate(new_pipeline)
@@ -481,7 +482,7 @@ async def get_all_vendors(data: dict = Depends(security.get_current_user)):
             "$match": {
                 "company_id": company_id,
                 "entity_code": "Vendor",
-                "status":True
+                "status": True
             }
         })
         cursor = await entity_information_collection.aggregate(new_pipeline)
@@ -491,11 +492,13 @@ async def get_all_vendors(data: dict = Depends(security.get_current_user)):
     except Exception as e:
         raise e
 
+
 @router.post("/add_new_entities")
 async def add_new_entity(
         entity_name: str = Form(None),
         entity_code: str = Form(None),
         credit_limit: float = Form(None),
+        warranty_days: int = Form(None),
         salesman_id: str = Form(None),
         entity_status: str = Form(None),
         group_name: str = Form(None),
@@ -541,6 +544,7 @@ async def add_new_entity(
             "entity_picture": entity_picture,
             "entity_picture_public_id": entity_picture_public_id,
             "entity_code": entity_code.split(","),
+            "warranty_days": warranty_days if warranty_days else 0,
             "credit_limit": credit_limit if credit_limit else 0,
             "salesman_id": ObjectId(salesman_id) if salesman_id else None,
             "entity_status": entity_status,
@@ -574,6 +578,7 @@ async def add_new_entity(
 async def update_entity(entity_id: str, entity_name: str = Form(None),
                         entity_code: str = Form(None),
                         credit_limit: float = Form(None),
+                        warranty_days: int = Form(None),
                         salesman_id: str = Form(None),
                         entity_status: str = Form(None),
                         group_name: str = Form(None),
@@ -590,6 +595,7 @@ async def update_entity(entity_id: str, entity_name: str = Form(None),
             "entity_name": entity_name,
             "entity_code": entity_code.split(","),
             "credit_limit": credit_limit or 0,
+            "warranty_days": warranty_days or 0,
             "salesman_id": ObjectId(salesman_id) if salesman_id else None,
             "entity_status": entity_status,
             "group_name": group_name,
@@ -673,5 +679,3 @@ async def change_entity_status(entity_id: str, status: bool = Body(None), _: dic
         })
     except Exception as error:
         raise HTTPException(status_code=500, detail=str(error))
-
-
