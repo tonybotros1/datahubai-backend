@@ -16,6 +16,7 @@ refresh_tokens_collection = get_collection("refresh_tokens")
 def serializer(user: dict) -> dict:
     user["_id"] = str(user["_id"])
     user["roles"] = [str(r) for r in user.get("roles", [])]
+    user["branches"] = [str(r) for r in user.get("branches", [])]
     for key, value in user.items():
         if isinstance(value, datetime):
             user[key] = value.isoformat()
@@ -27,6 +28,7 @@ class UserCreate(BaseModel):
     email: Optional[EmailStr]
     password: Optional[str]
     roles: Optional[List[str]]
+    branches: Optional[List[str]]
     expiry_date: Optional[datetime]
 
 
@@ -36,6 +38,7 @@ class UserUpdate(BaseModel):
     email: Optional[EmailStr] = None
     password: Optional[str] = None
     roles: Optional[List[str]] = None
+    branches: Optional[List[str]] = None
     expiry_date: Optional[datetime] = None
 
 
@@ -47,6 +50,7 @@ async def get_all_users(data: dict = Depends(security.get_current_user)):
             "user_name": 1,
             "email": 1,
             "roles": 1,
+            "branches": 1,
             "status": 1,
             "expiry_date": 1,
             "createdAt": 1,
@@ -59,7 +63,7 @@ async def get_all_users(data: dict = Depends(security.get_current_user)):
 
 
 from bson import ObjectId, errors
-from fastapi import  Depends, HTTPException
+from fastapi import Depends, HTTPException
 
 
 @router.post("/add_new_user")
@@ -80,6 +84,7 @@ async def add_new_user(user: UserCreate, data: dict = Depends(security.get_curre
 
         # Convert roles to ObjectId
         roles_list = [ObjectId(role) for role in user.roles] if user.roles else []
+        branches_list = [ObjectId(branch) for branch in user.branches] if user.branches else []
 
         # Hash password
         password_hash = security.pwd_ctx.hash(user.password) if user.password else None
@@ -90,6 +95,7 @@ async def add_new_user(user: UserCreate, data: dict = Depends(security.get_curre
             "email": user.email,
             "password_hash": password_hash,
             "roles": roles_list,
+            "branches": branches_list,
             "expiry_date": user.expiry_date,
             "status": True,
             "createdAt": security.now_utc(),
@@ -146,6 +152,8 @@ async def update_user(
         # Convert roles to ObjectId
         if "roles" in user_data:
             user_data["roles"] = [ObjectId(role) for role in user_data["roles"]]
+        if "branches" in user_data:
+            user_data["branches"] = [ObjectId(branch) for branch in user_data["branches"]]
 
         user_data["updatedAt"] = security.now_utc()
 
@@ -158,6 +166,7 @@ async def update_user(
                 "user_name": 1,
                 "email": 1,
                 "roles": 1,
+                "branches": 1,
                 "status": 1,
                 "expiry_date": 1,
                 "createdAt": 1,
