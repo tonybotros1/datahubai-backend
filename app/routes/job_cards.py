@@ -105,6 +105,7 @@ class JobCardSearch(BaseModel):
     lpo: Optional[str] = None
     customer_name: Optional[PyObjectId] = None
     status: Optional[str] = None
+    type: Optional[str] = None
     from_date: Optional[datetime] = None
     to_date: Optional[datetime] = None
     all: Optional[bool] = False
@@ -1025,6 +1026,15 @@ async def search_engine_for_job_cards(filter_jobs: JobCardSearch, data: dict = D
         if filter_jobs.plate_number:
             # match_stage["plate_number"] = {"$regex": filter_jobs.plate_number, "$options": "i"}
             match_stage["plate_number"] = filter_jobs.plate_number
+        if filter_jobs.type:
+            if filter_jobs.type == 'Sales':
+                match_stage["is_sales"] = True
+            else:  # Jobs
+                match_stage["$or"] = [
+                    {"is_sales": False},
+                    {"is_sales": {"$exists": False}},
+                    {"is_sales": None}
+                ]
         if filter_jobs.vin:
             match_stage["vehicle_identification_number"] = {"$regex": filter_jobs.vin, "$options": "i"}
         if filter_jobs.lpo:
@@ -1036,6 +1046,7 @@ async def search_engine_for_job_cards(filter_jobs: JobCardSearch, data: dict = D
                 match_stage["job_status_1"] = filter_jobs.status
             else:
                 match_stage["job_status_2"] = filter_jobs.status
+        print(match_stage)
 
         search_pipeline.append({"$match": match_stage})
 
@@ -1236,7 +1247,13 @@ async def search_engine_for_job_cards(filter_jobs: JobCardSearch, data: dict = D
         }, )
 
         now = datetime.now(timezone.utc)
-        date_field = "job_date"
+        if filter_jobs.status == 'Posted':
+            date_field = "invoice_date"
+        elif filter_jobs.status == 'Cancelled':
+            date_field = "job_cancellation_date"
+        else:
+            date_field = "job_date"
+
         date_filter = {}
         if filter_jobs.today:
             start = datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
