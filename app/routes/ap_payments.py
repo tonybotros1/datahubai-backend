@@ -830,7 +830,7 @@ async def search_engine_for_ap_payments(
             grand_totals = totals[0] if totals else {"grand_given": 0}
         else:
             payments = []
-            grand_totals = {"grand_given": 0}
+            grand_totals = {"grand_given": 0} # fixed
 
         return {
             "payments": payments,
