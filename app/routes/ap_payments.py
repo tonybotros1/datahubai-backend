@@ -827,10 +827,10 @@ async def search_engine_for_ap_payments(
             data = result[0]
             payments = [serializer(r) for r in data.get("payments", [])]
             totals = data.get("grand_totals", [])
-            grand_totals = totals[0] if totals else {"grand_received": 0}
+            grand_totals = totals[0] if totals else {"grand_given": 0}
         else:
             payments = []
-            grand_totals = {"grand_received": 0}
+            grand_totals = {"grand_given": 0}
 
         return {
             "payments": payments,
