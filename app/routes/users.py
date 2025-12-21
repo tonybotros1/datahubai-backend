@@ -17,6 +17,7 @@ def serializer(user: dict) -> dict:
     user["_id"] = str(user["_id"])
     user["roles"] = [str(r) for r in user.get("roles", [])]
     user["branches"] = [str(r) for r in user.get("branches", [])]
+    if "primary_branch" in user: user["primary_branch"] = str(user['primary_branch'])
     for key, value in user.items():
         if isinstance(value, datetime):
             user[key] = value.isoformat()
@@ -29,6 +30,7 @@ class UserCreate(BaseModel):
     password: Optional[str]
     roles: Optional[List[str]]
     branches: Optional[List[str]]
+    primary_branch: Optional[str] = None
     expiry_date: Optional[datetime]
 
 
@@ -39,6 +41,7 @@ class UserUpdate(BaseModel):
     password: Optional[str] = None
     roles: Optional[List[str]] = None
     branches: Optional[List[str]] = None
+    primary_branch: Optional[str] = None
     expiry_date: Optional[datetime] = None
 
 
@@ -51,6 +54,7 @@ async def get_all_users(data: dict = Depends(security.get_current_user)):
             "email": 1,
             "roles": 1,
             "branches": 1,
+            "primary_branch": 1,
             "status": 1,
             "expiry_date": 1,
             "createdAt": 1,
@@ -96,6 +100,7 @@ async def add_new_user(user: UserCreate, data: dict = Depends(security.get_curre
             "password_hash": password_hash,
             "roles": roles_list,
             "branches": branches_list,
+            "primary_branch": ObjectId(user.primary_branch) if user.primary_branch else None,
             "expiry_date": user.expiry_date,
             "status": True,
             "createdAt": security.now_utc(),
@@ -154,6 +159,8 @@ async def update_user(
             user_data["roles"] = [ObjectId(role) for role in user_data["roles"]]
         if "branches" in user_data:
             user_data["branches"] = [ObjectId(branch) for branch in user_data["branches"]]
+        if "primary_branch" in user_data and user_data["primary_branch"]:
+            user_data["primary_branch"] = ObjectId(user_data["primary_branch"])
 
         user_data["updatedAt"] = security.now_utc()
 
@@ -167,6 +174,7 @@ async def update_user(
                 "email": 1,
                 "roles": 1,
                 "branches": 1,
+                "primary_branch": 1,
                 "status": 1,
                 "expiry_date": 1,
                 "createdAt": 1,

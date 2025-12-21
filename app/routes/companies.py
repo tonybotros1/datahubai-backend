@@ -486,10 +486,60 @@ async def change_user_status(company_id: str, company_status: bool = Body(None),
 async def get_current_company_details(data: dict = Depends(security.get_current_user)):
     try:
         company_id = ObjectId(data.get("company_id"))
+        user_id = ObjectId(data.get("sub"))
         my_pipeline = [
             {
                 '$match': {
                     '_id': company_id
+                }
+            }, {
+                '$lookup': {
+                    'from': 'sys-users',
+                    'let': {
+                        'current_user_id': user_id
+                    },
+                    'pipeline': [
+                        {
+                            '$match': {
+                                '$expr': {
+                                    '$eq': [
+                                        '$_id', '$$current_user_id'
+                                    ]
+                                }
+                            }
+                        }, {
+                            '$lookup': {
+                                'from': 'branches',
+                                'localField': 'primary_branch',
+                                'foreignField': '_id',
+                                'as': 'branch_details'
+                            }
+                        }, {
+                            '$unwind': {
+                                'path': '$branch_details',
+                                'preserveNullAndEmptyArrays': True
+                            }
+                        }
+                    ],
+                    'as': 'current_user_details'
+                }
+            }, {
+                '$unwind': {
+                    'path': '$current_user_details',
+                    'preserveNullAndEmptyArrays': True
+                }
+            }, {
+                '$addFields': {
+                    'current_user_branch_name': {
+                        '$ifNull': [
+                            '$current_user_details.branch_details.name', None
+                        ]
+                    },
+                    'current_user_branch_id': {
+                        '$ifNull': [
+                            '$current_user_details.branch_details._id', None
+                        ]
+                    }
                 }
             }, {
                 '$lookup': {
@@ -658,7 +708,8 @@ async def get_current_company_details(data: dict = Depends(security.get_current_
                     'user_details': 0,
                     'country_details': 0,
                     'currency_details': 0,
-                    'city_details': 0
+                    'city_details': 0,
+                    'current_user_details': 0
                 }
             }
         ]
