@@ -1064,7 +1064,7 @@ async def search_engine_for_job_cards(filter_jobs: JobCardSearch, data: dict = D
             match_stage["plate_number"] = filter_jobs.plate_number
         if filter_jobs.type:
             if filter_jobs.type == 'SALE':
-                match_stage["type"] = 'SALE'
+                match_stage["type"] = 'SALES'
             else:
                 match_stage["type"] = 'JOB'
 
