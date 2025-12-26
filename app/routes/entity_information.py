@@ -4,6 +4,9 @@ from bson import ObjectId
 from fastapi import APIRouter, Depends, HTTPException, Body, Form, UploadFile, File
 from pydantic import BaseModel
 import json
+
+from starlette.responses import StreamingResponse
+
 from app.core import security
 from app.database import get_collection
 from datetime import datetime
@@ -499,24 +502,60 @@ async def get_all_entities(data: dict = Depends(security.get_current_user)):
         raise e
 
 
+# @router.get("/get_all_customers")
+# async def get_all_customers(data: dict = Depends(security.get_current_user)):
+#     try:
+#         company_id = ObjectId(data.get("company_id"))
+#         new_pipeline = copy.deepcopy(customer_vendor_pipeline)
+#         new_pipeline.insert(0, {
+#             "$match": {
+#                 "company_id": company_id,
+#                 "entity_code": "Customer",
+#                 "status": True
+#             }
+#         })
+#         cursor = await entity_information_collection.aggregate(new_pipeline)
+#         print("======================= done =======================")
+#         results = await cursor.to_list(None)
+#         return {"customers": results}
+#
+#     except Exception as e:
+#         raise e
+
+
 @router.get("/get_all_customers")
 async def get_all_customers(data: dict = Depends(security.get_current_user)):
-    try:
-        company_id = ObjectId(data.get("company_id"))
-        new_pipeline = copy.deepcopy(customer_vendor_pipeline)
-        new_pipeline.insert(0, {
-            "$match": {
-                "company_id": company_id,
-                "entity_code": "Customer",
-                "status": True
-            }
-        })
-        cursor = await entity_information_collection.aggregate(new_pipeline)
-        results = await cursor.to_list(None)
-        return {"customers": results}
+    company_id = ObjectId(data.get("company_id"))
 
-    except Exception as e:
-        raise e
+    # 1. Prepare pipeline
+    new_pipeline = [{
+        "$match": {
+            "company_id": company_id,
+            "entity_code": "Customer",
+            "status": True
+        }
+    }] + customer_vendor_pipeline
+
+    # 2. Define an async generator to yield data
+    async def event_generator():
+        cursor =await entity_information_collection.aggregate(new_pipeline)
+
+        yield '{"customers": ['  # Start JSON array
+
+        first = True
+        async for doc in cursor:
+            if not first:
+                yield ","
+
+            # Use json_util to handle ObjectIds or manually convert
+            doc["_id"] = str(doc["_id"])
+            yield json.dumps(doc)
+            first = False
+
+        yield "]}"  # Close JSON array
+
+    # 3. Return a StreamingResponse
+    return StreamingResponse(event_generator(), media_type="application/json")
 
 
 @router.get("/get_all_vendors")
