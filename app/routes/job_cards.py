@@ -1081,10 +1081,8 @@ async def search_engine_for_job_cards(filter_jobs: JobCardSearch, data: dict = D
                 match_stage["job_status_2"] = filter_jobs.status
             else:
                 match_stage["job_status_2"] = filter_jobs.status
-
         search_pipeline.append({"$match": match_stage})
         search_pipeline.append({"$sort": {date_field: -1}})
-
         lookups = [
             ("car_brand", "all_brands"),
             ("car_model", "all_brand_models"),
