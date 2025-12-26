@@ -45,7 +45,7 @@ class InvoiceItems(BaseModel):
 
 class JobCard(BaseModel):
     label: Optional[str] = None
-    is_sales: Optional[bool] = None
+    type: Optional[str] = None
     job_status_1: Optional[str] = None
     job_status_2: Optional[str] = None
     car_brand_logo: Optional[str] = None
@@ -1011,6 +1011,42 @@ async def search_engine_for_job_cards(filter_jobs: JobCardSearch, data: dict = D
         search_pipeline: list[dict] = []
         match_stage = {}
 
+        now = datetime.now(timezone.utc)
+
+        if filter_jobs.status == 'Posted':
+            date_field = "invoice_date"
+
+        elif filter_jobs.status == 'Cancelled':
+            date_field = "job_cancellation_date"
+        else:
+            date_field = "job_date"
+
+        date_filter = {}
+        if filter_jobs.today:
+            start = datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
+            end = start + timedelta(days=1)
+            date_filter[date_field] = {"$gte": start, "$lt": end}
+
+        elif filter_jobs.this_month:
+            start = datetime(now.year, now.month, 1, tzinfo=timezone.utc)
+            end = datetime(now.year + (now.month // 12), ((now.month % 12) + 1), 1)
+            date_filter[date_field] = {"$gte": start, "$lt": end}
+
+        elif filter_jobs.this_year:
+            start = datetime(now.year, 1, 1, tzinfo=timezone.utc)
+            end = datetime(now.year + 1, 1, 1)
+            date_filter[date_field] = {"$gte": start, "$lt": end}
+
+        elif filter_jobs.from_date or filter_jobs.to_date:
+            date_filter[date_field] = {}
+            if filter_jobs.from_date:
+                date_filter[date_field]["$gte"] = filter_jobs.from_date
+            if filter_jobs.to_date:
+                date_filter[date_field]["$lte"] = filter_jobs.to_date
+
+        if date_filter:
+            search_pipeline.append({"$match": date_filter})
+
         if company_id:
             match_stage["company_id"] = company_id
         if filter_jobs.car_brand:
@@ -1027,14 +1063,11 @@ async def search_engine_for_job_cards(filter_jobs: JobCardSearch, data: dict = D
             # match_stage["plate_number"] = {"$regex": filter_jobs.plate_number, "$options": "i"}
             match_stage["plate_number"] = filter_jobs.plate_number
         if filter_jobs.type:
-            if filter_jobs.type == 'Sales':
-                match_stage["is_sales"] = True
-            else:  # Jobs
-                match_stage["$or"] = [
-                    {"is_sales": False},
-                    {"is_sales": {"$exists": False}},
-                    {"is_sales": None}
-                ]
+            if filter_jobs.type == 'SALE':
+                match_stage["type"] = 'SALE'
+            else:
+                match_stage["type"] = 'JOB'
+
         if filter_jobs.vin:
             match_stage["vehicle_identification_number"] = {"$regex": filter_jobs.vin, "$options": "i"}
         if filter_jobs.lpo:
@@ -1044,11 +1077,13 @@ async def search_engine_for_job_cards(filter_jobs: JobCardSearch, data: dict = D
         if filter_jobs.status:
             if filter_jobs.status == 'Posted':
                 match_stage["job_status_1"] = filter_jobs.status
+            elif filter_jobs.status == 'New':
+                match_stage["job_status_1"] = filter_jobs.status
             else:
                 match_stage["job_status_2"] = filter_jobs.status
-        print(match_stage)
 
         search_pipeline.append({"$match": match_stage})
+        search_pipeline.append({"$sort": {date_field: -1}})
 
         lookups = [
             ("car_brand", "all_brands"),
@@ -1246,44 +1281,6 @@ async def search_engine_for_job_cards(filter_jobs: JobCardSearch, data: dict = D
             }
         }, )
 
-        now = datetime.now(timezone.utc)
-        if filter_jobs.status == 'Posted':
-            date_field = "invoice_date"
-        elif filter_jobs.status == 'Cancelled':
-            date_field = "job_cancellation_date"
-        else:
-            date_field = "job_date"
-
-        date_filter = {}
-        if filter_jobs.today:
-            start = datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
-            end = start + timedelta(days=1)
-            print(start, end)
-            date_filter[date_field] = {"$gte": start, "$lt": end}
-
-        elif filter_jobs.this_month:
-            start = datetime(now.year, now.month, 1, tzinfo=timezone.utc)
-            end = datetime(now.year + (now.month // 12), ((now.month % 12) + 1), 1)
-            date_filter[date_field] = {"$gte": start, "$lt": end}
-
-        elif filter_jobs.this_year:
-            start = datetime(now.year, 1, 1, tzinfo=timezone.utc)
-            end = datetime(now.year + 1, 1, 1)
-            date_filter[date_field] = {"$gte": start, "$lt": end}
-
-        elif filter_jobs.from_date or filter_jobs.to_date:
-            date_filter[date_field] = {}
-            if filter_jobs.from_date:
-                print("from date")
-                date_filter[date_field]["$gte"] = filter_jobs.from_date
-            if filter_jobs.to_date:
-                print("to date")
-                date_filter[date_field]["$lte"] = filter_jobs.to_date
-            print(date_filter)
-
-        if date_filter:
-            search_pipeline.append({"$match": date_filter})
-
         search_pipeline.append({
             '$addFields': {
                 'total_amount': {
@@ -1437,7 +1434,6 @@ async def search_engine_for_job_cards(filter_jobs: JobCardSearch, data: dict = D
         search_pipeline.append({
             "$facet": {
                 "job_cards": [
-                    {"$sort": {"job_number": -1}},
                     {"$project": {
                         'car_brand_details': 0,
                         'car_model_details': 0,
@@ -1495,6 +1491,7 @@ async def search_engine_for_job_cards(filter_jobs: JobCardSearch, data: dict = D
     except HTTPException:
         raise
     except Exception as e:
+        print(e)
         raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
 
 

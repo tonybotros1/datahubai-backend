@@ -54,6 +54,8 @@ async def add_new_salesman(sale_man: SaleManModel, data: dict = Depends(security
             "type": "salesman_added",
             "data": serialized
         })
+        return {"message": "Salesman added successfully!", "salesman": serialized}
+
 
     except Exception as e:
         raise e

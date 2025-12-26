@@ -1,4 +1,6 @@
 import logging
+from typing import Optional
+
 from bson import ObjectId
 from fastapi import APIRouter, HTTPException, Form, File, UploadFile, Body, Depends
 from app.core import security
@@ -42,10 +44,10 @@ async def get_countries(_: dict = Depends(security.get_current_user)):
 
 # this is to add new country
 @router.post("/add_new_country")
-async def add_new_country(name: str = Form(...), code: str = Form(...), calling_code: str = Form(...),
-                          currency_name: str = Form(...), currency_code: str = Form(...),
-                          vat: float = Form(...),
-                          flag: UploadFile = File(...), _: dict = Depends(security.get_current_user)):
+async def add_new_country(name: str = Form(...), code: Optional[str] = Form(...), calling_code: Optional[str] = Form(...),
+                          currency_name: Optional[str] = Form(...), currency_code: Optional[str] = Form(...),
+                          vat: Optional[float] = Form(...),
+                          flag: Optional[UploadFile] = File(...), _: dict = Depends(security.get_current_user)):
     try:
         result = await upload_images.upload_image(flag, "countries")
         country_dict = {

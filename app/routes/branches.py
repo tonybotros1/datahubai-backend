@@ -1,3 +1,5 @@
+from typing import Optional
+
 from bson import ObjectId
 from fastapi import APIRouter, Body, HTTPException, Depends
 from pymongo import ReturnDocument
@@ -8,6 +10,7 @@ from app.websocket_config import manager
 
 router = APIRouter()
 branches_collection = get_collection("branches")
+users_collection = get_collection("sys-users")
 
 
 def serializer(doc: dict) -> dict:
@@ -23,7 +26,6 @@ def serializer(doc: dict) -> dict:
         return value
 
     return {k: convert(v) for k, v in doc.items()}
-
 
 
 async def get_branch_details(branch_id: ObjectId):
@@ -144,8 +146,8 @@ async def get_all_branches(data: dict = Depends(security.get_current_user)):
 
 
 @router.post("/add_new_branch")
-async def add_new_branch(name: str = Body(None), code: str = Body(None), line: str = Body(None),
-                         country_id: str = Body(None), city_id: str = Body(None),
+async def add_new_branch(name: str = Body(None), code: Optional[str] = Body(None), line: Optional[str] = Body(None),
+                         country_id: Optional[str] = Body(None), city_id: Optional[str] = Body(None),
                          data: dict = Depends(security.get_current_user)):
     try:
         company_id = ObjectId(data.get("company_id"))
@@ -167,6 +169,8 @@ async def add_new_branch(name: str = Body(None), code: str = Body(None), line: s
             "type": "branch_added",
             "data": serialized
         })
+        return {"message": "Branch added successfully!", "branch": serialized}
+
 
     except Exception as e:
         return {"message": str(e)}
@@ -240,6 +244,38 @@ async def get_all_branches_by_status(data: dict = Depends(security.get_current_u
         results = await branches_collection.find({"status": True, "company_id": company_id}).sort("name", 1).to_list(
             None)
         return {"branches": [serializer(result) for result in results]}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/get_all_customer_branches")
+async def get_all_customer_branches(data: dict = Depends(security.get_current_user)):
+    try:
+        user_id = ObjectId(data.get("sub"))
+        customer_branches = [
+            {
+                '$match': {
+                    '_id': user_id
+                }
+            }, {
+                '$lookup': {
+                    'from': 'branches',
+                    'localField': 'branches',
+                    'foreignField': '_id',
+                    'as': 'customer_branches'
+                }
+            }, {
+                '$project': {
+                    'customer_branches': 1,
+                    "_id": 0,
+                }
+            }
+        ]
+        cursor = await  users_collection.aggregate(customer_branches)
+        result = await cursor.next()
+        return {"customer_branches": [serializer(r) for r in result['customer_branches']]}
     except HTTPException:
         raise
     except Exception as e:

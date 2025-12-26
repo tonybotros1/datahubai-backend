@@ -1,3 +1,4 @@
+pandas
 starlette
 pyjwt
 passlib

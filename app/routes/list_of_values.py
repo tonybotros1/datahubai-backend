@@ -268,7 +268,7 @@ async def get_list_values(list_id: str, mastered_by_list_id: Optional[str] = Que
 @router.post("/add_new_value/{list_id}")
 async def add_new_value(list_id: str = Path(...),
                         name: str = Body(None),
-                        mastered_by_id: str = Body(None),
+                        mastered_by_id: Optional[str] = Body(None),
                         _: dict = Depends(security.get_current_user)
                         ):
     try:

@@ -60,6 +60,8 @@ async def add_new_invoice_item(invoice: InvoiceItem, data: dict = Depends(securi
             "type": "invoice_item_added",
             "data": serialized
         })
+        return {"message": "invoice added successfully!", "invoice": serialized}
+
 
     except HTTPException:
         raise

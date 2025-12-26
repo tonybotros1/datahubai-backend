@@ -1,9 +1,9 @@
-from bson import ObjectId
-from fastapi import APIRouter, HTTPException, Form, File, UploadFile, Body, Depends
+from typing import Optional
+
+from fastapi import APIRouter, Body, Depends
 
 from app.core import security
 from app.database import get_collection
-from datetime import datetime, timezone
 from app.widgets import upload_images
 from app.websocket_config import manager
 from pymongo import ReturnDocument
@@ -45,8 +45,8 @@ from datetime import datetime, timezone
 
 @router.post("/add_new_brand")
 async def create_brand(
-        name: str = Form(None),  # name can be null
-        logo: UploadFile = File(None),  # logo can be null
+        name: str = Form(None),
+        logo: Optional[UploadFile] = File(None),
         _: dict = Depends(security.get_current_user)
 ):
     try:
@@ -272,7 +272,8 @@ async def get_brands_by_status(_: dict = Depends(security.get_current_user)):
 @router.get("/get_models_by_status/{brand_id}")
 async def get_models_by_status(brand_id: str, _: dict = Depends(security.get_current_user)):
     try:
-        models = await models_collection.find({"brand_id": ObjectId(brand_id), "status": True}).sort("name", 1).to_list()
+        models = await models_collection.find({"brand_id": ObjectId(brand_id), "status": True}).sort("name",
+                                                                                                     1).to_list()
         return {"models": [model_serializer(m) for m in models]}
     except Exception as e:
         return {"error": str(e)}
