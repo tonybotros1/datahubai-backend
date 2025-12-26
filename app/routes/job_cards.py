@@ -1078,7 +1078,7 @@ async def search_engine_for_job_cards(filter_jobs: JobCardSearch, data: dict = D
             if filter_jobs.status == 'Posted':
                 match_stage["job_status_1"] = filter_jobs.status
             elif filter_jobs.status == 'New':
-                match_stage["job_status_1"] = filter_jobs.status
+                match_stage["job_status_2"] = filter_jobs.status
             else:
                 match_stage["job_status_2"] = filter_jobs.status
 
