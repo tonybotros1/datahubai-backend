@@ -1008,7 +1008,7 @@ async def get_job_card_status(job_id: str, _: dict = Depends(security.get_curren
 async def search_engine_for_job_cards(filter_jobs: JobCardSearch, data: dict = Depends(security.get_current_user)):
     try:
         company_id = ObjectId(data.get("company_id"))
-        search_pipeline: list[dict] = []
+        base_search_pipeline: list[dict] = []
         match_stage = {}
 
         now = datetime.now(timezone.utc)
@@ -1045,7 +1045,7 @@ async def search_engine_for_job_cards(filter_jobs: JobCardSearch, data: dict = D
                 date_filter[date_field]["$lte"] = filter_jobs.to_date
 
         if date_filter:
-            search_pipeline.append({"$match": date_filter})
+            base_search_pipeline.append({"$match": date_filter})
 
         if company_id:
             match_stage["company_id"] = company_id
@@ -1081,8 +1081,8 @@ async def search_engine_for_job_cards(filter_jobs: JobCardSearch, data: dict = D
                 match_stage["job_status_2"] = filter_jobs.status
             else:
                 match_stage["job_status_2"] = filter_jobs.status
-        search_pipeline.append({"$match": match_stage})
-        search_pipeline.append({"$sort": {date_field: -1}})
+        base_search_pipeline.append({"$match": match_stage})
+        base_search_pipeline.append({"$sort": {date_field: -1}})
         lookups = [
             ("car_brand", "all_brands"),
             ("car_model", "all_brand_models"),
@@ -1095,7 +1095,7 @@ async def search_engine_for_job_cards(filter_jobs: JobCardSearch, data: dict = D
         ]
 
         for local_field, collection in lookups:
-            search_pipeline.append({
+            base_search_pipeline.append({
                 "$lookup": {
                     "from": collection,
                     "let": {"field_id": f"${local_field}"},
@@ -1106,9 +1106,8 @@ async def search_engine_for_job_cards(filter_jobs: JobCardSearch, data: dict = D
                     "as": f"{local_field}_details"
                 }
             })
-            search_pipeline.append({"$unwind": {"path": f"${local_field}_details", "preserveNullAndEmptyArrays": True}})
 
-        search_pipeline.append({
+        base_search_pipeline.append({
             "$lookup": {
                 "from": "entity_information",
                 "localField": "customer",
@@ -1116,9 +1115,8 @@ async def search_engine_for_job_cards(filter_jobs: JobCardSearch, data: dict = D
                 "as": "customer_details"
             }
         })
-        search_pipeline.append({"$unwind": {"path": "$customer_details", "preserveNullAndEmptyArrays": True}})
 
-        search_pipeline.append({
+        base_search_pipeline.append({
             '$lookup': {
                 'from': 'quotation_cards',
                 'let': {
@@ -1143,15 +1141,7 @@ async def search_engine_for_job_cards(filter_jobs: JobCardSearch, data: dict = D
                 'as': 'quotation_details'
             }
         })
-
-        search_pipeline.append({
-            '$unwind': {
-                'path': '$quotation_details',
-                'preserveNullAndEmptyArrays': True
-            }
-        })
-
-        search_pipeline.append({
+        base_search_pipeline.append({
             '$lookup': {
                 'from': 'currencies',
                 'let': {
@@ -1177,14 +1167,15 @@ async def search_engine_for_job_cards(filter_jobs: JobCardSearch, data: dict = D
             }
         }, )
 
-        search_pipeline.append({
-            '$unwind': {
-                'path': '$currency_details',
-                'preserveNullAndEmptyArrays': True
+        base_search_pipeline.append({
+            '$set': {
+                'currency_details': {
+                    '$arrayElemAt': ['$currency_details', 0]
+                }
             }
-        }, )
+        })
 
-        search_pipeline.append({
+        base_search_pipeline.append({
             '$lookup': {
                 'from': 'all_countries',
                 'let': {
@@ -1210,14 +1201,7 @@ async def search_engine_for_job_cards(filter_jobs: JobCardSearch, data: dict = D
             }
         }, )
 
-        search_pipeline.append({
-            '$unwind': {
-                'path': '$currency_country_details',
-                'preserveNullAndEmptyArrays': True
-            }
-        })
-
-        search_pipeline.append({
+        base_search_pipeline.append({
             '$lookup': {
                 'from': 'job_cards_invoice_items',
                 'let': {
@@ -1256,16 +1240,12 @@ async def search_engine_for_job_cards(filter_jobs: JobCardSearch, data: dict = D
                             ],
                             'as': 'name_details'
                         }
-                    }, {
-                        '$unwind': {
-                            'path': '$name_details',
-                            'preserveNullAndEmptyArrays': True
-                        }
-                    }, {
+                    },
+                    {
                         '$addFields': {
                             'name_text': {
-                                '$ifNull': [
-                                    '$name_details.name', None
+                                '$arrayElemAt': [
+                                    '$name_details.name', 0
                                 ]
                             }
                         }
@@ -1279,7 +1259,7 @@ async def search_engine_for_job_cards(filter_jobs: JobCardSearch, data: dict = D
             }
         }, )
 
-        search_pipeline.append({
+        base_search_pipeline.append({
             '$addFields': {
                 'total_amount': {
                     '$sum': {
@@ -1323,7 +1303,7 @@ async def search_engine_for_job_cards(filter_jobs: JobCardSearch, data: dict = D
             }
         })
 
-        search_pipeline.append({
+        base_search_pipeline.append({
             '$lookup': {
                 'from': 'all_receipts_invoices',
                 'localField': '_id',
@@ -1331,7 +1311,7 @@ async def search_engine_for_job_cards(filter_jobs: JobCardSearch, data: dict = D
                 'as': 'receipts_invoices_details'
             }
         })
-        search_pipeline.append({
+        base_search_pipeline.append({
             '$addFields': {
                 'paid': {
                     '$sum': {
@@ -1350,7 +1330,7 @@ async def search_engine_for_job_cards(filter_jobs: JobCardSearch, data: dict = D
             }
         })
 
-        search_pipeline.append({
+        base_search_pipeline.append({
             '$addFields': {
                 'final_outstanding': {
                     '$subtract': [
@@ -1359,131 +1339,405 @@ async def search_engine_for_job_cards(filter_jobs: JobCardSearch, data: dict = D
                 }
             }
         })
-
-        search_pipeline.append({
+        base_search_pipeline.append({
             '$addFields': {
                 'car_brand_name': {
-                    '$ifNull': [
-                        '$car_brand_details.name', None
+                    '$arrayElemAt': [
+                        '$car_brand_details.name', 0
                     ]
                 },
                 'car_brand_logo': {
-                    '$ifNull': [
-                        '$car_brand_details.logo', None
+                    '$arrayElemAt': [
+                        '$car_brand_details.logo', 0
                     ]
                 },
                 'car_model_name': {
-                    '$ifNull': [
-                        '$car_model_details.name', None
+                    '$arrayElemAt': [
+                        '$car_model_details.name', 0
                     ]
                 },
                 'country_name': {
-                    '$ifNull': [
-                        '$country_details.name', None
+                    '$arrayElemAt': [
+                        '$country_details.name', 0
                     ]
                 },
                 'city_name': {
-                    '$ifNull': [
-                        '$city_details.name', None
+                    '$arrayElemAt': [
+                        '$city_details.name', 0
                     ]
                 },
                 'color_name': {
-                    '$ifNull': [
-                        '$color_details.name', None
+                    '$arrayElemAt': [
+                        '$color_details.name', 0
                     ]
                 },
                 'engine_type_name': {
-                    '$ifNull': [
-                        '$engine_type_details.name', None
+                    '$arrayElemAt': [
+                        '$engine_type_details.name', 0
                     ]
                 },
                 'customer_name': {
-                    '$ifNull': [
-                        '$customer_details.entity_name', None
+                    '$arrayElemAt': [
+                        '$customer_details.entity_name', 0
                     ]
                 },
                 'salesman_name': {
-                    '$ifNull': [
-                        '$salesman_details.name', None
+                    '$arrayElemAt': [
+                        '$salesman_details.name', 0
                     ]
                 },
                 'branch_name': {
-                    '$ifNull': [
-                        '$branch_details.name', None
+                    '$arrayElemAt': [
+                        '$branch_details.name', 0
                     ]
                 },
                 'currency_code': {
-                    '$ifNull': [
-                        '$currency_country_details.currency_code', None
+                    '$arrayElemAt': [
+                        '$currency_country_details.currency_code', 0
                     ]
                 },
                 'quotation_number': {
-                    '$ifNull': [
-                        '$quotation_details.quotation_number', None
+                    '$arrayElemAt': [
+                        '$quotation_details.quotation_number', 0
                     ]
                 },
                 'quotation_id': {
-                    '$ifNull': [
-                        '$quotation_details._id', None
+                    '$arrayElemAt': [
+                        '$quotation_details._id', 0
                     ]
                 }
             }
         })
-        search_pipeline.append({
-            "$facet": {
-                "job_cards": [
-                    {"$project": {
-                        'car_brand_details': 0,
-                        'car_model_details': 0,
-                        'country_details': 0,
-                        'city_details': 0,
-                        'color_details': 0,
-                        'engine_type_details': 0,
-                        'customer_details': 0,
-                        'salesman_details': 0,
-                        'branch_details': 0,
-                        'currency_details': 0,
-                        'currency_country_details': 0,
-                        'quotation_details': 0
-                    }}
-                ],
-                "grand_totals": [
-                    {
-                        "$group": {
-                            "_id": None,
-                            "grand_total": {"$sum": "$total_amount"},
-                            "grand_vat": {"$sum": "$total_vat"},
-                            "grand_net": {"$sum": "$total_net"},
-                            "grand_paid": {"$sum": "$paid"},
-                            "grand_outstanding": {"$sum": "$final_outstanding"},
-                        }
-                    },
-                    {
-                        "$project": {
-                            "_id": 0
-                        }
-                    }
-                ]
+        # base_search_pipeline.append({
+        #     "$facet": {
+        #         "job_cards": [
+        #             {"$project": {
+        #                 'car_brand_details': 0,
+        #                 'car_model_details': 0,
+        #                 'country_details': 0,
+        #                 'city_details': 0,
+        #                 'color_details': 0,
+        #                 'engine_type_details': 0,
+        #                 'customer_details': 0,
+        #                 'salesman_details': 0,
+        #                 'branch_details': 0,
+        #                 'currency_details': 0,
+        #                 'currency_country_details': 0,
+        #                 'quotation_details': 0
+        #             }}
+        #         ],
+        #         "grand_totals": [
+        #             {
+        #                 "$group": {
+        #                     "_id": None,
+        #                     "grand_total": {"$sum": "$total_amount"},
+        #                     "grand_vat": {"$sum": "$total_vat"},
+        #                     "grand_net": {"$sum": "$total_net"},
+        #                     "grand_paid": {"$sum": "$paid"},
+        #                     "grand_outstanding": {"$sum": "$final_outstanding"},
+        #                 }
+        #             },
+        #             {
+        #                 "$project": {
+        #                     "_id": 0
+        #                 }
+        #             }
+        #         ]
+        #     }
+        # })
+
+        job_cards_pipeline = base_search_pipeline + [
+            {
+                "$project": {
+                    'car_brand_details': 0,
+                    'car_model_details': 0,
+                    'country_details': 0,
+                    'city_details': 0,
+                    'color_details': 0,
+                    'engine_type_details': 0,
+                    'customer_details': 0,
+                    'salesman_details': 0,
+                    'branch_details': 0,
+                    'currency_details': 0,
+                    'currency_country_details': 0,
+                    'quotation_details': 0
+                }
             }
-        })
+        ]
+        #
+        totals_pipeline = base_search_pipeline + [
+            {
+                "$group": {
+                    "_id": None,
+                    "grand_total": {"$sum": "$total_amount"},
+                    "grand_vat": {"$sum": "$total_vat"},
+                    "grand_net": {"$sum": "$total_net"},
+                    "grand_paid": {"$sum": "$paid"},
+                    "grand_outstanding": {"$sum": "$final_outstanding"}
+                }
+            },
+            {
+                "$project": {"_id": 0}
+            }
+        ]
 
-        cursor = await job_cards_collection.aggregate(search_pipeline)
-        result = await cursor.to_list(None)
+        job_cards_cursor =await job_cards_collection.aggregate(job_cards_pipeline)
+        job_cards_raw = await job_cards_cursor.to_list(None)
+        job_cards = [serializer(r) for r in job_cards_raw]
 
-        if result and len(result) > 0:
-            data = result[0]
-            job_cards = [serializer(r) for r in data.get("job_cards", [])]
-            totals = data.get("grand_totals", [])
-            grand_totals = totals[0] if totals else {"grand_total": 0, "grand_vat": 0, "grand_net": 0, "grand_paid": 0,
-                                                     "grand_outstanding": 0}
-        else:
-            job_cards = []
-            grand_totals = {"grand_total": 0, "grand_vat": 0, "grand_net": 0, "grand_paid": 0, "grand_outstanding": 0}
+        # cursor = await job_cards_collection.aggregate(base_search_pipeline)
+        # result = await cursor.to_list(None)
+
+        totals_cursor =await job_cards_collection.aggregate(totals_pipeline)
+        totals_result = await totals_cursor.to_list(1)
+
+        grand_totals = totals_result[0] if totals_result else {
+            "grand_total": 0,
+            "grand_vat": 0,
+            "grand_net": 0,
+            "grand_paid": 0,
+            "grand_outstanding": 0
+        }
+
+        # if result and len(result) > 0:
+        #     data = result[0]
+        #     job_cards = [serializer(r) for r in data.get("job_cards", [])]
+        #     totals = data.get("grand_totals", [])
+        #     grand_totals = totals[0] if totals else {"grand_total": 0, "grand_vat": 0, "grand_net": 0, "grand_paid": 0,
+        #                                              "grand_outstanding": 0}
+        # else:
+        #     job_cards = []
+        #     grand_totals = {"grand_total": 0, "grand_vat": 0, "grand_net": 0, "grand_paid": 0, "grand_outstanding": 0}
 
         return {
             "job_cards": job_cards,
             "grand_totals": grand_totals
         }
+
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(e)
+        raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
+
+
+@router.post("/search_engine_2")
+async def search_engine_2(filter_jobs: JobCardSearch, data: dict = Depends(security.get_current_user)):
+    try:
+        company_id = ObjectId(data.get("company_id"))
+        search_pipeline: list[dict] = []
+        match_stage = {}
+
+        if company_id:
+            match_stage["company_id"] = company_id
+
+        if filter_jobs.status == 'Posted':
+            date_field = "invoice_date"
+        elif filter_jobs.status == 'Cancelled':
+            date_field = "job_cancellation_date"
+        else:
+            date_field = "job_date"
+
+        now = datetime.now(timezone.utc)
+        date_filter = {}
+        if filter_jobs.today:
+            start = datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
+            end = start + timedelta(days=1)
+            date_filter[date_field] = {"$gte": start, "$lt": end}
+
+        elif filter_jobs.this_month:
+            start = datetime(now.year, now.month, 1, tzinfo=timezone.utc)
+            end = datetime(now.year + (now.month // 12), ((now.month % 12) + 1), 1)
+            date_filter[date_field] = {"$gte": start, "$lt": end}
+
+        elif filter_jobs.this_year:
+            start = datetime(now.year, 1, 1, tzinfo=timezone.utc)
+            end = datetime(now.year + 1, 1, 1)
+            date_filter[date_field] = {"$gte": start, "$lt": end}
+
+        elif filter_jobs.from_date or filter_jobs.to_date:
+            date_filter[date_field] = {}
+            if filter_jobs.from_date:
+                date_filter[date_field]["$gte"] = filter_jobs.from_date
+            if filter_jobs.to_date:
+                date_filter[date_field]["$lte"] = filter_jobs.to_date
+
+        if date_filter:
+            search_pipeline.append({"$match": date_filter})
+
+        if filter_jobs.car_brand:
+            match_stage["car_brand"] = filter_jobs.car_brand
+        if filter_jobs.car_model:
+            match_stage["car_model"] = filter_jobs.car_model
+        if filter_jobs.job_number:
+            # match_stage["job_number"] = {"$regex": filter_jobs.job_number, "$options": "i"}
+            match_stage["job_number"] = filter_jobs.job_number
+        if filter_jobs.invoice_number:
+            # match_stage["invoice_number"] = {"$regex": filter_jobs.invoice_number, "$options": "i"}
+            match_stage["invoice_number"] = filter_jobs.invoice_number
+        if filter_jobs.plate_number:
+            # match_stage["plate_number"] = {"$regex": filter_jobs.plate_number, "$options": "i"}
+            match_stage["plate_number"] = filter_jobs.plate_number
+        if filter_jobs.type:
+            if filter_jobs.type == 'SALE':
+                match_stage["type"] = 'SALES'
+            else:
+                match_stage["type"] = 'JOB'
+
+        if filter_jobs.vin:
+            match_stage["vehicle_identification_number"] = {"$regex": filter_jobs.vin, "$options": "i"}
+        if filter_jobs.lpo:
+            match_stage["lpo_number"] = {"$regex": filter_jobs.lpo, "$options": "i"}
+        if filter_jobs.customer_name:
+            match_stage["customer"] = filter_jobs.customer_name
+        if filter_jobs.status:
+            if filter_jobs.status == 'Posted':
+                match_stage["job_status_1"] = filter_jobs.status
+            elif filter_jobs.status == 'New':
+                match_stage["job_status_2"] = filter_jobs.status
+            else:
+                match_stage["job_status_2"] = filter_jobs.status
+        search_pipeline.append({"$match": match_stage})
+        search_pipeline.append({"$sort": {date_field: -1}})
+
+        totals_pipeline = [
+            {"$match": match_stage},
+            {
+                "$group": {
+                    "_id": None,
+                    "count": {"$sum": 1},  # Useful to know total records found
+                    # We will add the complex math (sums) here in the next step
+                }
+            }
+        ]
+
+        lookups = [
+            ("car_brand", "all_brands"),
+            ("car_model", "all_brand_models"),
+            ("color", "all_lists_values"),
+            ("engine_type", "all_lists_values"),
+            ("country", "all_countries"),
+            ("city", "all_countries_cities"),
+            ("salesman", "sales_man"),
+            ("branch", "branches"),
+        ]
+
+        for local_field, collection in lookups:
+            search_pipeline.append({
+                "$lookup": {
+                    "from": collection,
+                    "localField": local_field,
+                    "foreignField": "_id",
+                    "as": f"{local_field}_details"
+                }
+            })
+            # # Use $addFields + $arrayElemAt instead of $unwind to keep things light
+            # search_pipeline.append({
+            #     "$addFields": {
+            #         f"{local_field}_name": {"$arrayElemAt": [f"${local_field}_details.name", 0]},
+            #         f"{local_field}_logo": {"$arrayElemAt": [f"${local_field}_details.logo", 0]}
+            #     }
+            # })
+            # Clean up the raw details array to save bandwidth
+            search_pipeline.append({"$project": {f"{local_field}_details": 0}})
+
+            search_pipeline.append({
+                "$lookup": {
+                    "from": "job_cards_invoice_items",
+                    "let": {"job_id": "$_id"},
+                    "pipeline": [
+                        {"$match": {"$expr": {"$eq": ["$job_card_id", "$$job_id"]}}},
+                        {"$group": {
+                            "_id": None,
+                            "total_amount": {"$sum": "$total"},
+                            "total_vat": {"$sum": "$vat"},
+                            "total_net": {"$sum": "$net"}
+                        }}
+                    ],
+                    "as": "finance"
+                }
+            })
+            search_pipeline.append({
+                "$lookup": {
+                    "from": "all_receipts_invoices",
+                    "let": {"job_id": "$_id"},
+                    "pipeline": [
+                        {"$match": {"$expr": {"$eq": ["$job_id", "$$job_id"]}}},
+                        {"$group": {"_id": None, "paid": {"$sum": "$amount"}}}
+                    ],
+                    "as": "payments"
+                }
+            })
+            search_pipeline.append({
+                "$addFields": {
+                    "total_amount": {"$ifNull": [{"$arrayElemAt": ["$finance.total_amount", 0]}, 0]},
+                    "total_vat": {"$ifNull": [{"$arrayElemAt": ["$finance.total_vat", 0]}, 0]},
+                    "total_net": {"$ifNull": [{"$arrayElemAt": ["$finance.total_net", 0]}, 0]},
+                    "paid": {"$ifNull": [{"$arrayElemAt": ["$payments.paid", 0]}, 0]}
+                }
+            })
+
+            # Calculate outstanding
+            search_pipeline.append({
+                "$addFields": {
+                    "final_outstanding": {"$subtract": ["$total_net", "$paid"]}
+                }
+            })
+            totals_pipeline = [
+                {"$match": match_stage},
+                {"$match": date_filter},
+                # Join items to get totals for all matching jobs
+                {"$lookup": {
+                    "from": "job_cards_invoice_items",
+                    "localField": "_id",
+                    "foreignField": "job_card_id",
+                    "as": "items"
+                }},
+                {"$lookup": {
+                    "from": "all_receipts_invoices",
+                    "localField": "_id",
+                    "foreignField": "job_id",
+                    "as": "receipts"
+                }},
+                {
+                    "$group": {
+                        "_id": None,
+                        "grand_total": {"$sum": {"$sum": "$items.total"}},
+                        "grand_vat": {"$sum": {"$sum": "$items.vat"}},
+                        "grand_net": {"$sum": {"$sum": "$items.net"}},
+                        "grand_paid": {"$sum": {"$sum": "$receipts.amount"}},
+                    }
+                },
+                {
+                    "$project": {
+                        "_id": 0,
+                        "grand_total": 1,
+                        "grand_vat": 1,
+                        "grand_net": 1,
+                        "grand_paid": 1,
+                        "grand_outstanding": {"$subtract": ["$grand_net", "$grand_paid"]}
+                    }
+                }
+            ]
+
+            # 1. Define the cursors (not awaited yet)
+            cursor_jobs = await job_cards_collection.aggregate(search_pipeline)
+            cursor_totals = await job_cards_collection.aggregate(totals_pipeline)
+
+            # 2. Execute to_list separately or via gather
+            # Note: Do NOT await the aggregate() call itself.
+            job_cards_result = await cursor_jobs.to_list(None)
+            totals_result = await cursor_totals.to_list(length=1)
+
+            grand_totals = totals_result[0] if totals_result else {
+                "grand_net": 0, "grand_vat": 0, "total_count": 0
+            }
+
+            return {
+                "job_cards": [serializer(doc) for doc in job_cards_result],
+                "grand_totals": grand_totals,
+            }
 
 
     except HTTPException:
