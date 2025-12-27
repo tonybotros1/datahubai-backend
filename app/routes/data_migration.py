@@ -5,6 +5,8 @@ from fastapi import APIRouter, HTTPException, Depends, UploadFile, File, Form
 from app.core import security
 from app.database import get_collection
 import math
+
+from app.routes.banks_and_others import BanksModel, add_new_bank
 from app.routes.branches import add_new_branch
 from app.routes.brands_and_models import create_brand, add_new_model
 from app.routes.countries_and_cities import add_new_city
@@ -29,6 +31,9 @@ branches_collection = get_collection("branches")
 currencies_collection = get_collection("currencies")
 entity_information_collection = get_collection("entity_information")
 invoice_items_collection = get_collection("invoice_items")
+receipts_collection = get_collection("all_receipts")
+receipts_invoices_collection = get_collection("all_receipts_invoices")
+banks_collection = get_collection("all_banks")
 
 
 def normalize_number_to_string(value):
@@ -77,6 +82,208 @@ def to_mongo_datetime(value):
         return None
     return value.to_pydatetime()
 
+
+# =========================== main function section ===========================
+@router.post('/get_file')
+async def get_file(file: UploadFile = File(...), screen_name: str = Form(...),
+                   delete_every_thing: bool = Form(...),
+                   data: dict = Depends(security.get_current_user)):
+    try:
+        print(delete_every_thing)
+        if screen_name.lower() == 'job cards':
+            await dealing_with_job_cards(file, data, delete_every_thing)
+        elif screen_name.lower() == 'job cards invoice items':
+            await dealing_with_job_cards_items(file, data, delete_every_thing)
+        elif screen_name.lower() == 'ar receipts':
+            await dealing_with_ar_receipts(file, data, delete_every_thing)
+        elif screen_name.lower() == 'ar receipts items':
+            await dealing_with_ar_receipts_invoices(file, data, delete_every_thing)
+
+
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# =========================== ar receipts section ===========================
+async def dealing_with_ar_receipts(file: UploadFile, data: dict, delete_every_thing: bool):
+    try:
+        company_id = ObjectId(data.get('company_id'))
+        user_id = ObjectId(data.get('sub'))
+        if delete_every_thing:
+            await receipts_collection.delete_many({'company_id': company_id})
+            await receipts_invoices_collection.delete_many({'company_id': company_id})
+
+        contents = await file.read()
+        df = pd.read_excel(BytesIO(contents))
+        df.columns = df.columns.str.strip().str.lower()
+        # print(df.columns)
+        date_cols = ["receipt_date", "cheque_date"]
+        for col in date_cols:
+            if col in df.columns:
+                df[col] = pd.to_datetime(df[col], errors="coerce")
+        df_2025 = df[(df["receipt_date"].dt.year == 2025)]
+        # print(df_2025["receipt_type"].value_counts())
+        # print(df_2025.head())
+
+        # getting data section
+        bank_name_doc = await list_collection.find_one({"code": "BANKS"})
+        bank_name_list_id = str(bank_name_doc["_id"])
+        account_types_bank_doc = await value_collection.find_one({"name": "Bank"})
+        account_types_list_id = str(account_types_bank_doc["_id"])
+        existing_customers = {b['entity_name']: b for b in
+                              await entity_information_collection.find({}).to_list(length=None)}
+        existing_values = {b["name"].upper(): ObjectId(b["_id"]) for b in
+                           await value_collection.find({}).to_list(length=None)}
+        existing_banks = {b["account_number"]: ObjectId(b["_id"]) for b in
+                          await banks_collection.find({}).to_list(length=None)}
+        uae_country_doc = await countries_collection.find_one({"code": "UAE"})
+        uae_country_id = str(uae_country_doc["_id"])
+        uae_currency_doc = await currencies_collection.find_one({"country_id": ObjectId(uae_country_id)})
+        uae_currency_id = str(uae_currency_doc["_id"])
+
+        for i, row in enumerate(df_2025.itertuples(index=False), start=1):
+            receipt_id = clean_value(row[0])
+            receipt_number = normalize_number_to_string(row[1])
+            receipt_date = to_mongo_datetime(row[2])
+            customer_name = clean_value(row[3])
+            receipt_type = clean_value(row[4])
+            status = clean_value(row[5])
+            bank_name = clean_value(row[10])
+            cheque_date = to_mongo_datetime(row[11])
+            account_number = clean_value(row[6])
+
+            customer_id = None
+            if customer_name:
+                customer_data = existing_customers.get(customer_name.strip())
+                if customer_data:
+                    customer_id = customer_data["_id"]
+                else:
+                    customer_id = None
+
+            if receipt_type:
+                receipt_type_id = existing_values.get(str(receipt_type).capitalize())
+                if not receipt_type_id:
+                    receipt_type_id = None
+            else:
+                receipt_type_id = None
+
+            try:
+                if bank_name:
+                    bank_name_id = existing_values.get(str(bank_name).strip())
+                    if not bank_name_id:
+                        new_bank_name = await add_new_value(list_id=bank_name_list_id, name=str(bank_name),
+                                                            mastered_by_id=None)
+                        bank_name_id = ObjectId(new_bank_name['list']['_id'])
+                        existing_values[str(bank_name)] = bank_name_id
+                else:
+                    bank_name_id = None
+
+            except Exception as e:
+                print(f"error in bank name {e}")
+                raise
+
+            try:
+                if account_number:
+                    account_id = existing_banks.get(str(account_number).strip())
+                    if not account_id:
+                        account_model = BanksModel(
+                            account_name=account_number,
+                            account_number=account_number,
+                            currency_id=uae_currency_id,
+                            account_type_id=account_types_list_id
+                        )
+                        new_account = await add_new_bank(bank=account_model, data=data)
+                        account_id = ObjectId(new_account['account']['_id'])
+                        existing_banks[str(new_account).strip()] = account_id
+                else:
+                    account_id = None
+            except Exception as e:
+                print(f"error in account {e}")
+                raise
+
+            # insert data:
+            receipt_dict = {
+                "company_id": company_id,
+                "receipt_id": receipt_id,
+                "receipt_number": receipt_number,
+                "receipt_date": receipt_date,
+                "customer": customer_id,
+                "receipt_type": receipt_type_id,
+                "status": status.capitalize(),
+                "currency": 'AED',
+                "rate": clean_value(row[8],number=True),
+                "cheque_number": clean_value(row[9]) if clean_value(row[9]) != 0 else "",
+                "cheque_date": cheque_date,
+                "note": clean_value(row[12]) if clean_value(row[12]) != 0 else "",
+                "bank_name": bank_name_id,
+                "account": account_id,
+                "createdAt": security.now_utc(),
+                "updatedAt": security.now_utc(),
+            }
+            await receipts_collection.insert_one(receipt_dict)
+            print(f"added {i}")
+
+    except Exception as e:
+        print(e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# =========================== ar receipts invoices section ===========================
+async def dealing_with_ar_receipts_invoices(file: UploadFile, data: dict, delete_every_thing: bool):
+    try:
+        company_id = ObjectId(data.get("company_id"))
+
+        if delete_every_thing:
+            await receipts_invoices_collection.delete_many({"company_id": company_id})
+
+        contents = await file.read()
+        df = pd.read_excel(BytesIO(contents))
+        df.columns = df.columns.str.strip().str.lower()
+        existing_ar_receipts = {b.get("receipt_id", None): ObjectId(b["_id"]) for b in
+                                await receipts_collection.find({"company_id": company_id}).to_list()}
+        existing_job_cards = {b.get("job_id", None): ObjectId(b["_id"]) for b in
+                              await job_cards_collection.find({"company_id": company_id}).to_list()}
+
+        invoice_items_buffer = []
+
+        for i, row in enumerate(df.itertuples(index=False), start=1):
+            receipt_id = normalize_number_to_string(row[0])
+            job_id = clean_value(row[1])
+            amount = clean_value(row[2], number=True)
+
+            if job_id:
+                job_card_id = existing_job_cards.get(int(job_id), None)
+            else:
+                job_card_id = None
+
+
+            if receipt_id:
+                new_receipt_id = existing_ar_receipts.get(receipt_id, None)
+            else:
+                new_receipt_id = None
+            if new_receipt_id and job_card_id:
+                invoice_dict = {
+                    "company_id": company_id,
+                    "receipt_id" : new_receipt_id,
+                    "job_id": job_card_id,
+                    "amount": amount,
+                    "createdAt": security.now_utc(),
+                    "updatedAt": security.now_utc(),
+                }
+                invoice_items_buffer.append(invoice_dict)
+                print(f"Row: {i}")
+
+        if invoice_items_buffer:
+            await receipts_invoices_collection.insert_many(invoice_items_buffer)
+
+
+    except Exception as e:
+        print(e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# =========================== job cards section ===========================
 
 async def create_entity_service(
         *,
@@ -164,25 +371,6 @@ async def create_country_service(
     return insert_result.inserted_id
 
 
-# =========================== main function section ===========================
-@router.post('/get_file')
-async def get_file(file: UploadFile = File(...), screen_name: str = Form(...),
-                   delete_every_thing: bool = Form(...),
-                   data: dict = Depends(security.get_current_user)):
-    try:
-        print(delete_every_thing)
-        if screen_name.lower() == 'job cards':
-            await dealing_with_job_cards(file, data, delete_every_thing)
-        elif screen_name.lower() == 'job cards invoice items':
-            await dealing_with_job_cards_items(file, data, delete_every_thing)
-
-
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-# =========================== job cards section ===========================
 async def dealing_with_job_cards(file: UploadFile, data: dict, delete_every_thing: bool):
     try:
         company_id = ObjectId(data.get('company_id'))
@@ -205,6 +393,12 @@ async def dealing_with_job_cards(file: UploadFile, data: dict, delete_every_thin
         for col in date_cols:
             if col in df.columns:
                 df[col] = pd.to_datetime(df[col], errors="coerce")
+        df_2025 = df[
+            (df["job_date"].dt.year == 2025) |
+            (df["invoice_date"].dt.year == 2025) |
+            (df["cancellation_date"].dt.year == 2025)
+            ]
+
         color_doc = await list_collection.find_one({"code": "COLORS"})
         color_list_id = str(color_doc["_id"])
         uae_country_doc = await countries_collection.find_one({"code": "UAE"})
@@ -235,7 +429,7 @@ async def dealing_with_job_cards(file: UploadFile, data: dict, delete_every_thin
         existing_customers = {b['entity_name']: b for b in
                               await entity_information_collection.find({}).to_list(length=None)}
 
-        for i, row in enumerate(df.itertuples(index=False), start=1):
+        for i, row in enumerate(df_2025.itertuples(index=False), start=1):
             # for row in df[:50].itertuples(index=False):  # 20604
             brand = clean_value(row[1])
             model = clean_value(row[2])
@@ -436,7 +630,7 @@ async def dealing_with_job_cards(file: UploadFile, data: dict, delete_every_thin
                                         vat=0, flag_url="", flag_public_id="")
                                     print("added new customer address country")
 
-                                    existing_countries[customer_address_country] =  customer_address_country_id
+                                    existing_countries[customer_address_country] = customer_address_country_id
                             else:
                                 customer_address_country_id = None
                         except Exception as row_err:
@@ -496,19 +690,23 @@ async def dealing_with_job_cards(file: UploadFile, data: dict, delete_every_thin
                                 "link": str(customer_website)
                             }
                         ]
-                        customer_details = await create_entity_service(entity_name=str(customer), entity_code=['Customer'],
-                                                                  credit_limit=float(customer_credit_limit),
-                                                                  warranty_days=int(customer_warranty_days),
-                                                                  salesman_id=customer_salesman_id_for_new_customer,
-                                                                  entity_status=str(entity_status),
-                                                                  group_name=str(customer_group_name),
-                                                                  industry_id=None, trn=str(trn), entity_type_id=None,
-                                                                  entity_address=address_list, entity_phone=phone_list,
-                                                                  entity_social=website_list, company_id=company_id,
-                                                                  lpo_required=str(customer_lpo_required)
-                                                                  )
+                        customer_details = await create_entity_service(entity_name=str(customer),
+                                                                       entity_code=['Customer'],
+                                                                       credit_limit=float(customer_credit_limit),
+                                                                       warranty_days=int(customer_warranty_days),
+                                                                       salesman_id=customer_salesman_id_for_new_customer,
+                                                                       entity_status=str(entity_status),
+                                                                       group_name=str(customer_group_name),
+                                                                       industry_id=None, trn=str(trn),
+                                                                       entity_type_id=None,
+                                                                       entity_address=address_list,
+                                                                       entity_phone=phone_list,
+                                                                       entity_social=website_list,
+                                                                       company_id=company_id,
+                                                                       lpo_required=str(customer_lpo_required)
+                                                                       )
                         print("added new customer")
-                        existing_customers[str(customer).upper()] = customer_details
+                        existing_customers[str(customer)] = customer_details
 
                 else:
                     customer_id = None
@@ -648,10 +846,10 @@ async def dealing_with_job_cards_items(file: UploadFile, data: dict, delete_ever
                 job_card_id = existing_job_cards.get(int(job_id), None)
                 if job_card_id:
                     if item_name:
-                        item_id = existing_invoice_items.get(str(item_code + " - " + item_name))
+                        item_id = existing_invoice_items.get(str(item_name))
                         if not item_id:
                             item_model = InvoiceItem(
-                                name=str(item_code + " - " + item_name),
+                                name=(str(item_name)),
                                 price=0,
                                 description=str(item_description),
                             )

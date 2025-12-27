@@ -220,6 +220,8 @@ async def add_new_bank(bank: BanksModel, data: dict = Depends(security.get_curre
             "type": "bank_created",
             "data": serialized
         })
+        return {"message": "account added successfully!", "account": serialized}
+
     except Exception as e:
         print(e)
         raise e

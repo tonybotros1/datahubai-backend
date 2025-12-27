@@ -1022,22 +1022,22 @@ async def search_engine_for_job_cards(filter_jobs: JobCardSearch, data: dict = D
             date_field = "job_date"
 
         date_filter = {}
-        if filter_jobs.today:
-            start = datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
-            end = start + timedelta(days=1)
-            date_filter[date_field] = {"$gte": start, "$lt": end}
+        # if filter_jobs.today:
+        #     start = datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
+        #     end = start + timedelta(days=1)
+        #     date_filter[date_field] = {"$gte": start, "$lt": end}
+        #
+        # elif filter_jobs.this_month:
+        #     start = datetime(now.year, now.month, 1, tzinfo=timezone.utc)
+        #     end = datetime(now.year + (now.month // 12), ((now.month % 12) + 1), 1)
+        #     date_filter[date_field] = {"$gte": start, "$lt": end}
+        #
+        # elif filter_jobs.this_year:
+        #     start = datetime(now.year, 1, 1, tzinfo=timezone.utc)
+        #     end = datetime(now.year + 1, 1, 1)
+        #     date_filter[date_field] = {"$gte": start, "$lt": end}
 
-        elif filter_jobs.this_month:
-            start = datetime(now.year, now.month, 1, tzinfo=timezone.utc)
-            end = datetime(now.year + (now.month // 12), ((now.month % 12) + 1), 1)
-            date_filter[date_field] = {"$gte": start, "$lt": end}
-
-        elif filter_jobs.this_year:
-            start = datetime(now.year, 1, 1, tzinfo=timezone.utc)
-            end = datetime(now.year + 1, 1, 1)
-            date_filter[date_field] = {"$gte": start, "$lt": end}
-
-        elif filter_jobs.from_date or filter_jobs.to_date:
+        if filter_jobs.from_date or filter_jobs.to_date:
             date_filter[date_field] = {}
             if filter_jobs.from_date:
                 date_filter[date_field]["$gte"] = filter_jobs.from_date
@@ -1106,6 +1106,54 @@ async def search_engine_for_job_cards(filter_jobs: JobCardSearch, data: dict = D
                     "as": f"{local_field}_details"
                 }
             })
+        # base_search_pipeline.append({
+        #     "$lookup": {
+        #         "from": "all_lists_values",
+        #         "let": {
+        #             "colorId": "$color",
+        #             "engineTypeId": "$engine_type"
+        #         },
+        #         "pipeline": [
+        #             {
+        #                 "$match": {
+        #                     "$expr": {
+        #                         "$or": [
+        #                             {"$eq": ["$_id", "$$colorId"]},
+        #                             {"$eq": ["$_id", "$$engineTypeId"]}
+        #                         ]
+        #                     }
+        #                 }
+        #             },
+        #             {
+        #                 "$project": {
+        #                     "name": 1
+        #                 }
+        #             }
+        #         ],
+        #         "as": "list_values"
+        #     }
+        # })
+
+        base_search_pipeline.append({
+            "$addFields": {
+                "color_details": {
+                    "$first": {
+                        "$filter": {
+                            "input": "$list_values",
+                            "cond": {"$eq": ["$$this._id", "$color"]}
+                        }
+                    }
+                },
+                "engine_type_details": {
+                    "$first": {
+                        "$filter": {
+                            "input": "$list_values",
+                            "cond": {"$eq": ["$$this._id", "$engine_type"]}
+                        }
+                    }
+                }
+            }
+        })
 
         base_search_pipeline.append({
             "$lookup": {
@@ -1408,6 +1456,7 @@ async def search_engine_for_job_cards(filter_jobs: JobCardSearch, data: dict = D
                 }
             }
         })
+        # try number 1
         # base_search_pipeline.append({
         #     "$facet": {
         #         "job_cards": [
@@ -1445,7 +1494,20 @@ async def search_engine_for_job_cards(filter_jobs: JobCardSearch, data: dict = D
         #         ]
         #     }
         # })
+        # cursor = await job_cards_collection.aggregate(base_search_pipeline)
+        # result = await cursor.to_list(None)
+        # if result and len(result) > 0:
+        #     data = result[0]
+        #     job_cards = [serializer(r) for r in data.get("job_cards", [])]
+        #     totals = data.get("grand_totals", [])
+        #     grand_totals = totals[0] if totals else {"grand_total": 0, "grand_vat": 0, "grand_net": 0, "grand_paid": 0,
+        #                                              "grand_outstanding": 0}
+        # else:
+        #     job_cards = []
+        #     grand_totals = {"grand_total": 0, "grand_vat": 0, "grand_net": 0, "grand_paid": 0, "grand_outstanding": 0}
 
+        # =============================================================
+        # try number 2
         job_cards_pipeline = base_search_pipeline + [
             {
                 "$project": {
@@ -1480,15 +1542,10 @@ async def search_engine_for_job_cards(filter_jobs: JobCardSearch, data: dict = D
                 "$project": {"_id": 0}
             }
         ]
-
-        job_cards_cursor =await job_cards_collection.aggregate(job_cards_pipeline)
+        job_cards_cursor = await job_cards_collection.aggregate(job_cards_pipeline)
         job_cards_raw = await job_cards_cursor.to_list(None)
         job_cards = [serializer(r) for r in job_cards_raw]
-
-        # cursor = await job_cards_collection.aggregate(base_search_pipeline)
-        # result = await cursor.to_list(None)
-
-        totals_cursor =await job_cards_collection.aggregate(totals_pipeline)
+        totals_cursor = await job_cards_collection.aggregate(totals_pipeline)
         totals_result = await totals_cursor.to_list(1)
 
         grand_totals = totals_result[0] if totals_result else {
@@ -1499,15 +1556,60 @@ async def search_engine_for_job_cards(filter_jobs: JobCardSearch, data: dict = D
             "grand_outstanding": 0
         }
 
-        # if result and len(result) > 0:
+        # try number 3
+        # base_search_pipeline.append({
+        #     "$project": {
+        #         "car_brand_details": 0,
+        #         "car_model_details": 0,
+        #         "country_details": 0,
+        #         "city_details": 0,
+        #         "color_details": 0,
+        #         "engine_type_details": 0,
+        #         "customer_details": 0,
+        #         "salesman_details": 0,
+        #         "branch_details": 0,
+        #         "currency_details": 0,
+        #         "currency_country_details": 0,
+        #         "quotation_details": 0,
+        #         "receipts_invoices_details": 0,
+        #         "invoice_items_details": 0,
+        #         "list_values": 0
+        #     }
+        # })
+        #
+        # base_search_pipeline.append({
+        #     "$group": {
+        #         "_id": None,
+        #         "job_cards": {"$push": "$$ROOT"},
+        #         "grand_total": {"$sum": "$total_amount"},
+        #         "grand_vat": {"$sum": "$total_vat"},
+        #         "grand_net": {"$sum": "$total_net"},
+        #         "grand_paid": {"$sum": "$paid"},
+        #         "grand_outstanding": {"$sum": "$final_outstanding"}
+        #     }
+        # })
+        #
+        # cursor = await job_cards_collection.aggregate(base_search_pipeline)
+        # result = await cursor.to_list(1)
+        # if result:
         #     data = result[0]
         #     job_cards = [serializer(r) for r in data.get("job_cards", [])]
-        #     totals = data.get("grand_totals", [])
-        #     grand_totals = totals[0] if totals else {"grand_total": 0, "grand_vat": 0, "grand_net": 0, "grand_paid": 0,
-        #                                              "grand_outstanding": 0}
+        #     grand_totals = {
+        #         "grand_total": data.get("grand_total", 0),
+        #         "grand_vat": data.get("grand_vat", 0),
+        #         "grand_net": data.get("grand_net", 0),
+        #         "grand_paid": data.get("grand_paid", 0),
+        #         "grand_outstanding": data.get("grand_outstanding", 0)
+        #     }
         # else:
         #     job_cards = []
-        #     grand_totals = {"grand_total": 0, "grand_vat": 0, "grand_net": 0, "grand_paid": 0, "grand_outstanding": 0}
+        #     grand_totals = {
+        #         "grand_total": 0,
+        #         "grand_vat": 0,
+        #         "grand_net": 0,
+        #         "grand_paid": 0,
+        #         "grand_outstanding": 0
+        #     }
 
         return {
             "job_cards": job_cards,
