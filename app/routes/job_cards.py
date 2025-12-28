@@ -96,6 +96,7 @@ class JobCard(BaseModel):
 
 
 class JobCardSearch(BaseModel):
+    label: Optional[str] = None
     job_number: Optional[str] = None
     invoice_number: Optional[str] = None
     car_brand: Optional[PyObjectId] = None
@@ -103,6 +104,7 @@ class JobCardSearch(BaseModel):
     plate_number: Optional[str] = None
     vin: Optional[str] = None
     lpo: Optional[str] = None
+    branch: Optional[PyObjectId] = None
     customer_name: Optional[PyObjectId] = None
     status: Optional[str] = None
     type: Optional[str] = None
@@ -1008,10 +1010,61 @@ async def get_job_card_status(job_id: str, _: dict = Depends(security.get_curren
 async def search_engine_for_job_cards(filter_jobs: JobCardSearch, data: dict = Depends(security.get_current_user)):
     try:
         company_id = ObjectId(data.get("company_id"))
+        user_id = ObjectId(data.get("sub"))
         base_search_pipeline: list[dict] = []
         match_stage = {}
 
-        now = datetime.now(timezone.utc)
+        base_search_pipeline.append(
+            {
+                '$lookup': {
+                    'from': 'sys-users',
+                    'let': {
+                        'user_id': user_id
+                    },
+                    'pipeline': [
+                        {
+                            '$match': {
+                                '$expr': {
+                                    '$eq': [
+                                        '$_id', '$$user_id'
+                                    ]
+                                }
+                            }
+                        }
+                    ],
+                    'as': 'user_details'
+                }
+            },
+        )
+        base_search_pipeline.append(
+            {
+                '$addFields': {
+                    'user_branches': {
+                        '$arrayElemAt': [
+                            '$user_details.branches', 0
+                        ]
+                    }
+                }
+            },
+        )
+
+        base_search_pipeline.append(
+            {
+                '$match': {
+                    '$expr': {
+                        '$in': [
+                            '$branch', {
+                                '$ifNull': [
+                                    '$user_branches', []
+                                ]
+                            }
+                        ]
+                    }
+                }
+            }
+        )
+
+        # now = datetime.now(timezone.utc)
 
         if filter_jobs.status == 'Posted':
             date_field = "invoice_date"
@@ -1053,6 +1106,13 @@ async def search_engine_for_job_cards(filter_jobs: JobCardSearch, data: dict = D
             match_stage["car_brand"] = filter_jobs.car_brand
         if filter_jobs.car_model:
             match_stage["car_model"] = filter_jobs.car_model
+        if filter_jobs.branch:
+            match_stage["branch"] = filter_jobs.branch
+        if filter_jobs.label:
+            if filter_jobs.label == 'Returned':
+                match_stage["label"] = filter_jobs.label
+            else:
+                match_stage["label"] = ""
         if filter_jobs.job_number:
             # match_stage["job_number"] = {"$regex": filter_jobs.job_number, "$options": "i"}
             match_stage["job_number"] = filter_jobs.job_number

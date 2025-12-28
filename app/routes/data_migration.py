@@ -133,7 +133,7 @@ async def dealing_with_ar_receipts(file: UploadFile, data: dict, delete_every_th
         account_types_list_id = str(account_types_bank_doc["_id"])
         existing_customers = {b['entity_name']: b for b in
                               await entity_information_collection.find({}).to_list(length=None)}
-        existing_values = {b["name"].upper(): ObjectId(b["_id"]) for b in
+        existing_values = {b["name"].capitalize(): ObjectId(b["_id"]) for b in
                            await value_collection.find({}).to_list(length=None)}
         existing_banks = {b["account_number"]: ObjectId(b["_id"]) for b in
                           await banks_collection.find({}).to_list(length=None)}
@@ -162,7 +162,7 @@ async def dealing_with_ar_receipts(file: UploadFile, data: dict, delete_every_th
                     customer_id = None
 
             if receipt_type:
-                receipt_type_id = existing_values.get(str(receipt_type).capitalize())
+                receipt_type_id = existing_values.get(str(receipt_type).capitalize().strip())
                 if not receipt_type_id:
                     receipt_type_id = None
             else:
@@ -419,14 +419,12 @@ async def dealing_with_job_cards(file: UploadFile, data: dict, delete_every_thin
                            await models_collection.find({}).to_list(length=None)}
         existing_values = {b["name"].upper(): ObjectId(b["_id"]) for b in
                            await value_collection.find({}).to_list(length=None)}
-        existing_countries: Any = {b['name']: ObjectId(b['_id']) for b in
-                                   await countries_collection.find({}).to_list(length=None)}
         existing_cities = {b['name']: ObjectId(b['_id']) for b in await cities_collection.find({}).to_list(length=None)}
         existing_salesman = {b['name']: ObjectId(b['_id']) for b in
                              await salesman_collection.find({}).to_list(length=None)}
         existing_branches = {b['name']: ObjectId(b['_id']) for b in
                              await branches_collection.find({}).to_list(length=None)}
-        existing_customers = {b['entity_name']: b for b in
+        existing_customers = {b['entity_name'].capitalize().strip() : b for b in
                               await entity_information_collection.find({}).to_list(length=None)}
 
         for i, row in enumerate(df_2025.itertuples(index=False), start=1):
@@ -594,7 +592,7 @@ async def dealing_with_job_cards(file: UploadFile, data: dict, delete_every_thin
                 # customer section
                 if customer:
                     # customer_id = existing_customers.get(customer.strip())['_id']
-                    customer_data = existing_customers.get(customer.strip())
+                    customer_data = existing_customers.get(customer.capitalize().strip())
                     if customer_data:
                         customer_id = customer_data["_id"]
                     else:
@@ -621,24 +619,6 @@ async def dealing_with_job_cards(file: UploadFile, data: dict, delete_every_thin
                             raise
 
                         try:
-                            if customer_address_country:
-                                customer_address_country_id = existing_countries.get(customer_address_country)
-                                if not customer_address_country_id:
-                                    customer_address_country_id = await create_country_service(
-                                        name=customer_address_country, code='',
-                                        calling_code='', currency_name='', currency_code='',
-                                        vat=0, flag_url="", flag_public_id="")
-                                    print("added new customer address country")
-
-                                    existing_countries[customer_address_country] = customer_address_country_id
-                            else:
-                                customer_address_country_id = None
-                        except Exception as row_err:
-                            # This will show exactly which row failed
-                            print(f"Error customer address country processing row {i}: {row_err}")
-                            raise
-
-                        try:
                             if customer_address_city:
                                 customer_address_city = existing_cities.get(city)
                                 if not customer_address_city:
@@ -659,7 +639,7 @@ async def dealing_with_job_cards(file: UploadFile, data: dict, delete_every_thin
                             {
                                 "line": customer_address_line,
                                 "isPrimary": True,
-                                "country_id": customer_address_country_id,
+                                "country_id": uae_country_id,
                                 "city_id": customer_address_city,
                             }
                         ]
@@ -690,7 +670,7 @@ async def dealing_with_job_cards(file: UploadFile, data: dict, delete_every_thin
                                 "link": str(customer_website)
                             }
                         ]
-                        customer_details = await create_entity_service(entity_name=str(customer),
+                        customer_details = await create_entity_service(entity_name=str(customer.capitalize().strip()),
                                                                        entity_code=['Customer'],
                                                                        credit_limit=float(customer_credit_limit),
                                                                        warranty_days=int(customer_warranty_days),
@@ -707,6 +687,7 @@ async def dealing_with_job_cards(file: UploadFile, data: dict, delete_every_thin
                                                                        )
                         print("added new customer")
                         existing_customers[str(customer)] = customer_details
+                        customer_id = customer_details['_id']
 
                 else:
                     customer_id = None
@@ -739,10 +720,10 @@ async def dealing_with_job_cards(file: UploadFile, data: dict, delete_every_thin
                 "currency": ObjectId(uae_currency_id),
                 "rate": uae_currency_rate if uae_currency_rate else 0,
                 "payment_method": payment_type.capitalize() if payment_type == 'CREDIT' else 'Cash',
-                "label": returned.capitalize() if returned == 'Returned' else "",
+                "label": returned.capitalize() if returned == 'RETURNED' else "",
                 "job_number": job_number,
                 "job_date": to_mongo_datetime(job_date),
-                "invoice_number": invoice_number,
+                "invoice_number": invoice_number if invoice_number != "0" else "",
                 "invoice_date": to_mongo_datetime(invoice_date),
                 "job_cancellation_date": to_mongo_datetime(job_cancellation_date),
                 "lpo_number": lpo_number,
@@ -760,7 +741,7 @@ async def dealing_with_job_cards(file: UploadFile, data: dict, delete_every_thin
                 "job_delivery_notes": job_delivery_notes if job_delivery_notes else "",
                 "job_status_1": job_status_1.capitalize(),
                 "job_status_2": job_status_2.capitalize(),
-                "customer": customer_id,
+                "customer": ObjectId(customer_id),
                 "contact_name": customer,
                 "contact_number": customer_phone_work_number,
                 "contact_email": customer_phone_email,
