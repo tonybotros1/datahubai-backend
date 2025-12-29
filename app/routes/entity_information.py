@@ -403,6 +403,7 @@ pipeline: list[Dict[str, Any]] = [
         '$project': {
             '_id': 1,
             'entity_name': 1,
+            'lpo_required': 1,
             'warranty_days': 1,
             'entity_code': 1,
             'entity_status': 1,
@@ -538,7 +539,7 @@ async def get_all_customers(data: dict = Depends(security.get_current_user)):
 
     # 2. Define an async generator to yield data
     async def event_generator():
-        cursor =await entity_information_collection.aggregate(new_pipeline)
+        cursor = await entity_information_collection.aggregate(new_pipeline)
 
         yield '{"customers": ['  # Start JSON array
 
@@ -582,6 +583,7 @@ async def get_all_vendors(data: dict = Depends(security.get_current_user)):
 async def add_new_entity(
         entity_name: str = Form(None),
         entity_code: str = Form(None),
+        lpo_required: bool = Form(None),
         credit_limit: float = Form(None),
         warranty_days: int = Form(None),
         salesman_id: str = Form(None),
@@ -626,6 +628,7 @@ async def add_new_entity(
                 entity.pop('type')
         doc = {
             "entity_name": entity_name,
+            "lpo_required": "Y" if lpo_required else "N",
             "entity_picture": entity_picture,
             "entity_picture_public_id": entity_picture_public_id,
             "entity_code": entity_code.split(","),

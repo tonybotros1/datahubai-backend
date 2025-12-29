@@ -539,12 +539,12 @@ async def dealing_with_job_cards(file: UploadFile, data: dict, delete_every_thin
 
             # cities section
             try:
-                if city:
+                if city and city != 0 and city != '0':
                     city_id = existing_cities.get(city)
                     if not city_id:
-                        new_city = await add_new_city(country_id=str(uae_country_id), name=city, code=str(city).upper())
+                        new_city = await add_new_city(country_id=str(uae_country_id), name=str(city), code=str(city).upper())
                         city_id = ObjectId(new_city['City']['_id'])
-                        existing_cities[city] = city_id
+                        existing_cities[str(city)] = city_id
                 else:
                     city_id = None
             except Exception as row_err:
@@ -619,15 +619,15 @@ async def dealing_with_job_cards(file: UploadFile, data: dict, delete_every_thin
                             raise
 
                         try:
-                            if customer_address_city:
-                                customer_address_city = existing_cities.get(city)
+                            if customer_address_city and (customer_address_city != 0 and customer_address_city != '0'):
+                                customer_address_city = existing_cities.get(customer_address_city)
                                 if not customer_address_city:
-                                    new_city = await add_new_city(country_id=str(uae_country_id), name=city,
+                                    new_city = await add_new_city(country_id=str(uae_country_id), name=str(city),
                                                                   code=str(city).upper())
                                     print("added new customer city country")
 
                                     customer_address_city = ObjectId(new_city['City']['_id'])
-                                    existing_cities[city] = city_id
+                                    existing_cities[str(customer_address_city)] = city_id
                             else:
                                 customer_address_city = None
                         except Exception as row_err:
@@ -637,7 +637,7 @@ async def dealing_with_job_cards(file: UploadFile, data: dict, delete_every_thin
 
                         address_list = [
                             {
-                                "line": customer_address_line,
+                                "line": str(customer_address_line),
                                 "isPrimary": True,
                                 "country_id": uae_country_id,
                                 "city_id": customer_address_city,
@@ -686,7 +686,7 @@ async def dealing_with_job_cards(file: UploadFile, data: dict, delete_every_thin
                                                                        lpo_required=str(customer_lpo_required)
                                                                        )
                         print("added new customer")
-                        existing_customers[str(customer)] = customer_details
+                        existing_customers[str(customer).capitalize().strip()] = customer_details
                         customer_id = customer_details['_id']
 
                 else:
@@ -704,8 +704,8 @@ async def dealing_with_job_cards(file: UploadFile, data: dict, delete_every_thin
                 "car_model": model_id,
                 "year": clean_value(row[3]),
                 "color": color_id,
-                "plate_number": clean_value(row[5]),
-                "plate_code": clean_value(row[6]),
+                "plate_number": str(clean_value(row[5])),
+                "plate_code": str(clean_value(row[6])),
                 "country": ObjectId(uae_country_id),
                 "city": city_id,
                 "vehicle_identification_number": clean_value(row[8]),
