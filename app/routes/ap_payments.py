@@ -24,11 +24,6 @@ ap_payment_details_pipeline: list[dict[str, Any]] = [
             'as': 'vendor_details'
         }
     }, {
-        '$unwind': {
-            'path': '$vendor_details',
-            'preserveNullAndEmptyArrays': True
-        }
-    }, {
         '$lookup': {
             'from': 'all_lists_values',
             'localField': 'payment_type',
@@ -36,21 +31,11 @@ ap_payment_details_pipeline: list[dict[str, Any]] = [
             'as': 'payment_type_details'
         }
     }, {
-        '$unwind': {
-            'path': '$payment_type_details',
-            'preserveNullAndEmptyArrays': True
-        }
-    }, {
         '$lookup': {
             'from': 'all_banks',
             'localField': 'account',
             'foreignField': '_id',
             'as': 'account_details'
-        }
-    }, {
-        '$unwind': {
-            'path': '$account_details',
-            'preserveNullAndEmptyArrays': True
         }
     }, {
         '$lookup': {
@@ -244,6 +229,18 @@ ap_payment_details_pipeline: list[dict[str, Any]] = [
                             ]
                         }
                     }
+                }, {
+                    '$addFields': {
+                        '_id': {
+                            '$toString': '$_id'
+                        },
+                        'payment_id': {
+                            '$toString': '$payment_id'
+                        },
+                        'ap_invoice_id': {
+                            '$toString': '$ap_invoice_id'
+                        }
+                    }
                 }
             ],
             'as': 'invoices_details'
@@ -251,20 +248,24 @@ ap_payment_details_pipeline: list[dict[str, Any]] = [
     }, {
         '$addFields': {
             'vendor_name': {
-                '$ifNull': [
-                    '$vendor_details.entity_name', None
+                '$arrayElemAt': [
+                    '$vendor_details.entity_name', 0
                 ]
             },
             'payment_type_name': {
-                '$ifNull': [
-                    '$payment_type_details.name', None
+                '$arrayElemAt': [
+                    '$payment_type_details.name', 0
                 ]
             },
             'account_number': {
-                '$ifNull': [
-                    '$account_details.account_number', None
+                '$arrayElemAt': [
+                    '$account_details.account_number', 0
                 ]
             }
+        }
+    }, {
+        "$addFields": {
+            "total_given": {"$sum": "$invoices_details.payment_amount"}
         }
     }, {
         '$project': {
@@ -272,7 +273,7 @@ ap_payment_details_pipeline: list[dict[str, Any]] = [
             'payment_type_details': 0,
             'account_details': 0
         }
-    }
+    },
 ]
 
 
@@ -462,7 +463,8 @@ async def get_all_vendor_invoices(vendor_id: str, data: dict = Depends(security.
                         ]
                     }
                 }
-            }
+            },
+
         ]
 
         cursor = await ap_invoices_collection.aggregate(vendor_invoices_pipeline)
@@ -482,6 +484,25 @@ async def get_payment_details(receipt_id: ObjectId):
     new_pipeline.insert(0, {
         "$match": {
             "_id": receipt_id
+        }
+    })
+    new_pipeline.append({
+        '$addFields': {
+            '_id': {
+                '$toString': '$_id'
+            },
+            'company_id': {
+                '$toString': '$company_id'
+            },
+            'payment_type': {
+                '$toString': '$payment_type'
+            },
+            'vendor': {
+                '$toString': '$vendor'
+            },
+            'account': {
+                '$toString': '$account'
+            }
         }
     })
     cursor = await ap_payment_collection.aggregate(new_pipeline)
@@ -541,8 +562,7 @@ async def add_new_payment(
 
             await session.commit_transaction()
             new_payment = await get_payment_details(result.inserted_id)
-            serialized = serializer(new_payment)
-            return {"payment": serialized}
+            return {"payment": new_payment}
 
         except Exception as e:
             await session.abort_transaction()
@@ -613,13 +633,13 @@ async def update_payment_invoices(
                     added_invoices = await ap_payment_invoices_collection.insert_many(
                         added_list, session=s
                     )
-                    inserted_ids = added_invoices.inserted_ids
-                    for item, new_id in zip(added_list, inserted_ids):
-                        response_item = {
-                            "_id": str(new_id),
-                            "ap_invoice_id": str(item.get("ap_invoice_id")),
-                        }
-                        updated_list.append(response_item)
+                    # inserted_ids = added_invoices.inserted_ids
+                    # for item, new_id in zip(added_list, inserted_ids):
+                    #     response_item = {
+                    #         "_id": str(new_id),
+                    #         "ap_invoice_id": str(item.get("ap_invoice_id")),
+                    #     }
+                    #     updated_list.append(response_item)
 
                 for item_id, item_data in modified_list:
                     item_data.pop("id", None)
@@ -628,15 +648,15 @@ async def update_payment_invoices(
                         {"$set": item_data},
                         session=s
                     )
-                    updated_list.append(
-                        {"_id": str(item_id),
-                         "ap_invoice_id": str(item_data["ap_invoice_id"]) if item_data.get("ap_invoice_id") else None})
+                    # updated_list.append(
+                    #     {"_id": str(item_id),
+                    #      "ap_invoice_id": str(item_data["ap_invoice_id"]) if item_data.get("ap_invoice_id") else None})
 
                 await s.commit_transaction()
             if payment_id:
                 new_payment = await get_payment_details(payment_id)
-                serialized = serializer(new_payment)
-                return {"payment": serialized}
+                # serialized = serializer(new_payment)
+                return {"payment": new_payment}
             else:
                 return {"payment": {}}
 
@@ -663,6 +683,8 @@ async def update_ar_receipt(payment_id: str, payment: PaymentModel, _: dict = De
         result = await ap_payment_collection.update_one({"_id": payment_id}, {"$set": payment_data_dict})
         if result.modified_count == 0:
             raise HTTPException(status_code=404)
+        updated_payment = await get_payment_details(payment_id)
+        return {"updated_payment": updated_payment}
 
     except Exception as e:
         print(e)
@@ -762,25 +784,25 @@ async def search_engine_for_ap_payments(
         date_field = "payment_date"
         date_filter = {}
 
-        if filter_payments.today:
-            start = datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
-            end = start + timedelta(days=1)
-            date_filter[date_field] = {"$gte": start, "$lt": end}
+        # if filter_payments.today:
+        #     start = datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
+        #     end = start + timedelta(days=1)
+        #     date_filter[date_field] = {"$gte": start, "$lt": end}
+        #
+        # elif filter_payments.this_month:
+        #     start = datetime(now.year, now.month, 1, tzinfo=timezone.utc)
+        #     if now.month == 12:
+        #         end = datetime(now.year + 1, 1, 1, tzinfo=timezone.utc)
+        #     else:
+        #         end = datetime(now.year, now.month + 1, 1, tzinfo=timezone.utc)
+        #     date_filter[date_field] = {"$gte": start, "$lt": end}
+        #
+        # elif filter_payments.this_year:
+        #     start = datetime(now.year, 1, 1, tzinfo=timezone.utc)
+        #     end = datetime(now.year + 1, 1, 1, tzinfo=timezone.utc)
+        #     date_filter[date_field] = {"$gte": start, "$lt": end}
 
-        elif filter_payments.this_month:
-            start = datetime(now.year, now.month, 1, tzinfo=timezone.utc)
-            if now.month == 12:
-                end = datetime(now.year + 1, 1, 1, tzinfo=timezone.utc)
-            else:
-                end = datetime(now.year, now.month + 1, 1, tzinfo=timezone.utc)
-            date_filter[date_field] = {"$gte": start, "$lt": end}
-
-        elif filter_payments.this_year:
-            start = datetime(now.year, 1, 1, tzinfo=timezone.utc)
-            end = datetime(now.year + 1, 1, 1, tzinfo=timezone.utc)
-            date_filter[date_field] = {"$gte": start, "$lt": end}
-
-        elif filter_payments.from_date or filter_payments.to_date:
+        if filter_payments.from_date or filter_payments.to_date:
             date_filter[date_field] = {}
             if filter_payments.from_date:
                 date_filter[date_field]["$gte"] = filter_payments.from_date
@@ -803,6 +825,25 @@ async def search_engine_for_ap_payments(
             "$facet": {
                 "payments": [
                     {"$sort": {"payment_number": -1}},
+                    {
+                        '$addFields': {
+                            '_id': {
+                                '$toString': '$_id'
+                            },
+                            'company_id': {
+                                '$toString': '$company_id'
+                            },
+                            'payment_type': {
+                                '$toString': '$payment_type'
+                            },
+                            'vendor': {
+                                '$toString': '$vendor'
+                            },
+                            'account': {
+                                '$toString': '$account'
+                            }
+                        }
+                    }
                 ],
                 "grand_totals": [
                     {
@@ -825,12 +866,12 @@ async def search_engine_for_ap_payments(
 
         if result and len(result) > 0:
             data = result[0]
-            payments = [serializer(r) for r in data.get("payments", [])]
+            payments = data.get("payments", [])
             totals = data.get("grand_totals", [])
             grand_totals = totals[0] if totals else {"grand_given": 0}
         else:
             payments = []
-            grand_totals = {"grand_given": 0} # fixed
+            grand_totals = {"grand_given": 0}  # fixed
 
         return {
             "payments": payments,

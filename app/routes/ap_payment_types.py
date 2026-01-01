@@ -58,6 +58,7 @@ async def add_new_ap_payment_type(types: APPaymentTypes, data: dict = Depends(se
             "type": "ap_payment_type_added",
             "data": serialized
         })
+        return {"type": serialized}
     except Exception as e:
         raise e
 

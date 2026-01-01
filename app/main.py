@@ -83,7 +83,7 @@ app.include_router(receiving.router, prefix="/receiving", tags=["Receiving"])
 app.include_router(converters.router, prefix="/converters", tags=["Converters"])
 app.include_router(issue_items.router, prefix="/issue_items", tags=["Issue Items"])
 app.include_router(data_migration.router, prefix="/data_migration", tags=["Data Migration"])
-app.include_router(test.router, prefix="/test", tags=["Test"])
+# app.include_router(test.router, prefix="/test", tags=["Test"])
 
 
 # نقطة نهاية WebSocket العامة

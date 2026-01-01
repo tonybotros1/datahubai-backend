@@ -6,7 +6,7 @@ from pydantic import BaseModel, ValidationError
 from app import database
 from app.core import security
 from app.database import get_collection
-from datetime import datetime, timezone, timedelta
+from datetime import datetime
 from app.routes.car_trading import PyObjectId
 from app.routes.counters import create_custom_counter
 
@@ -22,6 +22,8 @@ class InvoiceItem(BaseModel):
     amount: Optional[float] = None
     vat: Optional[float] = None
     job_number: Optional[str] = None
+    job_number_id: Optional[str] = None
+    received_number: Optional[str] = None
     note: Optional[str] = None
     is_added: Optional[bool] = None
     is_deleted: Optional[bool] = None
@@ -52,20 +54,6 @@ class APInvoicesSearch(BaseModel):
     this_month: Optional[bool] = False
     this_year: Optional[bool] = False
 
-
-def serializer(doc: dict) -> dict:
-    def convert(value):
-        if isinstance(value, ObjectId):
-            return str(value)
-        elif isinstance(value, datetime):
-            return value.isoformat()
-        elif isinstance(value, list):
-            return [convert(v) for v in value]
-        elif isinstance(value, dict):
-            return {k: convert(v) for k, v in value.items()}
-        return value
-
-    return {k: convert(v) for k, v in doc.items()}
 
 
 pipeline: List[dict[str, Any]] = [
@@ -116,21 +104,50 @@ pipeline: List[dict[str, Any]] = [
                         'as': 'transaction_type_details'
                     }
                 }, {
-                    '$unwind': {
-                        'path': '$transaction_type_details',
-                        'preserveNullAndEmptyArrays': True
+                    '$lookup': {
+                        'from': 'job_cards',
+                        'localField': 'job_number_id',
+                        'foreignField': '_id',
+                        'as': 'job_details'
                     }
                 }, {
                     '$addFields': {
                         'transaction_type_name': {
-                            '$ifNull': [
-                                '$transaction_type_details.type', None
+                            '$arrayElemAt': [
+                                '$transaction_type_details.type', 0
+                            ]
+                        },
+                        'job_number': {
+                            '$arrayElemAt': [
+                                '$job_details.job_number', 0
                             ]
                         }
                     }
                 }, {
                     '$project': {
-                        'transaction_type_details': 0
+                        'transaction_type_details': 0,
+                        'job_details': 0
+                    }
+                }, {
+                    '$addFields': {
+                        '_id': {
+                            '$toString': '$_id'
+                        },
+                        'company_id': {
+                            '$toString': '$company_id'
+                        },
+                        'transaction_type': {
+                            '$toString': '$transaction_type'
+                        },
+                        'ap_invoice_id': {
+                            '$toString': '$ap_invoice_id'
+                        },
+                        'job_id': {
+                            '$toString': '$job_id'
+                        },
+                        'job_number_id': {
+                            '$toString': '$job_number_id'
+                        }
                     }
                 }
             ],
@@ -154,6 +171,16 @@ pipeline: List[dict[str, Any]] = [
             'vendor_details': 0,
             'invoice_type_details': 0
         }
+    },
+    {
+        '$addFields': {
+            'total_amounts': {
+                '$sum': '$items.amount'
+            },
+            'total_vats': {
+                '$sum': '$items.vat'
+            }
+        }
     }
 ]
 
@@ -164,6 +191,22 @@ async def get_ap_invoice_details(invoice_id: ObjectId):
         new_pipeline.insert(0, {
             "$match": {
                 "_id": invoice_id
+            }
+        })
+        new_pipeline.append({
+            '$addFields': {
+                '_id': {
+                    '$toString': '$_id'
+                },
+                'company_id': {
+                    '$toString': '$company_id'
+                },
+                'invoice_type': {
+                    '$toString': '$invoice_type'
+                },
+                'vendor': {
+                    '$toString': '$vendor'
+                }
             }
         })
         cursor = await ap_invoices_collection.aggregate(new_pipeline)
@@ -206,6 +249,10 @@ async def add_new_ap_invoice(invoices: APInvoicesModel, data: dict = Depends(sec
                     inv["updatedAt"] = security.now_utc()
                     inv['company_id'] = company_id
                     inv['ap_invoice_id'] = result.inserted_id
+                    if inv.get("transaction_type"):
+                        inv['transaction_type'] = ObjectId(inv['transaction_type'])
+                    if inv.get("job_number_id"):
+                        inv['job_number_id'] = ObjectId(inv['job_number_id'])
                     inv.pop("id", None)
                     inv.pop("uuid", None)
                     inv.pop("is_added", None)
@@ -222,8 +269,7 @@ async def add_new_ap_invoice(invoices: APInvoicesModel, data: dict = Depends(sec
 
             await session.commit_transaction()
             new_receipt = await get_ap_invoice_details(result.inserted_id)
-            serialized = serializer(new_receipt)
-            return {"invoice": serialized}
+            return {"invoice": new_receipt}
 
         except Exception as e:
             await session.abort_transaction()
@@ -248,6 +294,9 @@ async def update_ap_invoice(invoice_id: str, invoice: APInvoicesModel, _: dict =
         result = await ap_invoices_collection.update_one({"_id": invoice_id}, {"$set": invoice_data_dict})
         if result.modified_count == 0:
             raise HTTPException(status_code=404)
+        updated_ap_invoice = await get_ap_invoice_details(invoice_id)
+        print(updated_ap_invoice)
+        return {"updated_ap_invoice": updated_ap_invoice}
 
     except ValidationError as e:
         print(e)
@@ -266,11 +315,13 @@ async def update_invoice_items(
     try:
         company_id = ObjectId(data["company_id"])
         items = [item.model_dump(exclude_unset=True) for item in items]
+        ap_invoice_id = None
+        if items:
+            ap_invoice_id = items[0]["ap_invoice_id"]
 
         added_list = []
         deleted_list = []
         modified_list = []
-        updated_list = []
 
         for item in items:
             if item.get("is_deleted"):
@@ -285,6 +336,7 @@ async def update_invoice_items(
                 item.pop("id", None)
                 item['ap_invoice_id'] = ObjectId(item['ap_invoice_id']) if item['ap_invoice_id'] else None
                 item['transaction_type'] = ObjectId(item['transaction_type']) if item['transaction_type'] else None
+                item['job_number_id'] = ObjectId(item['job_number_id']) if item['job_number_id'] else None
                 item['company_id'] = company_id
                 item["createdAt"] = security.now_utc()
                 item["updatedAt"] = security.now_utc()
@@ -316,16 +368,16 @@ async def update_invoice_items(
                 )
 
             if added_list:
-                added_invoices = await ap_invoices_items_collection.insert_many(
+                await ap_invoices_items_collection.insert_many(
                     added_list, session=s
                 )
-                inserted_ids = added_invoices.inserted_ids
-                for item, new_id in zip(added_list, inserted_ids):
-                    response_item = {
-                        "_id": str(new_id),
-                        "uuid": str(item.get("uuid")),
-                    }
-                    updated_list.append(response_item)
+                # inserted_ids = added_invoices.inserted_ids
+                # for item, new_id in zip(added_list, inserted_ids):
+                #     response_item = {
+                #         "_id": str(new_id),
+                #         "uuid": str(item.get("uuid")),
+                #     }
+                #     updated_list.append(response_item)
 
             for item_id, item_data in modified_list:
                 item_data.pop("id", None)
@@ -334,11 +386,12 @@ async def update_invoice_items(
                     {"$set": item_data},
                     session=s
                 )
-                updated_list.append(
-                    {"_id": str(item_id), "uuid": str(item_data["uuid"]) if item_data.get("uuid") else None})
+                # updated_list.append(
+                #     {"_id": str(item_id), "uuid": str(item_data["uuid"]) if item_data.get("uuid") else None})
 
             await s.commit_transaction()
-        return {"updated_items": updated_list, "deleted_items": [str(d) for d in deleted_list]}
+            updated_ap_invoice = await get_ap_invoice_details(ObjectId(ap_invoice_id))
+        return {"updated_ap_invoice": updated_ap_invoice}
 
     except Exception as e:
         print(e)
@@ -425,29 +478,12 @@ async def search_engine(filtered_invoices: APInvoicesSearch, data: dict = Depend
             match_stage["status"] = filtered_invoices.status
 
         # 2️⃣ Handle date filters
-        now = datetime.now()
         date_field = "transaction_date"
         date_filter = {}
 
-        if filtered_invoices.today:
-            start = datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
-            end = start + timedelta(days=1)
-            date_filter[date_field] = {"$gte": start, "$lt": end}
 
-        elif filtered_invoices.this_month:
-            start = datetime(now.year, now.month, 1, tzinfo=timezone.utc)
-            if now.month == 12:
-                end = datetime(now.year + 1, 1, 1, tzinfo=timezone.utc)
-            else:
-                end = datetime(now.year, now.month + 1, 1, tzinfo=timezone.utc)
-            date_filter[date_field] = {"$gte": start, "$lt": end}
 
-        elif filtered_invoices.this_year:
-            start = datetime(now.year, 1, 1, tzinfo=timezone.utc)
-            end = datetime(now.year + 1, 1, 1, tzinfo=timezone.utc)
-            date_filter[date_field] = {"$gte": start, "$lt": end}
-
-        elif filtered_invoices.from_date or filtered_invoices.to_date:
+        if filtered_invoices.from_date or filtered_invoices.to_date:
             date_filter[date_field] = {}
             if filtered_invoices.from_date:
                 date_filter[date_field]["$gte"] = filtered_invoices.from_date
@@ -477,7 +513,24 @@ async def search_engine(filtered_invoices: APInvoicesSearch, data: dict = Depend
                         '$sort': {
                             'reference_number': -1
                         }
+                    },
+                    {
+                        '$addFields': {
+                            '_id': {
+                                '$toString': '$_id'
+                            },
+                            'company_id': {
+                                '$toString': '$company_id'
+                            },
+                            'invoice_type': {
+                                '$toString': '$invoice_type'
+                            },
+                            'vendor': {
+                                '$toString': '$vendor'
+                            }
+                        }
                     }
+
                 ],
                 'grand_totals': [
                     {
@@ -498,11 +551,12 @@ async def search_engine(filtered_invoices: APInvoicesSearch, data: dict = Depend
                 ]
             }
         })
+
         cursor = await ap_invoices_collection.aggregate(search_pipeline)
         result = await cursor.to_list(None)
         if result and len(result) > 0:
             data = result[0]
-            invoices = [serializer(r) for r in data.get("invoices", [])]
+            invoices = data.get("invoices", [])
             totals = data.get("grand_totals", [])
             grand_totals = totals[0] if totals else {"grand_amounts": 0, "grand_vats": 0}
         else:
@@ -517,6 +571,7 @@ async def search_engine(filtered_invoices: APInvoicesSearch, data: dict = Depend
     except HTTPException:
         raise
     except Exception as e:
+        print(e)
         raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
 
 

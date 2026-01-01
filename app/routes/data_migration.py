@@ -6,6 +6,7 @@ from app.core import security
 from app.database import get_collection
 import math
 
+from app.routes.ap_payment_types import APPaymentTypes, add_new_ap_payment_type
 from app.routes.banks_and_others import BanksModel, add_new_bank
 from app.routes.branches import add_new_branch
 from app.routes.brands_and_models import create_brand, add_new_model
@@ -34,6 +35,12 @@ invoice_items_collection = get_collection("invoice_items")
 receipts_collection = get_collection("all_receipts")
 receipts_invoices_collection = get_collection("all_receipts_invoices")
 banks_collection = get_collection("all_banks")
+ap_invoices_collection = get_collection("ap_invoices")
+ap_invoices_items_collection = get_collection("ap_invoices_items")
+ap_payment_types_collection = get_collection("ap_payment_types")
+
+ap_payment_collection = get_collection("all_payments")
+ap_payment_invoices_collection = get_collection("all_payments_invoices")
 
 
 def normalize_number_to_string(value):
@@ -67,9 +74,12 @@ def clean_value(value, number: Optional[bool] = False):
         return None
     # check for pandas NaN or float NaN
     if isinstance(value, float) and math.isnan(value):
-        return 0
+        return ""
     if number:
-        s = value
+        if isinstance(value, float) and math.isnan(value):
+            return 0
+        else:
+            s = value
     else:
         s = str(value).strip()
     if s == "":
@@ -98,6 +108,8 @@ async def get_file(file: UploadFile = File(...), screen_name: str = Form(...),
             await dealing_with_ar_receipts(file, data, delete_every_thing)
         elif screen_name.lower() == 'ar receipts items':
             await dealing_with_ar_receipts_invoices(file, data, delete_every_thing)
+        elif screen_name.lower() == 'ap invoices':
+            await dealing_with_ap_invoices(file, data, delete_every_thing)
 
 
 
@@ -105,11 +117,230 @@ async def get_file(file: UploadFile = File(...), screen_name: str = Form(...),
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# =========================== ap invoices section ===========================
+async def dealing_with_ap_invoices(file, data, delete_every_thing: bool):
+    try:
+        company_id = ObjectId(data.get('company_id'))
+        if delete_every_thing:
+            await ap_invoices_collection.delete_many({'company_id': company_id})
+            await ap_invoices_items_collection.delete_many({'company_id': company_id})
+            await entity_information_collection.delete_many({
+                "company_id": company_id,
+                "entity_code": {"$in": ["Vendor"]}
+            })
+            await ap_payment_collection.delete_many({'company_id': company_id})
+            await ap_payment_invoices_collection.delete_many({'company_id': company_id})
+            await ap_payment_types_collection.delete_many({'company_id': company_id})
+            print("all deleted")
+        contents = await file.read()
+        df = pd.read_excel(BytesIO(contents))
+        df.columns = df.columns.str.strip().str.lower()
+        date_cols = ["transaction_date", "invoice_date"]
+        for col in date_cols:
+            if col in df.columns:
+                df[col] = pd.to_datetime(df[col], errors="coerce")
+        # df_2025 = df[(df["transaction_date"].dt.year >= 2025) | df['invoice_Date'].dt.year >= 2025]
+
+        existing_values = {b["name"].capitalize(): ObjectId(b["_id"]) for b in
+                           await value_collection.find({}).to_list(length=None)}
+        print("got existing_values")
+
+        existing_vendors = {b['entity_name'].capitalize().strip(): b for b in
+                            await entity_information_collection.find(
+                                {"entity_code": "Vendor", "company_id": company_id}).to_list(length=None)}
+        print("got existing_vendors")
+
+        existing_ap_payment_types = {b["type"].capitalize().strip(): b["_id"] for b in
+                                     await ap_payment_types_collection.find({"company_id": company_id}).to_list(
+                                         length=None)}
+        print("got existing_ap_payment_types")
+
+        existing_job_cards = {b.get("job_id", None): ObjectId(b["_id"]) for b in
+                              await job_cards_collection.find({"company_id": company_id}).to_list()}
+        print("got existing_job_cards")
+
+        existing_banks = {b["account_number"]: ObjectId(b["_id"]) for b in
+                          await banks_collection.find({}).to_list(length=None)}
+        print("got existing_banks")
+
+        account_types_bank_doc = await value_collection.find_one({"name": "Bank"})
+        account_types_list_id = str(account_types_bank_doc["_id"])
+        uae_country_doc = await countries_collection.find_one({"code": "UAE"})
+        uae_country_id = str(uae_country_doc["_id"])
+        uae_currency_doc = await currencies_collection.find_one({"country_id": ObjectId(uae_country_id)})
+        uae_currency_id = str(uae_currency_doc["_id"])
+
+        print("starting the loop...")
+
+        for i, row in enumerate(df.itertuples(index=False), start=1):
+            reference_number = normalize_number_to_string(row[0])
+            status = clean_value(row[1])
+            transaction_date = row[2]
+            invoice_type = clean_value(row[3])
+            invoice_number = normalize_number_to_string(row[4])
+            invoice_date = row[5]
+            vendor = clean_value(row[6])
+            description = clean_value(row[7])
+            payment_type = clean_value(row[8])
+            account = clean_value(row[9])
+            cheque_number = clean_value(row[10])
+            cheque_date = to_mongo_datetime(row[11])
+            rate = clean_value(row[13], number=True)
+            payment_date = to_mongo_datetime(row[14])
+            payment_number = clean_value(row[15], number=True)
+            payment_amount = clean_value(row[16], number=True)
+            transaction_type = clean_value(row[17])
+            amount = clean_value(row[18], number=True)
+            vat = clean_value(row[19], number=True)
+            job_id = clean_value(row[20], number=True)
+            received_number = clean_value(row[21])
+            notes = clean_value(row[22])
+
+            if invoice_type:
+                invoice_type_id = existing_values.get(invoice_type.capitalize())
+            else:
+                invoice_type_id = None
+
+            if vendor:
+                vendor_data = existing_vendors.get(vendor.capitalize())
+                if vendor_data:
+                    vendor_id = vendor_data.get("_id")
+                else:
+                    vendor_details = await create_entity_service(entity_name=str(vendor.capitalize().strip()),
+                                                                 entity_code=['Vendor'],
+                                                                 credit_limit=0,
+                                                                 warranty_days=0,
+                                                                 salesman_id=None,
+                                                                 entity_status='Company',
+                                                                 group_name="",
+                                                                 industry_id=None, trn="",
+                                                                 entity_type_id=None,
+                                                                 entity_address=[],
+                                                                 entity_phone=[],
+                                                                 entity_social=[],
+                                                                 company_id=company_id,
+                                                                 lpo_required="N"
+                                                                 )
+                    print("added new Vendor")
+                    existing_vendors[str(vendor).capitalize().strip()] = vendor_details
+                    vendor_id = vendor_details['_id']
+            else:
+                vendor_id = None
+
+            ap_invoice_dict = {
+                "company_id": company_id,
+                "reference_number": reference_number.strip(),
+                "status": status.capitalize().strip(),
+                "transaction_date": to_mongo_datetime(transaction_date),
+                "invoice_type": ObjectId(invoice_type_id),
+                "invoice_number": invoice_number.strip(),
+                "invoice_date": to_mongo_datetime(invoice_date),
+                "vendor": ObjectId(vendor_id) if vendor_id else None,
+                "description": description,
+                "createdAt": security.now_utc(),
+                "updatedAt": security.now_utc(),
+            }
+            new_ap_invoice = await ap_invoices_collection.insert_one(ap_invoice_dict)
+            print(f"added new AP Invoice for row: {i}")
+            ap_invoice_id = new_ap_invoice.inserted_id
+
+            if transaction_type:
+                transaction_type_id = existing_ap_payment_types.get(transaction_type.capitalize().strip())
+                if not transaction_type_id:
+                    ap_payment_type_model = APPaymentTypes(type=transaction_type.capitalize().strip())
+                    new_ap_payment_type = await add_new_ap_payment_type(types=ap_payment_type_model, data=data)
+                    transaction_type_id = new_ap_payment_type['type']['_id']
+                    existing_ap_payment_types[transaction_type.capitalize().strip()] = transaction_type_id
+            else:
+                transaction_type_id = None
+
+            if job_id:
+                job_card_id = existing_job_cards.get(int(job_id), None)
+
+            else:
+                job_card_id = None
+
+            ap_invoice_item_dict = {
+                "company_id": company_id,
+                "ap_invoice_id": ap_invoice_id,
+                "transaction_type": ObjectId(transaction_type_id),
+                "amount": amount,
+                "vat": vat,
+                "job_number_id": ObjectId(job_card_id) if job_card_id else None,
+                "received_number": received_number,
+                "note": notes,
+                "createdAt": security.now_utc(),
+                "updatedAt": security.now_utc(),
+            }
+            await ap_invoices_items_collection.insert_one(ap_invoice_item_dict)
+            print(f"added new AP Invoice Item for row: {i}")
+
+            if payment_type:
+                payment_type_to_search = 'Credit Card' if payment_type.capitalize() == 'Card' else payment_type
+                payment_type_id = existing_values.get(payment_type_to_search.capitalize().strip(), None)
+            else:
+                payment_type_id = None
+
+            try:
+                if account:
+                    account_id = existing_banks.get(str(account).strip())
+                    if not account_id:
+                        account_model = BanksModel(
+                            account_name=account,
+                            account_number=account,
+                            currency_id=uae_currency_id,
+                            account_type_id=account_types_list_id
+                        )
+                        new_account = await add_new_bank(bank=account_model, data=data)
+                        account_id = ObjectId(new_account['account']['_id'])
+                        existing_banks[str(new_account).strip()] = account_id
+                else:
+                    account_id = None
+            except Exception as e:
+                print(f"error in account {e}")
+                raise
+
+            ap_payment_dict = {
+                "company_id": company_id,
+                "payment_type": ObjectId(payment_type_id),
+                "payment_date": payment_date,
+                "status": status.capitalize().strip(),
+                "vendor": ObjectId(vendor_id) if vendor_id else None,
+                "note": description,
+                "cheque_number": cheque_number,
+                "account": account_id,
+                "currency": 'AED',
+                "rate": rate,
+                "cheque_date" : cheque_date,
+                "payment_number": str(payment_number),
+                "createdAt": security.now_utc(),
+                "updatedAt": security.now_utc(),
+            }
+            new_payment = await ap_payment_collection.insert_one(ap_payment_dict)
+            print(f"added new AP Payment for row: {i}")
+
+
+            ap_payment_invoice_dict = {
+                "company_id": company_id,
+                "ap_invoices_id": new_ap_invoice.inserted_id,
+                "amount": payment_amount,
+                "payment_id": new_payment.inserted_id,
+                "createdAt": security.now_utc(),
+                "updatedAt": security.now_utc(),
+            }
+            await ap_payment_invoices_collection.insert_one(ap_payment_invoice_dict)
+            print(f"added new AP Payment Item for row: {i}")
+
+
+    except Exception as e:
+        print(e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # =========================== ar receipts section ===========================
 async def dealing_with_ar_receipts(file: UploadFile, data: dict, delete_every_thing: bool):
     try:
         company_id = ObjectId(data.get('company_id'))
-        user_id = ObjectId(data.get('sub'))
         if delete_every_thing:
             await receipts_collection.delete_many({'company_id': company_id})
             await receipts_invoices_collection.delete_many({'company_id': company_id})
@@ -212,7 +443,7 @@ async def dealing_with_ar_receipts(file: UploadFile, data: dict, delete_every_th
                 "receipt_type": receipt_type_id,
                 "status": status.capitalize(),
                 "currency": 'AED',
-                "rate": clean_value(row[8],number=True),
+                "rate": clean_value(row[8], number=True),
                 "cheque_number": clean_value(row[9]) if clean_value(row[9]) != 0 else "",
                 "cheque_date": cheque_date,
                 "note": clean_value(row[12]) if clean_value(row[12]) != 0 else "",
@@ -257,7 +488,6 @@ async def dealing_with_ar_receipts_invoices(file: UploadFile, data: dict, delete
             else:
                 job_card_id = None
 
-
             if receipt_id:
                 new_receipt_id = existing_ar_receipts.get(receipt_id, None)
             else:
@@ -265,7 +495,7 @@ async def dealing_with_ar_receipts_invoices(file: UploadFile, data: dict, delete
             if new_receipt_id and job_card_id:
                 invoice_dict = {
                     "company_id": company_id,
-                    "receipt_id" : new_receipt_id,
+                    "receipt_id": new_receipt_id,
                     "job_id": job_card_id,
                     "amount": amount,
                     "createdAt": security.now_utc(),
@@ -424,7 +654,7 @@ async def dealing_with_job_cards(file: UploadFile, data: dict, delete_every_thin
                              await salesman_collection.find({}).to_list(length=None)}
         existing_branches = {b['name']: ObjectId(b['_id']) for b in
                              await branches_collection.find({}).to_list(length=None)}
-        existing_customers = {b['entity_name'].capitalize().strip() : b for b in
+        existing_customers = {b['entity_name'].capitalize().strip(): b for b in
                               await entity_information_collection.find({}).to_list(length=None)}
 
         for i, row in enumerate(df_2025.itertuples(index=False), start=1):
@@ -542,7 +772,8 @@ async def dealing_with_job_cards(file: UploadFile, data: dict, delete_every_thin
                 if city and city != 0 and city != '0':
                     city_id = existing_cities.get(city)
                     if not city_id:
-                        new_city = await add_new_city(country_id=str(uae_country_id), name=str(city), code=str(city).upper())
+                        new_city = await add_new_city(country_id=str(uae_country_id), name=str(city),
+                                                      code=str(city).upper())
                         city_id = ObjectId(new_city['City']['_id'])
                         existing_cities[str(city)] = city_id
                 else:
