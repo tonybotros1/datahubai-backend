@@ -47,6 +47,7 @@ class APInvoicesSearch(BaseModel):
     reference_number: Optional[str] = None
     vendor: Optional[PyObjectId] = None
     status: Optional[str] = None
+    invoice_number: Optional[str] = None
     from_date: Optional[datetime] = None
     to_date: Optional[datetime] = None
     all: Optional[bool] = False
@@ -468,6 +469,8 @@ async def search_engine(filtered_invoices: APInvoicesSearch, data: dict = Depend
             match_stage['company_id'] = company_id
         if filtered_invoices.invoice_type:
             match_stage["invoice_type"] = filtered_invoices.invoice_type
+        if filtered_invoices.invoice_number:
+            match_stage["invoice_number"] = filtered_invoices.invoice_number
         if filtered_invoices.reference_number:
             match_stage["reference_number"] = {
                 "$regex": filtered_invoices.reference_number, "$options": "i"
