@@ -93,6 +93,17 @@ def to_mongo_datetime(value):
     return value.to_pydatetime()
 
 
+def safe_float(value, default=0.0):
+    try:
+        if value in ("", None):
+            return default
+        if pd.isna(value):
+            return default
+        return float(value)
+    except (ValueError, TypeError):
+        return default
+
+
 # =========================== main function section ===========================
 @router.post('/get_file')
 async def get_file(file: UploadFile = File(...), screen_name: str = Form(...),
@@ -140,6 +151,14 @@ async def dealing_with_ap_invoices(file, data, delete_every_thing: bool):
             if col in df.columns:
                 df[col] = pd.to_datetime(df[col], errors="coerce")
         # df_2025 = df[(df["transaction_date"].dt.year >= 2025) | df['invoice_Date'].dt.year >= 2025]
+        df_2025 = df[
+            (
+                    (df["transaction_date"].dt.year == 2025) & (df["transaction_date"].dt.month == 12)
+            ) |
+            (
+                    (df["invoice_date"].dt.year == 2025) & (df["invoice_date"].dt.month == 12)
+            )
+        ].sort_values(by=df.columns[0])
 
         existing_values = {b["name"].capitalize(): ObjectId(b["_id"]) for b in
                            await value_collection.find({}).to_list(length=None)}
@@ -172,7 +191,7 @@ async def dealing_with_ap_invoices(file, data, delete_every_thing: bool):
 
         print("starting the loop...")
 
-        for i, row in enumerate(df.itertuples(index=False), start=1):
+        for i, row in enumerate(df_2025.itertuples(index=False), start=1):
             reference_number = normalize_number_to_string(row[0])
             status = clean_value(row[1])
             transaction_date = row[2]
@@ -311,14 +330,13 @@ async def dealing_with_ap_invoices(file, data, delete_every_thing: bool):
                 "account": account_id,
                 "currency": 'AED',
                 "rate": rate,
-                "cheque_date" : cheque_date,
+                "cheque_date": cheque_date,
                 "payment_number": str(payment_number),
                 "createdAt": security.now_utc(),
                 "updatedAt": security.now_utc(),
             }
             new_payment = await ap_payment_collection.insert_one(ap_payment_dict)
             print(f"added new AP Payment for row: {i}")
-
 
             ap_payment_invoice_dict = {
                 "company_id": company_id,
@@ -353,7 +371,14 @@ async def dealing_with_ar_receipts(file: UploadFile, data: dict, delete_every_th
         for col in date_cols:
             if col in df.columns:
                 df[col] = pd.to_datetime(df[col], errors="coerce")
-        df_2025 = df[(df["receipt_date"].dt.year == 2025)]
+        # df_2025 = df[(df["receipt_date"].dt.year == 2025)]
+        df_2025 = df[
+            (
+                    (df["receipt_date"].dt.year == 2025) & (df["receipt_date"].dt.month == 12)
+            )
+        ].sort_values(by=df.columns[0])
+        print(df_2025.shape)
+        print(df_2025.head())
         # print(df_2025["receipt_type"].value_counts())
         # print(df_2025.head())
 
@@ -624,10 +649,18 @@ async def dealing_with_job_cards(file: UploadFile, data: dict, delete_every_thin
             if col in df.columns:
                 df[col] = pd.to_datetime(df[col], errors="coerce")
         df_2025 = df[
-            (df["job_date"].dt.year == 2025) |
-            (df["invoice_date"].dt.year == 2025) |
-            (df["cancellation_date"].dt.year == 2025)
-            ]
+            (
+                    (df["job_date"].dt.year == 2025) & (df["job_date"].dt.month == 12)
+            ) |
+            (
+                    (df["invoice_date"].dt.year == 2025) & (df["invoice_date"].dt.month == 12)
+            ) |
+            (
+                    (df["cancellation_date"].dt.year == 2025) & (df["cancellation_date"].dt.month == 12)
+            )
+            ].sort_values(by=df.columns[0])
+        print(df_2025.shape)
+        print(df_2025.head())
 
         color_doc = await list_collection.find_one({"code": "COLORS"})
         color_list_id = str(color_doc["_id"])
@@ -654,7 +687,7 @@ async def dealing_with_job_cards(file: UploadFile, data: dict, delete_every_thin
                              await salesman_collection.find({}).to_list(length=None)}
         existing_branches = {b['name']: ObjectId(b['_id']) for b in
                              await branches_collection.find({}).to_list(length=None)}
-        existing_customers = {b['entity_name'].capitalize().strip(): b for b in
+        existing_customers = {b['entity_name'].strip(): b for b in
                               await entity_information_collection.find({}).to_list(length=None)}
 
         for i, row in enumerate(df_2025.itertuples(index=False), start=1):
@@ -666,8 +699,8 @@ async def dealing_with_job_cards(file: UploadFile, data: dict, delete_every_thin
             salesman = clean_value(row[13])
             branch = clean_value(row[14])
             payment_type = clean_value(row[17])
-            mileage_in = clean_value(row[10], number=True)
-            mileage_out = clean_value(row[11], number=True)
+            mileage_in = safe_float(row[10] or 0)
+            mileage_out = safe_float(row[11] or 0)
             job_min_test_km = clean_value(row[12], number=True)
             returned = clean_value(row[18])
             job_number = clean_value(row[19])
@@ -823,12 +856,15 @@ async def dealing_with_job_cards(file: UploadFile, data: dict, delete_every_thin
                 # customer section
                 if customer:
                     # customer_id = existing_customers.get(customer.strip())['_id']
-                    customer_data = existing_customers.get(customer.capitalize().strip())
+                    customer_data = existing_customers.get(customer.strip())
                     if customer_data:
                         customer_id = customer_data["_id"]
+                        print("found the customer")
                     else:
                         customer_id = None
                     if not customer_id:
+                        print("creating the customer")
+
                         try:
                             if customer_salesman:
                                 customer_salesman_id_for_new_customer = existing_salesman.get(
@@ -848,6 +884,7 @@ async def dealing_with_job_cards(file: UploadFile, data: dict, delete_every_thin
                             # This will show exactly which row failed
                             print(f"Error Customer salesman processing row {i}: {row_err}")
                             raise
+                        print("done from salesman")
 
                         try:
                             if customer_address_city and (customer_address_city != 0 and customer_address_city != '0'):
@@ -865,6 +902,7 @@ async def dealing_with_job_cards(file: UploadFile, data: dict, delete_every_thin
                             # This will show exactly which row failed
                             print(f"Error customer city country processing row {i}: {row_err}")
                             raise
+                        print("done from address city")
 
                         address_list = [
                             {
@@ -874,37 +912,41 @@ async def dealing_with_job_cards(file: UploadFile, data: dict, delete_every_thin
                                 "city_id": customer_address_city,
                             }
                         ]
+                        print("done from address_list")
 
-                        phone_list = [
-                            {
+                        phone_list = [{
+                            "number": str(customer_phone_number),
+                            "name": str(customer_phone_name) if customer_phone_name != 0 else "",
+                            "job_title": "",
+                            "email": str(customer_phone_email) if customer_phone_email != 0 else "",
+                            "isPrimary": True,
+                            "type_id": ObjectId(phone_type_personal_id)
+                        }]
+                        if customer_phone_work_number and customer_phone_work_number != "" and customer_phone_work_number != "0" and customer_phone_work_number != 0:
+                            phone_list.append({
                                 "number": str(customer_phone_work_number),
-                                "name": str(customer_phone_name),
+                                "name": str(customer_phone_name) if customer_phone_name != 0 else "",
                                 "job_title": "",
-                                "email": str(customer_phone_email),
-                                "isPrimary": True,
-                                "type_id": ObjectId(phone_type_work_id)
-                            },
-                            {
-                                "number": str(customer_phone_number),
-                                "name": str(customer_phone_name),
-                                "job_title": "",
-                                "email": str(customer_phone_email),
+                                "email": str(customer_phone_email) if customer_phone_email != 0 else "",
                                 "isPrimary": False,
-                                "type_id": ObjectId(phone_type_personal_id)
-                            },
+                                "type_id": ObjectId(phone_type_work_id)
+                            })
+                        print("done from phone_list")
 
-                        ]
-
-                        website_list = [
-                            {
+                        website_list = []
+                        if customer_website and customer_website != "" and customer_website != "0" and customer_website != 0:
+                            website_list.append({
                                 "type_id": ObjectId(website_www_id),
                                 "link": str(customer_website)
-                            }
-                        ]
-                        customer_details = await create_entity_service(entity_name=str(customer.capitalize().strip()),
+                            })
+                        print("done from website_list")
+
+                        customer_details = await create_entity_service(entity_name=str(customer.strip()),
                                                                        entity_code=['Customer'],
-                                                                       credit_limit=float(customer_credit_limit),
-                                                                       warranty_days=int(customer_warranty_days),
+                                                                       credit_limit=float(
+                                                                           customer_credit_limit) if customer_credit_limit else 0,
+                                                                       warranty_days=int(
+                                                                           customer_warranty_days) if customer_warranty_days else 0,
                                                                        salesman_id=customer_salesman_id_for_new_customer,
                                                                        entity_status=str(entity_status),
                                                                        group_name=str(customer_group_name),
@@ -951,7 +993,7 @@ async def dealing_with_job_cards(file: UploadFile, data: dict, delete_every_thin
                 "currency": ObjectId(uae_currency_id),
                 "rate": uae_currency_rate if uae_currency_rate else 0,
                 "payment_method": payment_type.capitalize() if payment_type == 'CREDIT' else 'Cash',
-                "label": returned.capitalize() if returned == 'RETURNED' else "",
+                "label": returned.capitalize(),
                 "job_number": job_number,
                 "job_date": to_mongo_datetime(job_date),
                 "invoice_number": invoice_number if invoice_number != "0" else "",
@@ -964,7 +1006,7 @@ async def dealing_with_job_cards(file: UploadFile, data: dict, delete_every_thin
                 "job_delivery_date": to_mongo_datetime(job_delivery_date) if to_mongo_datetime(
                     job_delivery_date) else to_mongo_datetime(job_date),
                 "job_warranty_days": int(job_warranty_days),
-                "job_warranty_km": float(job_warranty_km),
+                "job_warranty_km": float(job_warranty_km) if job_warranty_km else 0,
                 "job_reference_1": reference_1 if reference_1 else "",
                 "job_reference_2": reference_2 if reference_2 else "",
                 "invoice_new_date": to_mongo_datetime(invoice_new_date),
@@ -976,7 +1018,7 @@ async def dealing_with_job_cards(file: UploadFile, data: dict, delete_every_thin
                 "contact_name": customer,
                 "contact_number": customer_phone_work_number,
                 "contact_email": customer_phone_email,
-                "credit_limit": float(customer_credit_limit),
+                "credit_limit": float(customer_credit_limit) if customer_credit_limit else 0,
                 "engine_type": None,
                 "transmission_type": "",
                 "job_warranty_end_date": (
@@ -1003,7 +1045,7 @@ async def dealing_with_job_cards(file: UploadFile, data: dict, delete_every_thin
                 internal_note_dict["file_type"] = None
                 internal_note_dict["note_public_id"] = None
                 await job_cards_internal_notes_collection.insert_one(internal_note_dict)
-            print(str(job_id))
+            print(f"added new job for row: {i}")
 
 
 

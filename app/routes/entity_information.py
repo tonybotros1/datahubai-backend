@@ -11,6 +11,7 @@ from app.core import security
 from app.database import get_collection
 from datetime import datetime
 
+from app.routes.car_trading import PyObjectId
 from app.websocket_config import manager
 from app.widgets import upload_images
 from app.widgets.upload_images import upload_image
@@ -32,6 +33,13 @@ def serializer(doc: dict) -> dict:
         return value
 
     return {k: convert(v) for k, v in doc.items()}
+
+
+class EntityInformationModel(BaseModel):
+    name: Optional[str] = None
+    country: Optional[PyObjectId] = None
+    city: Optional[PyObjectId] = None
+    number: Optional[str] = None
 
 
 pipeline: list[Dict[str, Any]] = [
@@ -227,7 +235,9 @@ pipeline: list[Dict[str, Any]] = [
                     'in': {
                         'line': '$$addr.line',
                         'isPrimary': '$$addr.isPrimary',
-                        'country_id': '$$addr.country_id',
+                        'country_id': {
+                            '$toString': '$$addr.country_id'
+                        },
                         'country': {
                             '$ifNull': [
                                 {
@@ -252,7 +262,9 @@ pipeline: list[Dict[str, Any]] = [
                                 }, None
                             ]
                         },
-                        'city_id': '$$addr.city_id',
+                        'city_id': {
+                            '$toString': '$$addr.city_id'
+                        },
                         'city': {
                             '$ifNull': [
                                 {
@@ -317,7 +329,9 @@ pipeline: list[Dict[str, Any]] = [
                         'job_title': '$$phone.job_title',
                         'email': '$$phone.email',
                         'isPrimary': '$$phone.isPrimary',
-                        'type_id': '$$phone.type_id',
+                        'type_id': {
+                            '$toString': '$$phone.type_id'
+                        },
                         'type': {
                             '$arrayElemAt': [
                                 {
@@ -374,7 +388,9 @@ pipeline: list[Dict[str, Any]] = [
                     'as': 'social',
                     'in': {
                         'link': '$$social.link',
-                        'type_id': '$$social.type_id',
+                        'type_id': {
+                            '$toString': '$$social.type_id'
+                        },
                         'type': {
                             '$arrayElemAt': [
                                 {
@@ -423,6 +439,21 @@ pipeline: list[Dict[str, Any]] = [
             'entity_social': 1,
             'createdAt': 1,
             'updatedAt': 1
+        }
+    }, {
+        '$addFields': {
+            '_id': {
+                '$toString': '$_id'
+            },
+            'salesman_id': {
+                '$toString': '$salesman_id'
+            },
+            'industry_id': {
+                '$toString': '$industry_id'
+            },
+            'entity_type_id': {
+                '$toString': '$entity_type_id'
+            }
         }
     }
 ]
@@ -765,5 +796,53 @@ async def change_entity_status(entity_id: str, status: bool = Body(None), _: dic
             "type": "entity_status_updated",
             "data": {"status": status, "_id": entity_id}
         })
+    except Exception as error:
+        raise HTTPException(status_code=500, detail=str(error))
+
+
+@router.post("/search_engine_for_entity_information")
+async def search_engine_for_entity_information(filter_entities: EntityInformationModel,
+                                               data: dict = Depends(security.get_current_user)):
+    try:
+        company_id = ObjectId(data.get("company_id"))
+        base_search_pipeline: list[dict] = copy.deepcopy(pipeline)
+        match_stage = {}
+        if company_id:
+            match_stage["company_id"] = company_id
+        if filter_entities.name:
+            match_stage["entity_name"] = {"$regex": filter_entities.name, "$options": "i"}
+        if filter_entities.country:
+            match_stage["entity_address"] = {
+                "$elemMatch": {
+                    "isPrimary": True,
+                    "country_id": filter_entities.country
+                }
+            }
+
+        if filter_entities.city:
+            # If country was already matched with $elemMatch, extend it
+            # if "entity_address" in match_stage:
+            #     match_stage["entity_address"]["$elemMatch"]["city"] = filter_entities.city
+            # else:
+            match_stage["entity_address"] = {
+                "$elemMatch": {
+                    "isPrimary": True,
+                    "city_id": filter_entities.city
+                }
+            }
+        if filter_entities.number:
+            match_stage["entity_phone"] = {
+                "$elemMatch": {
+                    "isPrimary": True,
+                    "number": filter_entities.number
+                }
+            }
+        print(match_stage)
+        base_search_pipeline.insert(0, {"$match": match_stage})
+        base_search_pipeline.insert(1, {"$sort": {"entity_name": 1}})
+        cursor = await entity_information_collection.aggregate(base_search_pipeline)
+        results = await cursor.to_list(None)
+        return {"entities": results}
+
     except Exception as error:
         raise HTTPException(status_code=500, detail=str(error))
