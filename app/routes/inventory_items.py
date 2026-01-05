@@ -97,8 +97,6 @@ async def update_inventory_item(item_id: str, inventory_item: InventoryItem,
         return {"message": str(e)}
 
 
-
-
 @router.delete("/delete_item/{item_id}")
 async def delete_branch(item_id: str, _: dict = Depends(security.get_current_user)):
     try:
@@ -115,3 +113,39 @@ async def delete_branch(item_id: str, _: dict = Depends(security.get_current_use
     except Exception as error:
         return {"message": str(error)}
 
+
+@router.post("/search_engine_for_inventory_items")
+async def search_engine_for_inventory_items(items: InventoryItem, data: dict = Depends(security.get_current_user)):
+    try:
+        company_id = ObjectId(data.get("company_id"))
+        match_stage = {}
+        pipeline = []
+        if company_id:
+            match_stage["company_id"] = company_id
+        if items.code:
+            match_stage["code"] = {"$regex": items.code, "$options": "i"}
+        if items.name:
+            match_stage["name"] = {"$regex": items.name, "$options": "i"}
+        if items.min_quantity:
+            match_stage["min_quantity"] =  items.min_quantity
+
+        pipeline.append({"$match": match_stage})
+        pipeline.append({
+            '$addFields': {
+                '_id': {
+                    '$toString': '$_id'
+                },
+                'company_id': {
+                    '$toString': '$company_id'
+                }
+            }
+        })
+        pipeline.append({
+            '$limit': 200
+        })
+        cursor = await inventory_items_collection.aggregate(pipeline)
+        results = await cursor.to_list(None)
+        return {"inventory_items": results}
+
+    except Exception as error:
+        return {"message": str(error)}

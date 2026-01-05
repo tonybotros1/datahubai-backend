@@ -357,6 +357,7 @@ async def search_engine_for_converters(
         search_pipeline.append({
             "$facet": {
                 "converters": [
+                    {"$limit": 200},
                     {"$sort": {"converter_number": -1}},
                 ],
                 "grand_totals": [

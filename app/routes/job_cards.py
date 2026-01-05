@@ -1017,27 +1017,15 @@ async def search_engine_for_job_cards_3(
         user_id = ObjectId(data.get("sub"))
 
         user_branches = await get_user_branches(user_id)
-
-        # -------------------------
-        # 1️⃣ تحديد حقل التاريخ
-        # -------------------------
         if filter_jobs.status == "Posted":
             date_field = "invoice_date"
         elif filter_jobs.status == "Cancelled":
             date_field = "job_cancellation_date"
         else:
             date_field = "job_date"
-
-        # -------------------------
-        # 2️⃣ MATCH موحّد (أهم تحسين)
-        # -------------------------
-        # match_stage: Any = {
-        #     "company_id": company_id,
-        #     "branch": {"$in": user_branches}
-        # }
         if user_branches:
             branch_filters = [{"branch": b, "company_id": company_id} for b in user_branches]
-            match_stage:Any = {"$or": branch_filters}
+            match_stage: Any = {"$or": branch_filters}
         else:
             match_stage = {"company_id": company_id}
 
@@ -1091,10 +1079,6 @@ async def search_engine_for_job_cards_3(
         pipeline_special = [
             {"$match": match_stage},
             {"$sort": {date_field: -1}},
-
-            # -------------------------
-            # 3️⃣ Lookups الأساسية
-            # -------------------------
             {
                 "$lookup": {
                     "from": "all_brands",
@@ -1190,10 +1174,6 @@ async def search_engine_for_job_cards_3(
                 "foreignField": "_id",
                 "as": "quotation_details"
             }},
-
-            # -------------------------
-            # 4️⃣ العملات
-            # -------------------------
             {
                 "$lookup": {
                     "from": "currencies",
@@ -1217,10 +1197,6 @@ async def search_engine_for_job_cards_3(
                     "as": "currency_country_details"
                 }
             },
-
-            # -------------------------
-            # 5️⃣ Lookups المالية الثقيلة
-            # -------------------------
             {
                 "$lookup": {
                     "from": "job_cards_invoice_items",
@@ -1281,10 +1257,6 @@ async def search_engine_for_job_cards_3(
                     "final_outstanding": {"$subtract": ["$total_net", "$paid"]}
                 }
             },
-
-            # -------------------------
-            # 6️⃣ أسماء العرض
-            # -------------------------
             {
                 "$addFields": {
                     "car_brand_name": {"$arrayElemAt": ["$car_brand_details.name", 0]},
@@ -1305,10 +1277,6 @@ async def search_engine_for_job_cards_3(
                     }
                 }
             },
-
-            # -------------------------
-            # 7️⃣ تنظيف
-            # -------------------------
             {
                 "$project": {
                     "car_brand_details": 0,
@@ -1327,10 +1295,6 @@ async def search_engine_for_job_cards_3(
                     "receipts_invoices_details": 0
                 }
             },
-
-            # -------------------------
-            # 8️⃣ toString (آخر مرحلة ✔️)
-            # -------------------------
             {
                 "$addFields": {
                     "_id": {"$toString": "$_id"},
@@ -1350,7 +1314,7 @@ async def search_engine_for_job_cards_3(
             {
                 "$facet": {
                     "job_cards": [
-                        {"$limit": 200},  # عرض أول 500 فقط
+                        {"$limit": 200},
                         {"$project": {
                             'car_brand_details': 0,
                             'car_model_details': 0,
@@ -2165,6 +2129,10 @@ async def search_engine_for_job_card_in_ap_invoices_screen(filter_jobs: JobCardS
                 }
             }
         ]
+        job_cards_pipeline.append(
+            {"$limit": 200},
+
+        )
 
         job_cards_cursor = await job_cards_collection.aggregate(job_cards_pipeline)
         job_cards_raw = await job_cards_cursor.to_list(None)

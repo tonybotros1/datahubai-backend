@@ -1,7 +1,7 @@
 import copy
 from typing import Optional, List, Any
 from bson import ObjectId
-from fastapi import APIRouter, HTTPException, Depends, UploadFile, Form, File
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from app import database
 from app.core import security
@@ -9,10 +9,6 @@ from app.database import get_collection
 from datetime import datetime, timezone, timedelta
 from app.routes.car_trading import PyObjectId
 from app.routes.counters import create_custom_counter
-from app.routes.quotation_cards import get_quotation_card_details
-from app.widgets.check_date import is_date_equals_today_or_older
-from app.widgets.upload_files import upload_file, delete_file_from_server
-from app.widgets.upload_images import upload_image, delete_image_from_server
 
 router = APIRouter()
 issuing_collection = get_collection("issuing")
@@ -84,6 +80,16 @@ class SearchIssuingModel(BaseModel):
     today: Optional[bool] = False
     this_month: Optional[bool] = False
     this_year: Optional[bool] = False
+
+
+class SearchItemsDetailsModel(BaseModel):
+    code: Optional[str] = None
+    name: Optional[str] = None
+
+
+class SearchConvertersDetailsModel(BaseModel):
+    number: Optional[str] = None
+    name: Optional[str] = None
 
 
 issuing_pipeline = [
@@ -688,6 +694,13 @@ items_details_pipeline = [
             'final_quantity': 1,
             'last_price': 1
         }
+    },
+    {
+        '$addFields': {
+            '_id': {
+                '$toString': '$_id'
+            }
+        }
     }
 ]
 
@@ -861,6 +874,13 @@ converters_details_pipeline: list[dict[str, Any]] = [
         '$project': {
             'issues': 0
         }
+    },
+    {
+        '$addFields': {
+            '_id': {
+                '$toString': '$_id'
+            }
+        }
     }
 ]
 
@@ -877,20 +897,24 @@ async def get_issuing_details(receiving_id: ObjectId):
     return result
 
 
-@router.get("/get_items_details_section")
-async def get_items_details_section(data: dict = Depends(security.get_current_user)):
+@router.post("/get_items_details_section")
+async def get_items_details_section(filter_items: SearchItemsDetailsModel,
+                                    data: dict = Depends(security.get_current_user)):
     try:
         company_id = ObjectId(data.get("company_id"))
         new_pipeline = copy.deepcopy(items_details_pipeline)
-        new_pipeline.insert(0, {
-            "$match": {
-                "company_id": company_id
-            }
-        })
+        match_stage = {}
+        if company_id:
+            match_stage["company_id"] = company_id
+        if filter_items.code:
+            match_stage["code"] = {"$regex": filter_items.code, "$options": "i"}
+        if filter_items.name:
+            match_stage["name"] = {"$regex": filter_items.name, "$options": "i"}
+        new_pipeline.insert(0, {"$match": match_stage})
+        new_pipeline.append({"$limit": 200})
         cursor = await inventory_items_collection.aggregate(new_pipeline)
         results = await cursor.to_list(None)
-        serialized = [serializer(r) for r in results]
-        return {"items_details": serialized}
+        return {"items_details": results}
 
 
     except HTTPException:
@@ -899,20 +923,24 @@ async def get_items_details_section(data: dict = Depends(security.get_current_us
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/get_converters_details_section")
-async def get_converters_details_section(data: dict = Depends(security.get_current_user)):
+@router.post("/get_converters_details_section")
+async def get_converters_details_section(filter_converters: SearchConvertersDetailsModel,
+                                         data: dict = Depends(security.get_current_user)):
     try:
         company_id = ObjectId(data.get("company_id"))
         new_pipeline = copy.deepcopy(converters_details_pipeline)
-        new_pipeline.insert(0, {
-            "$match": {
-                "company_id": company_id
-            }
-        })
+        match_stage = {}
+        if company_id:
+            match_stage["company_id"] = company_id
+        if filter_converters.number:
+            match_stage["converter_number"] = {"$regex": filter_converters.number, "$options": "i"}
+        if filter_converters.name:
+            match_stage["name"] = {"$regex": filter_converters.name, "$options": "i"}
+        new_pipeline.insert(0, {"$match": match_stage})
+        new_pipeline.append({"$limit": 200})
         cursor = await converters_collection.aggregate(new_pipeline)
         results = await cursor.to_list(None)
-        serialized = [serializer(r) for r in results]
-        return {"converters_details": serialized}
+        return {"converters_details": results}
 
 
     except HTTPException:

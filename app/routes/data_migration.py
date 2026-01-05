@@ -158,7 +158,7 @@ async def dealing_with_ap_invoices(file, data, delete_every_thing: bool):
             (
                     (df["invoice_date"].dt.year == 2025) & (df["invoice_date"].dt.month == 12)
             )
-        ].sort_values(by=df.columns[0])
+            ].sort_values(by=df.columns[0])
 
         existing_values = {b["name"].capitalize(): ObjectId(b["_id"]) for b in
                            await value_collection.find({}).to_list(length=None)}
@@ -650,14 +650,18 @@ async def dealing_with_job_cards(file: UploadFile, data: dict, delete_every_thin
                 df[col] = pd.to_datetime(df[col], errors="coerce")
         df_2025 = df[
             (
-                    (df["job_date"].dt.year == 2025) & (df["job_date"].dt.month == 12)
+                    (df["job_date"].dt.year == 2025)
+                    # & (df["job_date"].dt.month == 12)
             ) |
             (
-                    (df["invoice_date"].dt.year == 2025) & (df["invoice_date"].dt.month == 12)
+                    (df["invoice_date"].dt.year == 2025)
+                    # & (df["invoice_date"].dt.month == 12)
             ) |
             (
-                    (df["cancellation_date"].dt.year == 2025) & (df["cancellation_date"].dt.month == 12)
+                    (df["cancellation_date"].dt.year == 2025)
+                    # & (df["cancellation_date"].dt.month == 12)
             )
+
             ].sort_values(by=df.columns[0])
         print(df_2025.shape)
         print(df_2025.head())
@@ -669,10 +673,15 @@ async def dealing_with_job_cards(file: UploadFile, data: dict, delete_every_thin
         uae_currency_doc = await currencies_collection.find_one({"country_id": ObjectId(uae_country_id)})
         uae_currency_id = str(uae_currency_doc["_id"])
         uae_currency_rate = float(uae_currency_doc["rate"])
-        phone_type_work_doc = await value_collection.find_one({"name": "Work"})
-        phone_type_work_id = str(phone_type_work_doc["_id"])
-        phone_type_personal_doc = await value_collection.find_one({"name": "Personal"})
-        phone_type_personal_id = str(phone_type_personal_doc["_id"])
+        phone_type_personal_id = None
+        phone_type_work_id = None
+        try:
+            phone_type_work_doc = await value_collection.find_one({"name": "2nd"})
+            phone_type_work_id = str(phone_type_work_doc["_id"])
+            phone_type_personal_doc = await value_collection.find_one({"name": "1st"})
+            phone_type_personal_id = str(phone_type_personal_doc["_id"])
+        except Exception as e:
+            print(f"error in contact types :{e}")
         website_www_doc = await value_collection.find_one({"name": "WWW"})
         website_www_id = str(website_www_doc["_id"])
 
@@ -959,7 +968,7 @@ async def dealing_with_job_cards(file: UploadFile, data: dict, delete_every_thin
                                                                        lpo_required=str(customer_lpo_required)
                                                                        )
                         print("added new customer")
-                        existing_customers[str(customer).capitalize().strip()] = customer_details
+                        existing_customers[str(customer).strip()] = customer_details
                         customer_id = customer_details['_id']
 
                 else:
@@ -1015,7 +1024,7 @@ async def dealing_with_job_cards(file: UploadFile, data: dict, delete_every_thin
                 "job_status_1": job_status_1.capitalize(),
                 "job_status_2": job_status_2.capitalize(),
                 "customer": ObjectId(customer_id),
-                "contact_name": customer,
+                "contact_name": str(customer_phone_name) if customer_phone_name != 0 else "",
                 "contact_number": customer_phone_work_number,
                 "contact_email": customer_phone_email,
                 "credit_limit": float(customer_credit_limit) if customer_credit_limit else 0,
