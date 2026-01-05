@@ -3,7 +3,7 @@ from typing import Optional
 from bson import ObjectId
 from fastapi import APIRouter, Body, HTTPException, Depends
 from pydantic import BaseModel
-from pymongo import ReturnDocument
+from pymongo import ReturnDocument, ASCENDING
 from app.core import security
 from app.database import get_collection
 from datetime import datetime, timezone
@@ -36,7 +36,7 @@ class JobTaskModel(BaseModel):
 async def get_all_job_tasks(data: dict = Depends(security.get_current_user)):
     try:
         company_id = ObjectId(data.get("company_id"))
-        results = await job_tasks_collection.find({"company_id": company_id}).to_list(None)
+        results = await job_tasks_collection.find({"company_id": company_id}).sort("category", ASCENDING).to_list(None)
         return {"job_tasks": [serializer(j) for j in results]}
 
     except HTTPException:
