@@ -151,9 +151,15 @@ async def get_approval_jobs(data: dict = Depends(security.get_current_user)):
                     '_id': 1,
                     'car_brand_logo': 1,
                     'plate_number': 1,
+                    "plate_code": 1,
                     'car_brand_name': 1,
                     'car_model_name': 1,
                     'color_name': 1
+                }
+            },
+            {
+                "$sort": {
+                    "car_brand_name": 1
                 }
             }
         ]
@@ -274,6 +280,16 @@ time_sheets_pipeline = [
             'plate_number': {
                 '$ifNull': [
                     '$job_details.plate_number', None
+                ]
+            },
+            'plate_code': {
+                '$ifNull': [
+                    '$job_details.plate_code', None
+                ]
+            },
+            'employee_job_title': {
+                '$ifNull': [
+                    '$employee_details.job_title', None
                 ]
             },
             'color': {
