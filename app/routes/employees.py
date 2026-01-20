@@ -187,6 +187,7 @@ async def create_employee(employee: EmployeesModel, data: dict = Depends(securit
             "type": "employee_added",
             "data": serialized
         })
+        return {"employee": serialized}
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -268,13 +269,13 @@ async def get_employees_by_department(department: str, data: dict = Depends(secu
                 '$project': {
                     '_id': 1,
                     'name': 1,
-                    'job_title':1
+                    'job_title': 1
                 }
             }
         ]
         cursor = await employees_collection.aggregate(get_employees_by_department_pipeline)
         results = await cursor.to_list(None)
-        return {"employees" : [serializer(e) for e in results]}
+        return {"employees": [serializer(e) for e in results]}
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

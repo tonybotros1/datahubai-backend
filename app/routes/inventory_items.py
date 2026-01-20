@@ -62,6 +62,7 @@ async def add_new_inventory_item(inventory_item: InventoryItem, data: dict = Dep
             "type": "inventory_item_added",
             "data": serialized
         })
+        return {"item": serialized}
 
     except HTTPException:
         raise
@@ -127,7 +128,7 @@ async def search_engine_for_inventory_items(items: InventoryItem, data: dict = D
         if items.name:
             match_stage["name"] = {"$regex": items.name, "$options": "i"}
         if items.min_quantity:
-            match_stage["min_quantity"] =  items.min_quantity
+            match_stage["min_quantity"] = items.min_quantity
 
         pipeline.append({"$match": match_stage})
         pipeline.append({

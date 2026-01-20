@@ -180,9 +180,10 @@ receiving_details_pipeline: list[dict[str, Any]] = [
                             '$multiply': [
                                 {
                                     '$subtract': [
-                                        '$$item.original_price', '$$item.discount'
+                                        {'$toDouble': {'$ifNull': ['$$item.original_price', 0]}},
+                                        {'$toDouble': {'$ifNull': ['$$item.discount', 0]}}
                                     ]
-                                }, '$$item.quantity'
+                                }, {'$toDouble': {'$ifNull': ['$$item.quantity', 0]}}
                             ]
                         }
                     }
@@ -299,15 +300,17 @@ receiving_details_pipeline: list[dict[str, Any]] = [
                                             '$add': [
                                                 {
                                                     '$subtract': [
-                                                        '$$item.original_price', '$$item.discount'
+                                                        {'$toDouble': {'$ifNull': ['$$item.original_price', 0]}},
+                                                        {'$toDouble': {'$ifNull': ['$$item.discount', 0]}}
                                                     ]
                                                 }, {
                                                     '$subtract': [
-                                                        '$$item.add_cost', '$$item.add_disc'
+                                                        {'$toDouble': {'$ifNull': ['$$item.add_cost', 0]}},
+                                                        {'$toDouble': {'$ifNull': ['$$item.add_disc', 0]}}
                                                     ]
                                                 }
                                             ]
-                                        }, '$rate'
+                                        },  { '$toDouble': { '$ifNull': ['$rate', 1] } }
                                     ]
                                 }
                             }
@@ -852,7 +855,7 @@ async def update_receiving_items(
         items = [item.model_dump(exclude_unset=True) for item in items]
         receiving_id = ObjectId(items[0]["receiving_id"]) if items else None
         if not receiving_id:
-            raise HTTPException(status_code=404,detail="Receiving ID not found")
+            raise HTTPException(status_code=404, detail="Receiving ID not found")
         added_list = []
         deleted_list = []
         modified_list = []

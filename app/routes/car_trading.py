@@ -24,6 +24,7 @@ all_general_expenses_collection = get_collection("all_general_expenses")
 class CapitalModel(BaseModel):
     name: Optional[str] = None
     pay: Optional[float] = None
+    account_name: Optional[str] = None
     receive: Optional[float] = None
     comment: Optional[str] = None
     date: Optional[datetime] = None
@@ -33,6 +34,7 @@ class GeneralExpensesModel(BaseModel):
     item: Optional[str] = None
     pay: Optional[float] = None
     receive: Optional[float] = None
+    account_name: Optional[str] = None
     comment: Optional[str] = None
     date: Optional[datetime] = None
 
@@ -64,6 +66,7 @@ class CarTradingItemsModel(BaseModel):
     trade_id: Optional[PyObjectId] = None
     pay: Optional[float] = None
     receive: Optional[float] = None
+    account_name: Optional[str] = None
     comment: Optional[str] = None
     date: Optional[datetime] = None
     deleted: Optional[bool] = False
@@ -149,6 +152,9 @@ def serialize(document: dict) -> dict:
     if document.get("name"):
         document["name"] = str(document["name"])
         document["name_id"] = str(document["name_id"])
+    if document.get("account_name"):
+        document["account_name"] = str(document["account_name"])
+        document["account_name_id"] = str(document["account_name_id"])
     for key, value in document.items():
         if isinstance(value, datetime):
             document[key] = value.isoformat()
@@ -162,6 +168,9 @@ def general_expenses_serialize(document: dict) -> dict:
         document["item"] = str(document["item"])
     if document.get("item_id"):
         document["item_id"] = str(document["item_id"])
+    if document.get("account_name"):
+        document["account_name"] = str(document["account_name"])
+        document["account_name_id"] = str(document["account_name_id"])
     for key, value in document.items():
         if isinstance(value, datetime):
             document[key] = value.isoformat()
@@ -196,10 +205,26 @@ async def get_all_capitals_or_outstanding(get_type: str, data: dict = Depends(se
             }
         },
         {
+            "$lookup": {
+                "from": "all_lists_values",
+                "localField": "account_name",
+                "foreignField": "_id",
+                "as": "account_name_details",
+            }
+        },
+        {
+            "$unwind": {
+                "path": "$account_name_details",
+                "preserveNullAndEmptyArrays": True
+            }
+        },
+        {
             "$project": {
                 "_id": 1,
                 "name": {"$ifNull": ["$item.name", ""]},
                 "name_id": {"$ifNull": ["$item._id", ""]},
+                "account_name": {"$ifNull": ["$account_name_details.name", ""]},
+                "account_name_id": {"$ifNull": ["$account_name_details._id", ""]},
                 "company_id": 1,
                 "comment": 1,
                 "date": 1,
@@ -270,10 +295,26 @@ async def get_capital_or_outstanding_details(type_id: ObjectId, type_name: str):
                 }
             },
             {
+                "$lookup": {
+                    "from": "all_lists_values",
+                    "localField": "account_name",
+                    "foreignField": "_id",
+                    "as": "account_name_details",
+                }
+            },
+            {
+                "$unwind": {
+                    "path": "$account_name_details",
+                    "preserveNullAndEmptyArrays": True
+                }
+            },
+            {
                 "$project": {
                     "_id": 1,
                     "name": {"$ifNull": ["$item.name", ""]},
                     "name_id": {"$ifNull": ["$item._id", ""]},
+                    "account_name": {"$ifNull": ["$account_name_details.name", ""]},
+                    "account_name_id": {"$ifNull": ["$account_name_details._id", ""]},
                     "company_id": 1,
                     "comment": 1,
                     "date": 1,
@@ -345,6 +386,7 @@ async def add_new_capital_or_outstanding(add_type: str, capital: CapitalModel,
             "company_id": company_id,
             "name": ObjectId(capital.name) if capital.name else "",
             "pay": capital.pay,
+            "account_name": ObjectId(capital.account_name) if capital.account_name else None,
             "receive": capital.receive,
             "comment": capital.comment,
             "date": capital.date,
@@ -412,6 +454,12 @@ async def update_capital_or_outstanding(type_name: str, type_id: str, capital: C
                 update_data["name"] = ObjectId(update_data["name"])
             except Exception:
                 raise HTTPException(status_code=400, detail="Invalid name id, must be a valid ObjectId")
+        if "account_name" in update_data and update_data["account_name"] is not None and update_data[
+            "account_name"] is not '':
+            try:
+                update_data["account_name"] = ObjectId(update_data["account_name"])
+            except Exception:
+                raise HTTPException(status_code=400, detail="Invalid account_name id, must be a valid ObjectId")
 
         update_data["updatedAt"] = datetime.now(timezone.utc)
 
@@ -506,10 +554,26 @@ async def get_all_general_expenses(data: dict = Depends(security.get_current_use
             }
         },
         {
+            "$lookup": {
+                "from": "all_lists_values",
+                "localField": "account_name",
+                "foreignField": "_id",
+                "as": "account_name_details",
+            }
+        },
+        {
+            "$unwind": {
+                "path": "$account_name_details",
+                "preserveNullAndEmptyArrays": True
+            }
+        },
+        {
             "$project": {
                 "_id": 1,
                 "item": {"$ifNull": ["$items.name", ""]},
                 "item_id": {"$ifNull": ["$items._id", ""]},
+                "account_name": {"$ifNull": ["$account_name_details.name", ""]},
+                "account_name_id": {"$ifNull": ["$account_name_details._id", ""]},
                 "company_id": 1,
                 "comment": 1,
                 "date": 1,
@@ -575,10 +639,26 @@ async def get_general_expenses_details(type_id: ObjectId):
                 }
             },
             {
+                "$lookup": {
+                    "from": "all_lists_values",
+                    "localField": "account_name",
+                    "foreignField": "_id",
+                    "as": "account_name_details",
+                }
+            },
+            {
+                "$unwind": {
+                    "path": "$account_name_details",
+                    "preserveNullAndEmptyArrays": True
+                }
+            },
+            {
                 "$project": {
                     "_id": 1,
                     "item": {"$ifNull": ["$items.name", ""]},
                     "item_id": {"$ifNull": ["$items._id", ""]},
+                    "account_name": {"$ifNull": ["$account_name_details.name", ""]},
+                    "account_name_id": {"$ifNull": ["$account_name_details._id", ""]},
                     "company_id": 1,
                     "comment": 1,
                     "date": 1,
@@ -885,6 +965,7 @@ async def add_new_general_expenses(general: GeneralExpensesModel,
             "item": ObjectId(general.item) if general.item else "",
             "pay": general.pay,
             "receive": general.receive,
+            "account_name": ObjectId(general.account_name) if general.account_name else None,
             "comment": general.comment,
             "date": general.date,
             "createdAt": datetime.now(timezone.utc),
@@ -942,6 +1023,12 @@ async def update_generale_expenses(type_id: str, general: GeneralExpensesModel,
                 update_data["item"] = ObjectId(update_data["item"])
             except Exception:
                 raise HTTPException(status_code=400, detail="Invalid item id, must be a valid ObjectId")
+        if "account_name" in update_data and update_data["account_name"] is not None and update_data[
+            "account_name"] is not '':
+            try:
+                update_data["account_name"] = ObjectId(update_data["account_name"])
+            except Exception:
+                raise HTTPException(status_code=400, detail="Invalid account_name id, must be a valid ObjectId")
 
         update_data["updatedAt"] = datetime.now(timezone.utc)
 
@@ -1039,6 +1126,7 @@ async def add_new_trade(trade: CarTradingModel, data: dict = Depends(security.ge
                         "item": ObjectId(str(item.item_id)) if item.item_id else "",
                         "pay": item.pay,
                         "receive": item.receive,
+                        "account_name": ObjectId(item.account_name) if item.account_name else None,
                         "comment": item.comment,
                         "createdAt": datetime.now(timezone.utc),
                         "updatedAt": datetime.now(timezone.utc),
@@ -1099,6 +1187,7 @@ async def update_trade_items(
                 updated = {
                     "date": item_dict["date"],
                     "item": ObjectId(str(item.item_id)) if item.item_id else "",
+                    "account_name": ObjectId(item.account_name) if item.account_name else "",
                     "pay": item_dict["pay"],
                     "receive": item_dict["receive"],
                     "comment": item_dict["comment"],
@@ -1124,6 +1213,7 @@ async def update_trade_items(
                         "trade_id": ObjectId(item.trade_id),
                         "date": item.date,
                         "item": ObjectId(str(item.item_id)) if item.item_id else None,
+                        "account_name": ObjectId(item.account_name) if item.account_name else None,
                         "pay": item.pay,
                         "receive": item.receive,
                         "comment": item.comment,
@@ -1248,6 +1338,19 @@ async def search_engine_for_car_trading(
         })
         pipeline.append({"$unwind": {"path": "$item_detail", "preserveNullAndEmptyArrays": True}})
 
+        pipeline.append({
+            "$lookup": {
+                "from": "all_lists_values",
+                "let": {"account_name_id": "$trade_items.account_name"},
+                "pipeline": [
+                    {"$match": {"$expr": {"$eq": ["$_id", "$$account_name_id"]}}},
+                    {"$project": {"name": 1}}
+                ],
+                "as": "account_name_detail"
+            }
+        })
+        pipeline.append({"$unwind": {"path": "$account_name_detail", "preserveNullAndEmptyArrays": True}})
+
         # -------------------------------
         # Add temporary fields for BUY/SELL dates
         # -------------------------------
@@ -1304,6 +1407,8 @@ async def search_engine_for_car_trading(
                                 "date": "$trade_items.date",
                                 "item_id": "$item_detail._id",
                                 "item": "$item_detail.name",
+                                "account_name": "$account_name_detail.name",
+                                "account_name_id": "$account_name_detail._id",
                                 "pay": "$trade_items.pay",
                                 "receive": "$trade_items.receive",
                                 "comment": "$trade_items.comment",
@@ -1477,20 +1582,56 @@ async def delete_trade(trade_id: str, _: dict = Depends(security.get_current_use
         raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
 
 
-@router.get("/get_cash_on_hand")
-async def get_cash_on_hand(data: dict = Depends(security.get_current_user)):
+@router.get("/get_cash_on_hand_or_bank_balance/{account_name}")
+async def get_cash_on_hand(account_name: str, data: dict = Depends(security.get_current_user)):
     try:
         company_id = ObjectId(data.get("company_id"))
+        account_name = account_name.upper()
         cash_on_hand_pipeline = [
             {
                 '$match': {
-                    'company_id': company_id
+                    'company_id': company_id,
                 }
             }, {
                 '$lookup': {
                     'from': 'all_trades_items',
-                    'localField': '_id',
-                    'foreignField': 'trade_id',
+                    'let': {
+                        'trade_id': '$_id'
+                    },
+                    'pipeline': [
+                        {
+                            '$match': {
+                                '$expr': {
+                                    '$eq': [
+                                        '$trade_id', '$$trade_id'
+                                    ]
+                                }
+                            }
+                        }, {
+                            '$lookup': {
+                                'from': 'all_lists_values',
+                                'localField': 'account_name',
+                                'foreignField': '_id',
+                                'as': 'account_details'
+                            }
+                        }, {
+                            '$addFields': {
+                                'account_name': {
+                                    '$ifNull': [
+                                        {
+                                            '$arrayElemAt': [
+                                                '$account_details.name', 0
+                                            ]
+                                        }, None
+                                    ]
+                                }
+                            }
+                        }, {
+                            '$match': {
+                                'account_name': account_name
+                            }
+                        }
+                    ],
                     'as': 'trade_items'
                 }
             }, {
@@ -1539,6 +1680,29 @@ async def get_cash_on_hand(data: dict = Depends(security.get_current_user)):
                                         '$company_id', '$$companyId'
                                     ]
                                 }
+                            }
+                        }, {
+                            '$lookup': {
+                                'from': 'all_lists_values',
+                                'localField': 'account_name',
+                                'foreignField': '_id',
+                                'as': 'account_details'
+                            }
+                        }, {
+                            '$addFields': {
+                                'account_name': {
+                                    '$ifNull': [
+                                        {
+                                            '$arrayElemAt': [
+                                                '$account_details.name', 0
+                                            ]
+                                        }, None
+                                    ]
+                                }
+                            }
+                        }, {
+                            '$match': {
+                                'account_name': account_name
                             }
                         }, {
                             '$group': {
@@ -1590,6 +1754,29 @@ async def get_cash_on_hand(data: dict = Depends(security.get_current_user)):
                                 }
                             }
                         }, {
+                            '$lookup': {
+                                'from': 'all_lists_values',
+                                'localField': 'account_name',
+                                'foreignField': '_id',
+                                'as': 'account_details'
+                            }
+                        }, {
+                            '$addFields': {
+                                'account_name': {
+                                    '$ifNull': [
+                                        {
+                                            '$arrayElemAt': [
+                                                '$account_details.name', 0
+                                            ]
+                                        }, None
+                                    ]
+                                }
+                            }
+                        }, {
+                            '$match': {
+                                'account_name': account_name
+                            }
+                        }, {
                             '$group': {
                                 '_id': None,
                                 'total_outstanding_pay': {
@@ -1625,6 +1812,29 @@ async def get_cash_on_hand(data: dict = Depends(security.get_current_user)):
                                         '$company_id', '$$companyId'
                                     ]
                                 }
+                            }
+                        }, {
+                            '$lookup': {
+                                'from': 'all_lists_values',
+                                'localField': 'account_name',
+                                'foreignField': '_id',
+                                'as': 'account_details'
+                            }
+                        }, {
+                            '$addFields': {
+                                'account_name': {
+                                    '$ifNull': [
+                                        {
+                                            '$arrayElemAt': [
+                                                '$account_details.name', 0
+                                            ]
+                                        }, None
+                                    ]
+                                }
+                            }
+                        }, {
+                            '$match': {
+                                'account_name': account_name
                             }
                         }, {
                             '$group': {
