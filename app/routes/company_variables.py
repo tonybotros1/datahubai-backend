@@ -1,13 +1,12 @@
 from typing import Optional, List
 
 from bson import ObjectId
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, UploadFile, File
 from pydantic import BaseModel
-from pymongo import ReturnDocument
 from app.core import security
 from app.database import get_collection
 from datetime import datetime
-from app.websocket_config import manager
+from app.widgets import upload_images
 
 router = APIRouter()
 companies_collection = get_collection("companies")
@@ -32,6 +31,10 @@ class Variables(BaseModel):
     incentive_percentage: Optional[float] = None
     vat_percentage: Optional[float] = None
     tax_number: Optional[str] = None
+
+
+class TermsAndConditionsBody(BaseModel):
+    text: Optional[str] = None
 
 
 @router.get("/get_company_variables_and_details")
@@ -261,7 +264,6 @@ async def update_company_variables(
     except HTTPException:
         raise
     except Exception as error:
-        print(f"❌ Error updating company variables: {error}")
         raise HTTPException(status_code=500, detail=str(error))
 
 
@@ -277,9 +279,54 @@ async def update_inspection_report(inspection_report: Optional[List[str]] = None
         if result.matched_count == 0:
             raise HTTPException(status_code=404, detail="Company not found")
 
+    except HTTPException:
+        raise
+    except Exception as error:
+        raise HTTPException(status_code=500, detail=str(error))
+
+
+@router.patch("/upload_terms_and_conditions/{language_code}")
+async def upload_terms_and_conditions(language_code: str, body: TermsAndConditionsBody,
+                                      data: dict = Depends(security.get_current_user)):
+    try:
+        company_id = ObjectId(data.get("company_id"))
+        if language_code == "en":
+            await companies_collection.update_one({"_id": company_id}, {
+                "$set": {"terms_and_conditions_en": body.text, "updatedAt": security.now_utc()}
+            })
+        elif language_code == "ar":
+            await companies_collection.update_one({"_id": company_id}, {
+                "$set": {"terms_and_conditions_ar": body.text, "updatedAt": security.now_utc()}
+            })
 
     except HTTPException:
         raise
     except Exception as error:
-        print(f"❌ Error updating inspection report: {error}")
+        raise HTTPException(status_code=500, detail=str(error))
+
+
+@router.patch("/upload_header_footer/{image_type}")
+async def upload_terms_and_conditions(image_type: str, image: UploadFile = File(None),
+                                      data: dict = Depends(security.get_current_user)):
+    try:
+        company_id = ObjectId(data.get("company_id"))
+        if image:
+            result = await upload_images.upload_image(image, 'companies_header_footer')
+            image_url = result["url"]
+            image_public_id = result["public_id"]
+        else:
+            image_url = None
+            image_public_id = None
+        if image_type == "footer":
+            await companies_collection.update_one({"_id": company_id}, {
+                "$set": {"footer_url": image_url, "footer_public_id": image_public_id, "updatedAt": security.now_utc()}
+            })
+        elif image_type == "header":
+            await companies_collection.update_one({"_id": company_id}, {
+                "$set": {"header_url": image_url, "header_public_id": image_public_id, "updatedAt": security.now_utc()}
+            })
+
+    except HTTPException:
+        raise
+    except Exception as error:
         raise HTTPException(status_code=500, detail=str(error))
