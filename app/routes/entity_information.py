@@ -516,6 +516,29 @@ async def get_entity_details(entity_id: ObjectId):
     return results[0]
 
 
+@router.get("/get_entity_information_for_printing/{entity_id}")
+async def get_entity_information_for_printing(entity_id: str, _: dict = Depends(security.get_current_user)):
+    try:
+        entity_id = ObjectId(entity_id)
+        new_pipeline = pipeline.copy()
+        new_pipeline.insert(0, {
+            "$match": {
+                "_id": entity_id
+            }
+        })
+        new_pipeline.append({
+            '$project': {
+                'trn': 1,
+                'entity_address': 1
+            }
+        })
+        cursor = await entity_information_collection.aggregate(new_pipeline)
+        results = await cursor.next()
+        return {"entity_details": results}
+    except Exception as e:
+        raise e
+
+
 @router.get("/get_all_entities")
 async def get_all_entities(data: dict = Depends(security.get_current_user)):
     try:
