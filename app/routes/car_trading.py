@@ -131,6 +131,9 @@ class CarTradingModel(BaseModel):
 
 
 class LastChangesFilter(BaseModel):
+    min_amount: Optional[float] = None
+    max_amount: Optional[float] = None
+    account_name: Optional[PyObjectId] = None
     from_date: Optional[datetime] = None
     to_date: Optional[datetime] = None
 
@@ -1946,6 +1949,12 @@ async def get_last_changes(data_filter: LastChangesFilter, data: dict = Depends(
         to_date = data_filter.to_date
         print(from_date)
         print(to_date)
+        amount_filter = {}
+        if data_filter.min_amount is not None:
+            amount_filter['$gte'] = data_filter.min_amount
+        if data_filter.max_amount is not None:
+            amount_filter['$lte'] = data_filter.max_amount
+
         last_changes_pipeline = [
             {
                 '$match': {
@@ -2009,10 +2018,9 @@ async def get_last_changes(data_filter: LastChangesFilter, data: dict = Depends(
                     'as': 'trade_items'
                 }
             }, {
-                '$addFields': {
-                    'lastItemUpdatedAt': {
-                        '$max': '$trade_items.updatedAt'
-                    }
+                '$unwind': {
+                    'path': '$trade_items',
+                    'preserveNullAndEmptyArrays': True
                 }
             }, {
                 '$addFields': {
@@ -2020,18 +2028,18 @@ async def get_last_changes(data_filter: LastChangesFilter, data: dict = Depends(
                         '$cond': [
                             {
                                 '$gt': [
-                                    '$lastItemUpdatedAt', '$updatedAt'
+                                    '$trade_items.updatedAt', '$updatedAt'
                                 ]
-                            }, '$lastItemUpdatedAt', '$updatedAt'
+                            }, '$trade_items.updatedAt', '$updatedAt'
                         ]
                     }
                 }
             }, {
                 '$match': {
-                    '$or': [
-                        {'updatedAt': {'$gte': from_date, '$lte': to_date}},
-                        {'trade_items': {'$elemMatch': {'updatedAt': {'$gte': from_date, '$lte': to_date}}}}
-                    ]
+                    'updatedAt': {
+                        '$gte': from_date,
+                        '$lte': to_date
+                    }
                 }
             }, {
                 '$lookup': {
@@ -2067,17 +2075,17 @@ async def get_last_changes(data_filter: LastChangesFilter, data: dict = Depends(
                         ]
                     },
                     'description': {
-                        '$arrayElemAt': [
+                        '$ifNull': [
                             '$trade_items.comment', 0
                         ]
                     },
                     'pay': {
-                        '$arrayElemAt': [
+                        '$ifNull': [
                             '$trade_items.pay', 0
                         ]
                     },
                     'receive': {
-                        '$arrayElemAt': [
+                        '$ifNull': [
                             '$trade_items.receive', 0
                         ]
                     },
@@ -2087,12 +2095,12 @@ async def get_last_changes(data_filter: LastChangesFilter, data: dict = Depends(
                         ]
                     },
                     'item_name': {
-                        '$arrayElemAt': [
+                        '$ifNull': [
                             '$trade_items.item_name', 0
                         ]
                     },
                     'account_name': {
-                        '$arrayElemAt': [
+                        '$ifNull': [
                             '$trade_items.account_name_name', 0
                         ]
                     }
@@ -2102,7 +2110,9 @@ async def get_last_changes(data_filter: LastChangesFilter, data: dict = Depends(
                     '_id': {
                         '$toString': '$_id'
                     },
-                    'type': {'$literal': 'car'},
+                    'type': {
+                        '$literal': 'car'
+                    },
                     'brand_name': 1,
                     'model_name': 1,
                     'description': 1,
@@ -2125,31 +2135,35 @@ async def get_last_changes(data_filter: LastChangesFilter, data: dict = Depends(
                                     '$lte': to_date
                                 }
                             }
-                        },
-                        {
+                        }, {
                             '$lookup': {
                                 'from': 'all_lists_values',
                                 'localField': 'item',
                                 'foreignField': '_id',
                                 'as': 'item_details'
                             }
-                        },
-                        {
+                        }, {
                             '$lookup': {
                                 'from': 'all_lists_values',
                                 'localField': 'account_name',
                                 'foreignField': '_id',
                                 'as': 'account_name_details'
                             }
-                        },
-
-                        {
+                        }, {
                             '$project': {
                                 '_id': 0,
-                                'type': {'$literal': 'expenses'},
-                                'brand_name': {'$literal': '-'},
-                                'model_name': {'$literal': '-'},
-                                'year': {'$literal': '-'},
+                                'type': {
+                                    '$literal': 'expenses'
+                                },
+                                'brand_name': {
+                                    '$literal': '-'
+                                },
+                                'model_name': {
+                                    '$literal': '-'
+                                },
+                                'year': {
+                                    '$literal': '-'
+                                },
                                 'description': '$comment',
                                 'paid': '$pay',
                                 'received': '$receive',
@@ -2168,13 +2182,21 @@ async def get_last_changes(data_filter: LastChangesFilter, data: dict = Depends(
                         }
                     ]
                 }
-            },
-            {
+            }, {
                 '$sort': {
                     'updatedAt': -1
                 }
             }
         ]
+        if amount_filter:
+            last_changes_pipeline.append({
+                '$match': {
+                    '$or': [
+                        {'pay': amount_filter},
+                        {'receive': amount_filter}
+                    ]
+                }
+            })
 
         cursor = await all_trades_collection.aggregate(last_changes_pipeline)
         results = await cursor.to_list(None)
