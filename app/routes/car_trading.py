@@ -130,6 +130,11 @@ class CarTradingModel(BaseModel):
     }
 
 
+class LastChangesFilter(BaseModel):
+    from_date: Optional[datetime] = None
+    to_date: Optional[datetime] = None
+
+
 def bson_serializer(obj):
     if isinstance(obj, datetime):
         return obj.isoformat()
@@ -1917,3 +1922,155 @@ async def get_cash_on_hand(account_name: str, data: dict = Depends(security.get_
     except Exception as e:
         print(e)
         raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
+
+
+@router.post("/get_last_changes")
+async def get_last_changes(data_filter: LastChangesFilter, data: dict = Depends(security.get_current_user)):
+    try:
+        company_id = ObjectId(data.get("company_id"))
+        if data_filter.from_date:
+            from_date = data_filter.from_date
+        else:
+            from_date = datetime.today()
+        if data_filter.to_date:
+            to_date = data_filter.to_date
+        else:
+            to_date = datetime.today()
+        last_changes_pipeline = [
+            {
+                '$match': {
+                    'company_id': company_id
+                }
+            }, {
+                '$lookup': {
+                    'from': 'all_trades_items',
+                    'localField': '_id',
+                    'foreignField': 'trade_id',
+                    'as': 'trade_items'
+                }
+            }, {
+                '$match': {
+                    '$or': [
+                        {
+                            'updatedAt': {
+                                '$gte': from_date,
+                                '$lte': to_date
+                            }
+                        }, {
+                            'trade_items': {
+                                '$elemMatch': {
+                                    'updatedAt': {
+                                        '$gte': from_date,
+                                        '$lte': to_date
+                                    }
+                                }
+                            }
+                        }
+                    ]
+                }
+            }, {
+                '$lookup': {
+                    'from': 'all_brands',
+                    'localField': 'car_brand',
+                    'foreignField': '_id',
+                    'as': 'brand_details'
+                }
+            }, {
+                '$lookup': {
+                    'from': 'all_brand_models',
+                    'localField': 'car_model',
+                    'foreignField': '_id',
+                    'as': 'model_details'
+                }
+            },
+            {
+                '$lookup': {
+                    'from': 'all_lists_values',
+                    'localField': 'year',
+                    'foreignField': '_id',
+                    'as': 'year_details'
+                }
+            },
+            {
+                '$addFields': {
+                    'brand_name': {
+                        '$arrayElemAt': [
+                            '$brand_details.name', 0
+                        ]
+                    },
+                    'model_name': {
+                        '$arrayElemAt': [
+                            '$model_details.name', 0
+                        ]
+                    },
+                    'description': {
+                        '$arrayElemAt': [
+                            '$trade_items.comment', 0
+                        ]
+                    },
+                    'pay': {
+                        '$arrayElemAt': [
+                            '$trade_items.pay', 0
+                        ]
+                    },
+                    'receive': {
+                        '$arrayElemAt': [
+                            '$trade_items.receive', 0
+                        ]
+                    },
+                    'year': {
+                        '$arrayElemAt': [
+                            '$year_details.name', 0
+                        ]
+                    }
+                }
+            }, {
+                '$project': {
+                    '_id': {
+                        '$toString': '$_id'
+                    },
+                    'brand_name': 1,
+                    'type': 'car',
+                    'model_name': 1,
+                    'description': 1,
+                    'pay': 1,
+                    'receive': 1,
+                    'year': 1
+                }
+            },
+            {
+                '$unionWith': {
+                    'coll': 'all_general_expenses',
+                    'pipeline': [
+                        {
+                            '$match': {
+                                'company_id': company_id,
+                                'updatedAt': {
+                                    '$gte': from_date,
+                                    '$lte': to_date
+                                }
+                            }
+                        }, {
+                            '$project': {
+                                '_id': 0,
+                                'brand_name': '-',
+                                'type': 'expenses',
+                                'model_name': '-',
+                                'year': '-',
+                                'description': '$comment',
+                                'pay': '$pay',
+                                'receive': '$receive'
+                            }
+                        }
+                    ]
+                }
+            }
+        ]
+
+        cursor = await all_trades_collection.aggregate(last_changes_pipeline)
+        results = await cursor.to_list(None)
+        return {"last_changes": results}
+
+    except Exception as e:
+        print(e)
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
