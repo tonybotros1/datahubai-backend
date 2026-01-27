@@ -1432,13 +1432,27 @@ async def search_engine_for_car_trading(
             }
         })
 
+        pipeline.append({
+            "$addFields": {
+                "date_field_to_filter": {
+                    "$cond": [
+                        {"$eq": ["$status", "Sold"]},  # إذا status = Sold
+                        "$sell_date",  # استخدم sell_date
+                        "$buy_date"  # إذا مش Sold استخدم buy_date (New أو غيره)
+                    ]
+                }
+            }
+        })
+
         # -------------------------------
         # Date filtering after group
         # -------------------------------
         now = datetime.now(timezone.utc)
-        date_field = "buy_date"
+        date_field = "date_field_to_filter"
         if filter_trades.status and filter_trades.status.lower() == "sold":
             date_field = "sell_date"
+        elif filter_trades.status and filter_trades.status.lower() == "buy":
+            date_field = "buy_date"
 
         date_filter = {}
         if filter_trades.today:
@@ -1928,14 +1942,10 @@ async def get_cash_on_hand(account_name: str, data: dict = Depends(security.get_
 async def get_last_changes(data_filter: LastChangesFilter, data: dict = Depends(security.get_current_user)):
     try:
         company_id = ObjectId(data.get("company_id"))
-        if data_filter.from_date:
-            from_date = data_filter.from_date
-        else:
-            from_date = datetime.today()
-        if data_filter.to_date:
-            to_date = data_filter.to_date
-        else:
-            to_date = datetime.today()
+        from_date = data_filter.from_date
+        to_date = data_filter.to_date
+        print(from_date)
+        print(to_date)
         last_changes_pipeline = [
             {
                 '$match': {
@@ -1944,28 +1954,83 @@ async def get_last_changes(data_filter: LastChangesFilter, data: dict = Depends(
             }, {
                 '$lookup': {
                     'from': 'all_trades_items',
-                    'localField': '_id',
-                    'foreignField': 'trade_id',
+                    'let': {
+                        'trade_id': '$_id'
+                    },
+                    'pipeline': [
+                        {
+                            '$match': {
+                                '$expr': {
+                                    '$eq': [
+                                        '$trade_id', '$$trade_id'
+                                    ]
+                                }
+                            }
+                        }, {
+                            '$lookup': {
+                                'from': 'all_lists_values',
+                                'localField': 'item',
+                                'foreignField': '_id',
+                                'as': 'item_details'
+                            }
+                        }, {
+                            '$addFields': {
+                                'item_name': {
+                                    '$ifNull': [
+                                        {
+                                            '$arrayElemAt': [
+                                                '$item_details.name', 0
+                                            ]
+                                        }, None
+                                    ]
+                                }
+                            }
+                        }, {
+                            '$lookup': {
+                                'from': 'all_lists_values',
+                                'localField': 'account_name',
+                                'foreignField': '_id',
+                                'as': 'account_name_details'
+                            }
+                        }, {
+                            '$addFields': {
+                                'account_name_name': {
+                                    '$ifNull': [
+                                        {
+                                            '$arrayElemAt': [
+                                                '$account_name_details.name', 0
+                                            ]
+                                        }, None
+                                    ]
+                                }
+                            }
+                        }
+                    ],
                     'as': 'trade_items'
+                }
+            }, {
+                '$addFields': {
+                    'lastItemUpdatedAt': {
+                        '$max': '$trade_items.updatedAt'
+                    }
+                }
+            }, {
+                '$addFields': {
+                    'updatedAt': {
+                        '$cond': [
+                            {
+                                '$gt': [
+                                    '$lastItemUpdatedAt', '$updatedAt'
+                                ]
+                            }, '$lastItemUpdatedAt', '$updatedAt'
+                        ]
+                    }
                 }
             }, {
                 '$match': {
                     '$or': [
-                        {
-                            'updatedAt': {
-                                '$gte': from_date,
-                                '$lte': to_date
-                            }
-                        }, {
-                            'trade_items': {
-                                '$elemMatch': {
-                                    'updatedAt': {
-                                        '$gte': from_date,
-                                        '$lte': to_date
-                                    }
-                                }
-                            }
-                        }
+                        {'updatedAt': {'$gte': from_date, '$lte': to_date}},
+                        {'trade_items': {'$elemMatch': {'updatedAt': {'$gte': from_date, '$lte': to_date}}}}
                     ]
                 }
             }, {
@@ -1982,16 +2047,14 @@ async def get_last_changes(data_filter: LastChangesFilter, data: dict = Depends(
                     'foreignField': '_id',
                     'as': 'model_details'
                 }
-            },
-            {
+            }, {
                 '$lookup': {
                     'from': 'all_lists_values',
                     'localField': 'year',
                     'foreignField': '_id',
                     'as': 'year_details'
                 }
-            },
-            {
+            }, {
                 '$addFields': {
                     'brand_name': {
                         '$arrayElemAt': [
@@ -2022,6 +2085,16 @@ async def get_last_changes(data_filter: LastChangesFilter, data: dict = Depends(
                         '$arrayElemAt': [
                             '$year_details.name', 0
                         ]
+                    },
+                    'item_name': {
+                        '$arrayElemAt': [
+                            '$trade_items.item_name', 0
+                        ]
+                    },
+                    'account_name': {
+                        '$arrayElemAt': [
+                            '$trade_items.account_name_name', 0
+                        ]
                     }
                 }
             }, {
@@ -2029,16 +2102,18 @@ async def get_last_changes(data_filter: LastChangesFilter, data: dict = Depends(
                     '_id': {
                         '$toString': '$_id'
                     },
+                    'type': {'$literal': 'car'},
                     'brand_name': 1,
-                    'type': 'car',
                     'model_name': 1,
                     'description': 1,
                     'pay': 1,
                     'receive': 1,
-                    'year': 1
+                    'year': 1,
+                    'updatedAt': 1,
+                    'item_name': 1,
+                    'account_name': 1
                 }
-            },
-            {
+            }, {
                 '$unionWith': {
                     'coll': 'all_general_expenses',
                     'pipeline': [
@@ -2050,19 +2125,53 @@ async def get_last_changes(data_filter: LastChangesFilter, data: dict = Depends(
                                     '$lte': to_date
                                 }
                             }
-                        }, {
+                        },
+                        {
+                            '$lookup': {
+                                'from': 'all_lists_values',
+                                'localField': 'item',
+                                'foreignField': '_id',
+                                'as': 'item_details'
+                            }
+                        },
+                        {
+                            '$lookup': {
+                                'from': 'all_lists_values',
+                                'localField': 'account_name',
+                                'foreignField': '_id',
+                                'as': 'account_name_details'
+                            }
+                        },
+
+                        {
                             '$project': {
                                 '_id': 0,
-                                'brand_name': '-',
-                                'type': 'expenses',
-                                'model_name': '-',
-                                'year': '-',
+                                'type': {'$literal': 'expenses'},
+                                'brand_name': {'$literal': '-'},
+                                'model_name': {'$literal': '-'},
+                                'year': {'$literal': '-'},
                                 'description': '$comment',
-                                'pay': '$pay',
-                                'receive': '$receive'
+                                'paid': '$pay',
+                                'received': '$receive',
+                                'updatedAt': 1,
+                                'item_name': {
+                                    '$arrayElemAt': [
+                                        '$item_details.name', 0
+                                    ]
+                                },
+                                'account_name': {
+                                    '$arrayElemAt': [
+                                        '$account_name_details.name', 0
+                                    ]
+                                }
                             }
                         }
                     ]
+                }
+            },
+            {
+                '$sort': {
+                    'updatedAt': -1
                 }
             }
         ]
