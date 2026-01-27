@@ -1945,8 +1945,15 @@ async def get_cash_on_hand(account_name: str, data: dict = Depends(security.get_
 async def get_last_changes(data_filter: LastChangesFilter, data: dict = Depends(security.get_current_user)):
     try:
         company_id = ObjectId(data.get("company_id"))
-        from_date = data_filter.from_date
-        to_date = data_filter.to_date
+        from datetime import datetime
+
+        from_date = datetime.strptime('2000-01-01 00:00:00', '%Y-%m-%d %H:%M:%S')
+        to_date = datetime.strptime('2100-12-31 00:00:00', '%Y-%m-%d %H:%M:%S')
+
+        if data_filter.from_date:
+            from_date = data_filter.from_date
+        if data_filter.to_date:
+            to_date = data_filter.to_date
         print(from_date)
         print(to_date)
         amount_filter = {}
