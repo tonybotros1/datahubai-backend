@@ -46,6 +46,7 @@ async def get_countries(_: dict = Depends(security.get_current_user)):
 @router.post("/add_new_country")
 async def add_new_country(name: str = Form(...), code: Optional[str] = Form(...), calling_code: Optional[str] = Form(...),
                           currency_name: Optional[str] = Form(...), currency_code: Optional[str] = Form(...),
+                          subunit_name: Optional[str] = Form(...), subunit_code: Optional[str] = Form(...),
                           vat: Optional[float] = Form(...),
                           flag: Optional[UploadFile] = File(...), _: dict = Depends(security.get_current_user)):
     try:
@@ -55,6 +56,8 @@ async def add_new_country(name: str = Form(...), code: Optional[str] = Form(...)
             "code": code,
             "currency_name": currency_name,
             "currency_code": currency_code,
+            "subunit_name": subunit_name,
+            "subunit_code": subunit_code,
             "vat": vat,
             "flag": result["url"],
             "flag_public_id": result["public_id"],
@@ -145,6 +148,7 @@ async def delete_country(country_id: str, _: dict = Depends(security.get_current
 @router.patch("/update_country/{country_id}")
 async def update_country(country_id: str, name: str | None = Form(None), flag: UploadFile | None = File(None),
                          calling_code: str = Form(None), currency_name: str = Form(None),
+                         subunit_name: str = Form(None), subunit_code: str = Form(None),
                          currency_code: str = Form(None),
                          vat: float = Form(None), _: dict = Depends(security.get_current_user)):
     try:
@@ -170,6 +174,10 @@ async def update_country(country_id: str, name: str | None = Form(None), flag: U
             country["currency_name"] = currency_name
         if currency_code:
             country["currency_code"] = currency_code
+        if subunit_name:
+            country["subunit_name"] = subunit_name
+        if subunit_code:
+            country["subunit_code"] = subunit_code
 
         if vat:
             country["vat"] = vat

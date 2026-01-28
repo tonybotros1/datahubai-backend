@@ -591,7 +591,8 @@ async def get_current_company_details(data: dict = Depends(security.get_current_
                                 '_id': 1,
                                 'vat': 1,
                                 'name': 1,
-                                'currency_code': 1
+                                'currency_code': 1,
+                                'subunit_name': 1
                             }
                         }
                     ],
@@ -700,6 +701,11 @@ async def get_current_company_details(data: dict = Depends(security.get_current_
                     'currency_code': {
                         '$ifNull': [
                             '$country_details.currency_code', None
+                        ]
+                    },
+                    'subunit_name': {
+                        '$ifNull': [
+                            '$country_details.subunit_name', None
                         ]
                     }
                 }
