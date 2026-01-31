@@ -686,7 +686,7 @@ async def add_new_job_card(job_data: JobCard, data: dict = Depends(security.get_
             company_id = ObjectId(data.get("company_id"))
 
             job_data_dict = job_data.model_dump(exclude_unset=True)
-            new_job_counter = await create_custom_counter("JCN", "J", data, session)
+            new_job_counter = await create_custom_counter("JCN", "J",data= data,description='',session= session)
 
             invoices = []
             if job_data_dict.get("invoice_items"):
