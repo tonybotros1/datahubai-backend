@@ -615,7 +615,7 @@ async def get_receipt_invoice_for_current_job_card(job_id: ObjectId):
         except StopAsyncIteration:
             return None  # no results found
         serialized = serializer(result)
-        return  serialized
+        return serialized
 
     except HTTPException:
         raise
@@ -635,7 +635,8 @@ async def create_receipt_for_job_card(job_id: str, customer_id: str,
             invoice = await get_receipt_invoice_for_current_job_card(job_id)
             if not invoice:
                 raise HTTPException(status_code=422, detail=f"invoice amount is zero")
-            new_receipt_counter = await create_custom_counter("RN", "R", data, session)
+            new_receipt_counter = await create_custom_counter("RN", "R", description='AR Receipts Number', data=data,
+                                                              session=session)
             receipt_dict = {
                 "company_id": company_id,
                 "customer": customer_id,
@@ -650,12 +651,11 @@ async def create_receipt_for_job_card(job_id: str, customer_id: str,
             if not result.inserted_id:
                 raise HTTPException(status_code=500, detail="Failed to insert receipt")
 
-
             receipt_invoice_dict = {
                 "receipt_id": result.inserted_id,
                 "company_id": company_id,
                 "job_id": job_id,
-                "amount": float(invoice.get('outstanding_amount',0)),
+                "amount": float(invoice.get('outstanding_amount', 0)),
                 "createdAt": security.now_utc(),
                 "updatedAt": security.now_utc(),
             }
@@ -685,7 +685,8 @@ async def add_new_receipt(
         try:
             await session.start_transaction()
             company_id = ObjectId(data.get("company_id"))
-            new_receipt_counter = await create_custom_counter("RN", "R", data, session)
+            new_receipt_counter = await create_custom_counter("RN", "R", description='AR Receipts Number', data=data,
+                                                              session=session)
 
             # Convert the Pydantic model to a dict, excluding unset values
             receipt_dict = receipt.model_dump(exclude_unset=True)

@@ -519,7 +519,7 @@ async def add_new_payment(
         try:
             await session.start_transaction()
             company_id = ObjectId(data.get("company_id"))
-            new_payment_counter = await create_custom_counter("PN", "P", data, session)
+            new_payment_counter = await create_custom_counter("PN", "P",description='AP Payments Number',data= data,session= session)
 
             payment_dict = payment.model_dump(exclude_unset=True)
             payment_invoices = payment_dict.pop("invoices", None)

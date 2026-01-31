@@ -664,7 +664,7 @@ async def add_new_quotation_card(quotation_data: QuotationCard, data: dict = Dep
             company_id = ObjectId(data.get("company_id"))
 
             quotation_data_dict = quotation_data.model_dump(exclude_unset=True)
-            new_quotation_counter = await create_custom_counter("QN", "Q", data, session)
+            new_quotation_counter = await create_custom_counter("QN", "Q", data, description='Quotation Number', session=session)
 
             invoices = []
             if quotation_data_dict.get("invoice_items"):
@@ -924,7 +924,7 @@ async def copy_quotation_card(quotation_id: str, data: dict = Depends(security.g
                 raise HTTPException(status_code=403, detail="Only Posted / Cancelled Quotation Cards allowed")
             original_quotation.pop("_id", None)
             original_quotation['quotation_status'] = "New"
-            new_quotation_counter = await create_custom_counter("QN", "Q", data, session)
+            new_quotation_counter = await create_custom_counter("QN", "Q",description='Quotation Number',data= data,session= session)
             original_quotation["quotation_number"] = new_quotation_counter["final_counter"] if new_quotation_counter[
                 "success"] else None
 
@@ -2071,7 +2071,7 @@ async def create_job_card_for_current_quotation(quotation_id: str, data: dict = 
                 "payment_method": "Cash"
 
             })
-            new_job_counter = await create_custom_counter("JCN", "J", data, session)
+            new_job_counter = await create_custom_counter("JCN", "J",description='Job Cards Number',data= data,session= session)
             original_quotation["job_number"] = new_job_counter["final_counter"] if new_job_counter[
                 "success"] else None
 

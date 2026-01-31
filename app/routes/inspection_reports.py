@@ -296,7 +296,7 @@ async def create_job_from_inspection_report(job_date: Optional[datetime] = Form(
         try:
             await session.start_transaction()
             company_id = ObjectId(data.get("company_id"))
-            new_job_counter = await create_custom_counter("JCN", "J", data, session)
+            new_job_counter = await create_custom_counter("JCN", "J",description='Inspection Reports Number', data= data,session= session)
             print(type(left_front_wheel))
 
             job_card_section_dict = {

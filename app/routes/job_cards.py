@@ -686,7 +686,7 @@ async def add_new_job_card(job_data: JobCard, data: dict = Depends(security.get_
             company_id = ObjectId(data.get("company_id"))
 
             job_data_dict = job_data.model_dump(exclude_unset=True)
-            new_job_counter = await create_custom_counter("JCN", "J",data= data,description='',session= session)
+            new_job_counter = await create_custom_counter("JCN", "J",data= data,description='Job Number',session= session)
 
             invoices = []
             if job_data_dict.get("invoice_items"):
@@ -821,7 +821,7 @@ async def copy_job_card(job_id: str, data: dict = Depends(security.get_current_u
             original_job['job_status_2'] = "New"
             original_job['invoice_number'] = ""
             original_job['invoice_date'] = None
-            new_job_counter = await create_custom_counter("JCN", "J", data, session)
+            new_job_counter = await create_custom_counter("JCN", "J",description='Job Cards Number',date= data,session= session)
             original_job["job_number"] = new_job_counter["final_counter"] if new_job_counter["success"] else None
             warranty_end_date = original_job['job_warranty_end_date'] if original_job["job_warranty_end_date"] else None
             if warranty_end_date:
@@ -862,7 +862,7 @@ async def update_job_card(job_id: str, job_data: JobCard, data: dict = Depends(s
         job_id = ObjectId(job_id)
         job_data_dict = job_data.model_dump(exclude_unset=True)
         if job_data_dict["job_status_1"] == "Posted":
-            new_invoice_counter_result = await create_custom_counter("JCI", "I", data)
+            new_invoice_counter_result = await create_custom_counter("JCI", "I",description='Job Card Invoice Number',data= data)
             new_invoice_counter = new_invoice_counter_result["final_counter"]
 
         job_data_dict.update({
@@ -2367,7 +2367,7 @@ async def create_job_card_for_current_quotation(job_id: str, data: dict = Depend
                 'quotation_warranty_days': job_warranty_days,
                 'quotation_warranty_km': job_warranty_kms,
             })
-            new_quotation_counter = await create_custom_counter("QN", "Q", data, session)
+            new_quotation_counter = await create_custom_counter("QN", "Q",description='Quotation Number',data = data,session= session)
             original_job["quotation_number"] = new_quotation_counter["final_counter"] if new_quotation_counter[
                 "success"] else None
 

@@ -987,7 +987,7 @@ async def add_new_issuing(issue: IssuingModel, data: dict = Depends(security.get
             for field in iss_ids:
                 if issue.get(field):
                     issue[field] = ObjectId(issue[field]) if issue[field] else None
-            new_issuing_counter = await create_custom_counter("ISN", "IS", data, description="Issuing Number",
+            new_issuing_counter = await create_custom_counter("ISN", "IS", date=data, description="Issuing Number",
                                                               session=session)
             issue["createdAt"] = security.now_utc()
             issue["updatedAt"] = security.now_utc()

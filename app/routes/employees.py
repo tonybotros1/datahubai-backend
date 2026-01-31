@@ -173,7 +173,7 @@ async def create_employee(employee: EmployeesModel, data: dict = Depends(securit
         for filed in ids_list:
             if employee.get(filed):
                 employee[filed] = ObjectId(employee[filed]) if employee[filed] else None
-        new_employee_counter = await create_custom_counter("EN", "E", data)
+        new_employee_counter = await create_custom_counter("EN", "E",description='Employees Counter',data= data)
         employee["company_id"] = company_id
         employee["createdAt"] = security.now_utc()
         employee["updatedAt"] = security.now_utc()

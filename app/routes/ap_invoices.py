@@ -56,7 +56,6 @@ class APInvoicesSearch(BaseModel):
     this_year: Optional[bool] = False
 
 
-
 pipeline: List[dict[str, Any]] = [
     {
         '$lookup': {
@@ -226,7 +225,8 @@ async def add_new_ap_invoice(invoices: APInvoicesModel, data: dict = Depends(sec
         try:
             await session.start_transaction()
             company_id = ObjectId(data.get("company_id"))
-            new_invoice_counter = await create_custom_counter("APIN", "AI", data, session)
+            new_invoice_counter = await create_custom_counter("APIN", "AI", description='AP Invoice Number', data=data,
+                                                              session=session)
             invoices_dict = invoices.model_dump(exclude_unset=True)
             invoice_items = invoices_dict.pop("items", None)
 
@@ -483,8 +483,6 @@ async def search_engine(filtered_invoices: APInvoicesSearch, data: dict = Depend
         # 2️⃣ Handle date filters
         date_field = "transaction_date"
         date_filter = {}
-
-
 
         if filtered_invoices.from_date or filtered_invoices.to_date:
             date_filter[date_field] = {}

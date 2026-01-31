@@ -310,7 +310,7 @@ receiving_details_pipeline: list[dict[str, Any]] = [
                                                     ]
                                                 }
                                             ]
-                                        },  { '$toDouble': { '$ifNull': ['$rate', 1] } }
+                                        }, {'$toDouble': {'$ifNull': ['$rate', 1]}}
                                     ]
                                 }
                             }
@@ -775,7 +775,7 @@ async def add_new_receiving(receive: ReceivingModel, data: dict = Depends(securi
             for field in rec_ids:
                 if receive.get(field):
                     receive[field] = ObjectId(receive[field]) if receive[field] else None
-            new_receiving_counter = await create_custom_counter("REN", "RE", data, description="Receiving Number",
+            new_receiving_counter = await create_custom_counter("REN", "RE", date=data, description="Receiving Number",
                                                                 session=session)
             receive["createdAt"] = security.now_utc()
             receive["updatedAt"] = security.now_utc()
