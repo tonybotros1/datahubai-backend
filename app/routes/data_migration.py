@@ -539,6 +539,7 @@ async def dealing_with_ap_invoices(file, data, delete_every_thing: bool):
                 job_card_id = existing_job_cards.get(int(job_id), None)
 
             else:
+                print()
                 job_card_id = None
 
             ap_invoice_item_dict = {
