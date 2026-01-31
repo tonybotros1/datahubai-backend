@@ -76,6 +76,7 @@ async def add_new_user(user: UserCreate, data: dict = Depends(security.get_curre
         # Validate company_id
         try:
             company_id = ObjectId(data.get("company_id"))
+            print(company_id)
         except errors.InvalidId:
             raise HTTPException(status_code=400, detail="Invalid company ID")
 

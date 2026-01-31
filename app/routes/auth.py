@@ -26,6 +26,7 @@ async def login(
         raise HTTPException(status_code=401, detail="Invalid email or password")
 
     company_id = user.get("company_id")
+    print(company_id)
     company = await companies.find_one({"_id": company_id})
     if not company:
         raise HTTPException(status_code=404, detail="Company not found")

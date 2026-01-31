@@ -47,7 +47,7 @@ pipeline: list[Dict[str, Any]] = [
                     '$project': {
                         'name': 1,
                         'code': 1,
-                        'currency_code':1
+                        'currency_code': 1
                     }
                 }
             ],
@@ -204,3 +204,60 @@ async def get_all_currencies_for_drop_down_menu(data: dict = Depends(security.ge
         return {"currencies": [serializer(c) for c in results]}
     except Exception as e:
         raise e
+
+
+@router.get("/get_currency_name_subunit_by_id/{currency_id}")
+async def get_currency_name_subunit_by_id(currency_id: str, _: dict = Depends(security.get_current_user)):
+    try:
+        name_subunit_pipeline = [
+            {
+                '$match': {
+                    '_id': ObjectId(currency_id)
+                }
+            }, {
+                '$lookup': {
+                    'from': 'all_countries',
+                    'let': {
+                        'country_id': '$country_id'
+                    },
+                    'pipeline': [
+                        {
+                            '$match': {
+                                '$expr': {
+                                    '$eq': [
+                                        '$_id', '$$country_id'
+                                    ]
+                                }
+                            }
+                        }, {
+                            '$project': {
+                                'name': 1,
+                                'code': 1,
+                                'currency_name': 1,
+                                'subunit_name': 1
+                            }
+                        }
+                    ],
+                    'as': 'country'
+                }
+            }, {
+                '$unwind': {
+                    'path': '$country',
+                    'preserveNullAndEmptyArrays': True
+                }
+            }, {
+                '$project': {
+                    '_id': 0,
+                    'country_name': '$country.name',
+                    'country_code': '$country.code',
+                    'currency_name': '$country.currency_name',
+                    'subunit_name': "$country.subunit_name",
+                }
+            }
+        ]
+        cursor = await currencies_collection.aggregate(name_subunit_pipeline)
+        result = await cursor.next()
+        return {"name_subunit": result}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail="Internal server error")

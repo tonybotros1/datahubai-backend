@@ -1439,9 +1439,9 @@ async def search_engine_for_car_trading(
             "$addFields": {
                 "date_field_to_filter": {
                     "$cond": [
-                        {"$eq": ["$status", "Sold"]},  # إذا status = Sold
-                        "$sell_date",  # استخدم sell_date
-                        "$buy_date"  # إذا مش Sold استخدم buy_date (New أو غيره)
+                        {"$eq": ["$status", "Sold"]},
+                        "$sell_date",
+                        "$buy_date"
                     ]
                 }
             }
