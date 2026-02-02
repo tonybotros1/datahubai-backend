@@ -11,6 +11,7 @@ from app.websocket_config import manager
 router = APIRouter()
 users_collection = get_collection("sys-users")
 refresh_tokens_collection = get_collection("refresh_tokens")
+companies_collection = get_collection("companies")
 
 
 def serializer(user: dict) -> dict:
@@ -25,13 +26,14 @@ def serializer(user: dict) -> dict:
 
 
 class UserCreate(BaseModel):
-    user_name: Optional[str]
-    email: Optional[EmailStr]
-    password: Optional[str]
-    roles: Optional[List[str]]
-    branches: Optional[List[str]]
+    user_name: Optional[str] = None
+    email: Optional[EmailStr] = None
+    password: Optional[str] = None
+    roles: Optional[List[str]] = None
+    is_admin: Optional[bool] = None
+    branches: Optional[List[str]] = None
     primary_branch: Optional[str] = None
-    expiry_date: Optional[datetime]
+    expiry_date: Optional[datetime] = None
 
 
 # For updating a user (all fields optional)
@@ -40,6 +42,7 @@ class UserUpdate(BaseModel):
     email: Optional[EmailStr] = None
     password: Optional[str] = None
     roles: Optional[List[str]] = None
+    is_admin: Optional[bool] = None
     branches: Optional[List[str]] = None
     primary_branch: Optional[str] = None
     expiry_date: Optional[datetime] = None
@@ -56,9 +59,12 @@ async def get_all_users(data: dict = Depends(security.get_current_user)):
             "branches": 1,
             "primary_branch": 1,
             "status": 1,
+            "is_admin":1,
             "expiry_date": 1,
             "createdAt": 1,
             "updatedAt": 1}).to_list(None)
+
+        print(all_users)
 
         return {"users": [serializer(u) for u in all_users]}
 
@@ -101,6 +107,7 @@ async def add_new_user(user: UserCreate, data: dict = Depends(security.get_curre
             "password_hash": password_hash,
             "roles": roles_list,
             "branches": branches_list,
+            'is_admin': user.is_admin,
             "primary_branch": ObjectId(user.primary_branch) if user.primary_branch else None,
             "expiry_date": user.expiry_date,
             "status": True,
@@ -175,6 +182,7 @@ async def update_user(
                 "email": 1,
                 "roles": 1,
                 "branches": 1,
+                'is_admin': 1,
                 "primary_branch": 1,
                 "status": 1,
                 "expiry_date": 1,
@@ -235,3 +243,67 @@ async def change_user_status(user_id: str, status: bool = Body(None), _: dict = 
         })
     except Exception as error:
         return {"message": str(error)}
+
+
+@router.get("/get_company_admin_roles")
+async def get_company_admin_roles(data: dict = Depends(security.get_current_user)):
+    try:
+        company_id = ObjectId(data.get("company_id"))
+        roles_pipeline = [
+            {
+                '$match': {
+                    '_id': company_id
+                }
+            }, {
+                '$lookup': {
+                    'from': 'sys-users',
+                    'localField': 'owner_id',
+                    'foreignField': '_id',
+                    'as': 'owner_details'
+                }
+            }, {
+                '$unwind': '$owner_details'
+            }, {
+                '$lookup': {
+                    'from': 'sys-roles',
+                    'let': {
+                        'roles': '$owner_details.roles'
+                    },
+                    'pipeline': [
+                        {
+                            '$match': {
+                                '$expr': {
+                                    '$in': [
+                                        '$_id', '$$roles'
+                                    ]
+                                }
+                            }
+                        }, {
+                            '$addFields': {
+                                '_id': {
+                                    '$toString': '$_id'
+                                }
+                            }
+                        }, {
+                            '$project': {
+                                '_id': 1,
+                                'is_shown_for_users': 1,
+                                'role_name': 1
+                            }
+                        }
+                    ],
+                    'as': 'roles_details'
+                }
+            }, {
+                '$project': {
+                    'roles_details': 1
+                }
+            }
+        ]
+        curser = await companies_collection.aggregate(roles_pipeline)
+        result = await curser.next()
+        return {"roles": result["roles_details"]}
+
+    except Exception as e:
+        print(e)
+        raise HTTPException(status_code=500, detail=str(e))

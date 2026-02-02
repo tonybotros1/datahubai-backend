@@ -519,6 +519,12 @@ async def get_current_company_details(data: dict = Depends(security.get_current_
                                 'path': '$branch_details',
                                 'preserveNullAndEmptyArrays': True
                             }
+                        }, {
+                            '$project': {
+                                '_id': 1,
+                                'is_admin': 1,
+                                'branch_details': 1
+                            }
                         }
                     ],
                     'as': 'current_user_details'
@@ -637,14 +643,23 @@ async def get_current_company_details(data: dict = Depends(security.get_current_
                 '$lookup': {
                     'from': 'currencies',
                     'let': {
-                        'country_id': '$country_details._id'
+                        'country_id': '$country_details._id',
+                        'company_id': '$_id'
                     },
                     'pipeline': [
                         {
                             '$match': {
                                 '$expr': {
-                                    '$eq': [
-                                        '$country_id', '$$country_id'
+                                    '$and': [
+                                        {
+                                            '$eq': [
+                                                '$country_id', '$$country_id'
+                                            ]
+                                        }, {
+                                            '$eq': [
+                                                '$company_id', '$$company_id'
+                                            ]
+                                        }
                                     ]
                                 }
                             }
@@ -704,14 +719,19 @@ async def get_current_company_details(data: dict = Depends(security.get_current_
                             '$country_details.currency_code', None
                         ]
                     },
+                    'currency_name': {
+                        '$ifNull': [
+                            '$country_details.currency_name', None
+                        ]
+                    },
                     'subunit_name': {
                         '$ifNull': [
                             '$country_details.subunit_name', None
                         ]
                     },
-                    'currency_name':{
-                        '$ifNull':[
-                            '$country_details.currency_name', None
+                    'is_admin': {
+                        '$ifNull': [
+                            '$current_user_details.is_admin', False
                         ]
                     }
                 }
