@@ -1968,19 +1968,12 @@ async def get_job_items_summary_table(job_id: str, _: dict = Depends(security.ge
                                 'as': 'main_ap_invoice_doc'
                             }
                         }, {
-                            '$lookup': {
-                                'from': 'ap_payment_types',
-                                'localField': 'transaction_type',
-                                'foreignField': '_id',
-                                'as': 'transaction_type_details'
-                            }
-                        }, {
                             '$addFields': {
                                 'invoice_number': {
                                     '$ifNull': [
                                         {
                                             '$arrayElemAt': [
-                                                '$main_ap_invoice_doc.invoice_number', 0
+                                                '$main_ap_invoice_doc.reference_number', 0
                                             ]
                                         }, None
                                     ]
@@ -1993,11 +1986,7 @@ async def get_job_items_summary_table(job_id: str, _: dict = Depends(security.ge
                                 'item_code': 'DIRECT PURCHASE',
                                 'item_name': {
                                     '$ifNull': [
-                                        {
-                                            '$arrayElemAt': [
-                                                '$transaction_type_details.type', 0
-                                            ]
-                                        }, None
+                                        '$note', None
                                     ]
                                 },
                                 'quantity': 0,
@@ -2144,4 +2133,168 @@ async def get_job_items_summary_table(job_id: str, _: dict = Depends(security.ge
         return {"summary_table": result['items_summary']}
     except Exception as e:
         print(e)
+        raise HTTPException(status_code=500, detail=f"failed: {str(e)}")
+
+
+@router.get("/get_time_sheets_table_summary/{job_id}")
+async def get_time_sheets_table_summary(job_id: str, _: dict = Depends(security.get_current_user)):
+    try:
+        time_sheets_summary_pipeline = [
+            {
+                '$match': {
+                    '_id': ObjectId(job_id)
+                }
+            }, {
+                '$lookup': {
+                    'from': 'time_sheets',
+                    'let': {
+                        'job_id': '$_id'
+                    },
+                    'pipeline': [
+                        {
+                            '$match': {
+                                '$expr': {
+                                    '$and': [
+                                        {
+                                            '$eq': [
+                                                '$job_id', '$$job_id'
+                                            ]
+                                        }, {
+                                            '$gt': [
+                                                {
+                                                    '$size': {
+                                                        '$filter': {
+                                                            'input': '$active_periods',
+                                                            'as': 'period',
+                                                            'cond': {
+                                                                '$ne': [
+                                                                    '$$period.to', None
+                                                                ]
+                                                            }
+                                                        }
+                                                    }
+                                                }, 0
+                                            ]
+                                        }
+                                    ]
+                                }
+                            }
+                        }, {
+                            '$lookup': {
+                                'from': 'all_job_tasks',
+                                'localField': 'task_id',
+                                'foreignField': '_id',
+                                'as': 'task_details'
+                            }
+                        }, {
+                            '$lookup': {
+                                'from': 'employees',
+                                'localField': 'employee_id',
+                                'foreignField': '_id',
+                                'as': 'employees_details'
+                            }
+                        }, {
+                            '$addFields': {
+                                'task_name_ar': {
+                                    '$ifNull': [
+                                        {
+                                            '$arrayElemAt': [
+                                                '$task_details.name_ar', 0
+                                            ]
+                                        }, None
+                                    ]
+                                },
+                                'task_name_en': {
+                                    '$ifNull': [
+                                        {
+                                            '$arrayElemAt': [
+                                                '$task_details.name_en', 0
+                                            ]
+                                        }, None
+                                    ]
+                                },
+                                'employee_name': {
+                                    '$ifNull': [
+                                        {
+                                            '$arrayElemAt': [
+                                                '$employees_details.name', 0
+                                            ]
+                                        }, None
+                                    ]
+                                },
+                                'start_date': {
+                                    '$arrayElemAt': [
+                                        '$active_periods.from', 0
+                                    ]
+                                },
+                                'end_date': {
+                                    '$arrayElemAt': [
+                                        '$active_periods.to', -1
+                                    ]
+                                },
+                                'time_in_hours': {
+                                    '$round': [
+                                        {
+                                            '$divide': [
+                                                {
+                                                    '$sum': {
+                                                        '$map': {
+                                                            'input': '$active_periods',
+                                                            'as': 'period',
+                                                            'in': {
+                                                                '$cond': [
+                                                                    {
+                                                                        '$and': [
+                                                                            {
+                                                                                '$ne': [
+                                                                                    '$$period.from', None
+                                                                                ]
+                                                                            }, {
+                                                                                '$ne': [
+                                                                                    '$$period.to', None
+                                                                                ]
+                                                                            }
+                                                                        ]
+                                                                    }, {
+                                                                        '$subtract': [
+                                                                            '$$period.to', '$$period.from'
+                                                                        ]
+                                                                    }, 0
+                                                                ]
+                                                            }
+                                                        }
+                                                    }
+                                                }, 1000 * 60 * 60
+                                            ]
+                                        }, 2
+                                    ]
+                                }
+                            }
+                        }, {
+                            '$project': {
+                                'task_details': 0,
+                                'company_id': 0,
+                                'job_id': 0,
+                                'task_id': 0,
+                                'employee_id': 0,
+                                '_id': 0,
+                                'employees_details': 0,
+                                'active_periods': 0
+                            }
+                        }
+                    ],
+                    'as': 'time_sheets_details'
+                }
+            }, {
+                '$project': {
+                    '_id': 0,
+                    'time_sheets_details': 1
+                }
+            }
+        ]
+        cursor = await job_cards_collection.aggregate(time_sheets_summary_pipeline)
+        result = await cursor.next()
+        return {"time_sheets_summary": result['time_sheets_details']}
+
+    except Exception as e:
         raise HTTPException(status_code=500, detail=f"failed: {str(e)}")
