@@ -375,10 +375,10 @@ async def start_function(start: StartFunction, data: dict = Depends(security.get
             "job_id": ObjectId(start['job_id']) if 'job_id' in start else None,
             "task_id": ObjectId(start['task_id']) if 'task_id' in start else None,
             "employee_id": ObjectId(start['employee_id']) if 'employee_id' in start else None,
-            "start_date": datetime.now(),
+            "start_date": security.now_utc(),
             "end_date": None,
             "active_periods": [{
-                "from": datetime.now(),
+                "from": security.now_utc(),
                 "to": None
             }]
         }
@@ -407,7 +407,7 @@ async def pause_function(time_sheet_id: str, data: dict = Depends(security.get_c
 
         active_periods = current_time_sheet.get('active_periods', [])
         if active_periods and active_periods[-1].get("to") is None:
-            active_periods[-1]['to'] = datetime.now()
+            active_periods[-1]['to'] = security.now_utc()
             await time_sheets_collection.update_one(
                 {"_id": time_sheet_id},
                 {"$set": {"active_periods": active_periods}},
@@ -436,7 +436,7 @@ async def continue_function(time_sheet_id: str, data: dict = Depends(security.ge
         if active_periods and active_periods[-1].get("to") is None:
             return
         active_periods.append({
-            "from": datetime.now(),
+            "from": security.now_utc(),
             "to": None
         })
         await time_sheets_collection.update_one(
@@ -464,9 +464,9 @@ async def finish_function(time_sheet_id: str, data: dict = Depends(security.get_
             raise HTTPException(status_code=404, detail='Time sheet not found')
 
         active_periods = current_time_sheet.get('active_periods', [])
-        end_date = datetime.now()
+        end_date = security.now_utc()
         if active_periods and active_periods[-1].get("to") is None:
-            active_periods[-1]['to'] = datetime.now()
+            active_periods[-1]['to'] = security.now_utc()
 
         await time_sheets_collection.update_one(
             {"_id": time_sheet_id},
@@ -499,7 +499,7 @@ async def pause_all_function(data: dict = Depends(security.get_current_user)):
         async for sheet in time_sheets_collection.find(filter_query):
             active_periods = sheet.get("active_periods", [])
             if active_periods and active_periods[-1].get("to") is None:
-                active_periods[-1]["to"] = datetime.now()
+                active_periods[-1]["to"] = security.now_utc()
                 updates.append(
                     UpdateOne({"_id": sheet["_id"]}, {"$set": {"active_periods": active_periods}})
                 )
