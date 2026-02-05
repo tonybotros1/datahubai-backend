@@ -370,6 +370,7 @@ async def start_function(start: StartFunction, data: dict = Depends(security.get
     try:
         start = start.model_dump(exclude_unset=True)
         company_id = ObjectId(data.get("company_id"))
+        print(f"date from function: {security.now_utc()}")
         sheet_dict = {
             "company_id": company_id,
             "job_id": ObjectId(start['job_id']) if 'job_id' in start else None,

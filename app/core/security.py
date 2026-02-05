@@ -1,5 +1,4 @@
 import os, hashlib, uuid
-import zoneinfo
 from datetime import datetime, timedelta, timezone
 from fastapi import Header, HTTPException, status
 from jose import jwt, JWTError
@@ -14,8 +13,8 @@ pwd_ctx = CryptContext(schemes=["argon2"], deprecated="auto")
 
 
 def now_utc():
-    # return datetime.now(timezone.utc)
-    return datetime.now(zoneinfo.ZoneInfo("local"))
+    return datetime.now(timezone.utc) + timedelta(hours=4)
+
 
 def one_month_from_now_utc():
     return datetime.now(timezone.utc) + timedelta(days=30)
