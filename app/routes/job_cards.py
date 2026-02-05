@@ -1068,8 +1068,10 @@ async def search_engine_for_job_cards_3(
             match_stage["customer"] = filter_jobs.customer_name
 
         if filter_jobs.status:
-            if filter_jobs.status == "Posted":
+            if filter_jobs.status == "Posted" or filter_jobs.status == 'New':
                 match_stage["job_status_1"] = filter_jobs.status
+            elif filter_jobs.status.lower() == "not approved":
+                match_stage["job_status_2"] = 'New'
             else:
                 match_stage["job_status_2"] = filter_jobs.status
 
