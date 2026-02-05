@@ -13,8 +13,8 @@ pwd_ctx = CryptContext(schemes=["argon2"], deprecated="auto")
 
 
 def now_utc():
-    return datetime.now(timezone.utc)
-
+    # return datetime.now(timezone.utc)
+    return datetime.now().astimezone()
 
 def one_month_from_now_utc():
     return datetime.now(timezone.utc) + timedelta(days=30)
