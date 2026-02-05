@@ -90,7 +90,7 @@ receiving_details_pipeline: list[dict[str, Any]] = [
         }
     }, {
         '$lookup': {
-            'from': 'employees',
+            'from': 'all_lists_values',
             'let': {
                 'approvedId': '$approved_by',
                 'orderedId': '$ordered_by',
@@ -775,7 +775,7 @@ async def add_new_receiving(receive: ReceivingModel, data: dict = Depends(securi
             for field in rec_ids:
                 if receive.get(field):
                     receive[field] = ObjectId(receive[field]) if receive[field] else None
-            new_receiving_counter = await create_custom_counter("REN", "RE", date=data, description="Receiving Number",
+            new_receiving_counter = await create_custom_counter("REN", "RE", data=data, description="Receiving Number",
                                                                 session=session)
             receive["createdAt"] = security.now_utc()
             receive["updatedAt"] = security.now_utc()
@@ -785,6 +785,7 @@ async def add_new_receiving(receive: ReceivingModel, data: dict = Depends(securi
             result = await receiving_collection.insert_one(receive, session=session)
             if not result.inserted_id:
                 raise HTTPException(status_code=500, detail="Failed to insert receiving")
+            print('yes')
 
             if receiving_items:
                 for inv in receiving_items:
@@ -814,6 +815,7 @@ async def add_new_receiving(receive: ReceivingModel, data: dict = Depends(securi
             return {"receiving": serialized}
 
         except Exception as e:
+            print(e)
             await session.abort_transaction()
             raise HTTPException(status_code=500, detail=str(e))
 

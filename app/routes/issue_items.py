@@ -192,7 +192,7 @@ issuing_pipeline = [
         }
     }, {
         '$lookup': {
-            'from': 'employees',
+            'from': 'all_lists_values',
             'localField': 'received_by',
             'foreignField': '_id',
             'as': 'received_by_details'

@@ -646,7 +646,15 @@ async def get_jobs_dates(date_type: str, data: dict = Depends(security.get_curre
                 '$group': {
                     '_id': {
                         '$dateTrunc': {
-                            'date': '$job_date',
+                            'date': {
+                                '$cond': [
+                                    {
+                                        '$eq': ["$job_status_1", "Posted"]
+                                    },
+                                    "$invoice_date",
+                                    "$job_date"
+                                ]
+                            },
                             'unit': date_type.lower()
                         }
                     }
@@ -982,7 +990,6 @@ async def get_salesman_summary(time_filter: TimeFilter, data: dict = Depends(sec
                                         'totalJobs': '$totalJobs',
                                         'totalItemsNet': '$totalItemsNet',
                                         'totalItemsPaid': '$totalItemsPaid',
-                                        'totalJobs': '$totalJobs'
                                     }
                                 ]
                             }

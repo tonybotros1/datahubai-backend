@@ -2190,7 +2190,7 @@ async def get_time_sheets_table_summary(job_id: str, _: dict = Depends(security.
                             }
                         }, {
                             '$lookup': {
-                                'from': 'employees',
+                                'from': 'all_lists_values',
                                 'localField': 'employee_id',
                                 'foreignField': '_id',
                                 'as': 'employees_details'
