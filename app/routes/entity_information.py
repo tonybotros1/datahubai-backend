@@ -864,7 +864,7 @@ async def search_engine_for_entity_information(filter_entities: EntityInformatio
         print(match_stage)
         base_search_pipeline.insert(0, {"$match": match_stage})
         base_search_pipeline.insert(1, {"$sort": {"entity_name": 1}})
-        base_search_pipeline.append({'$limit':200})
+        # base_search_pipeline.append({'$limit':200})
         cursor = await entity_information_collection.aggregate(base_search_pipeline)
         results = await cursor.to_list(None)
         return {"entities": results}

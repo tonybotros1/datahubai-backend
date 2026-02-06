@@ -910,23 +910,23 @@ async def dealing_with_job_cards(file: UploadFile, data: dict, delete_every_thin
         for col in date_cols:
             if col in df.columns:
                 df[col] = pd.to_datetime(df[col], errors="coerce")
-        df_2025 = df[
-            (
-                (df["job_date"].dt.year == 2025)
-                # & (df["job_date"].dt.month == 12)
-            ) |
-            (
-                (df["invoice_date"].dt.year == 2025)
-                # & (df["invoice_date"].dt.month == 12)
-            ) |
-            (
-                (df["cancellation_date"].dt.year == 2025)
-                # & (df["cancellation_date"].dt.month == 12)
-            )
-
-            ].sort_values(by=df.columns[0])
-        print(df_2025.shape)
-        print(df_2025.head())
+        # df_2025 = df[
+        #     (
+        #         (df["job_date"].dt.year == 2025)
+        #         # & (df["job_date"].dt.month == 12)
+        #     ) |
+        #     (
+        #         (df["invoice_date"].dt.year == 2025)
+        #         # & (df["invoice_date"].dt.month == 12)
+        #     ) |
+        #     (
+        #         (df["cancellation_date"].dt.year == 2025)
+        #         # & (df["cancellation_date"].dt.month == 12)
+        #     )
+        #
+        #     ].sort_values(by=df.columns[0])
+        print(df.shape)
+        print(df.head())
 
         color_doc = await list_collection.find_one({"code": "COLORS"})
         color_list_id = str(color_doc["_id"])
@@ -961,7 +961,7 @@ async def dealing_with_job_cards(file: UploadFile, data: dict, delete_every_thin
         existing_customers = {b['entity_name'].strip(): b for b in
                               await entity_information_collection.find({}).to_list(length=None)}
 
-        for i, row in enumerate(df_2025.itertuples(index=False), start=1):
+        for i, row in enumerate(df.itertuples(index=False), start=1):
             # for row in df[:50].itertuples(index=False):  # 20604
             brand = clean_value(row[1])
             model = clean_value(row[2])
@@ -1219,7 +1219,7 @@ async def dealing_with_job_cards(file: UploadFile, data: dict, delete_every_thin
                                                                        warranty_days=int(
                                                                            customer_warranty_days) if customer_warranty_days else 0,
                                                                        salesman_id=customer_salesman_id_for_new_customer,
-                                                                       entity_status=str(entity_status),
+                                                                       entity_status=str(entity_status).capitalize(),
                                                                        group_name=str(customer_group_name),
                                                                        industry_id=None, trn=str(trn),
                                                                        entity_type_id=None,
