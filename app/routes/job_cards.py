@@ -1370,10 +1370,10 @@ async def search_engine_for_job_cards_3(
                                 "grand_net": {"$sum": "$total_net"},
                                 "grand_paid": {"$sum": "$paid"},
                                 "grand_outstanding": {"$sum": "$final_outstanding"},
-                                "grand_count": {"$sum": 1}  # عدد كل الوثائق
+                                "grand_count": {"$sum": 1}
                             }
                         },
-                        {"$project": {"_id": 0}}  # إزالة _id
+                        {"$project": {"_id": 0}}
                     ]
                 }
             }

@@ -1,12 +1,12 @@
 import copy
-from typing import Optional, List
+from typing import Optional, List, Any
 from bson import ObjectId
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from app import database
 from app.core import security
 from app.database import get_collection
-from datetime import datetime, timezone, timedelta
+from datetime import datetime
 from app.routes.car_trading import PyObjectId
 from app.routes.counters import create_custom_counter
 
@@ -72,18 +72,13 @@ class ReceiptSearch(BaseModel):
     this_year: Optional[bool] = False
 
 
-ar_receipt_details_pipeline = [
+ar_receipt_details_pipeline: Any = [
     {
         '$lookup': {
             'from': 'entity_information',
             'localField': 'customer',
             'foreignField': '_id',
             'as': 'customer_details'
-        }
-    }, {
-        '$unwind': {
-            'path': '$customer_details',
-            'preserveNullAndEmptyArrays': True
         }
     }, {
         '$lookup': {
@@ -93,11 +88,6 @@ ar_receipt_details_pipeline = [
             'as': 'receipt_type_details'
         }
     }, {
-        '$unwind': {
-            'path': '$receipt_type_details',
-            'preserveNullAndEmptyArrays': True
-        }
-    }, {
         '$lookup': {
             'from': 'all_lists_values',
             'localField': 'bank_name',
@@ -105,21 +95,11 @@ ar_receipt_details_pipeline = [
             'as': 'bank_details'
         }
     }, {
-        '$unwind': {
-            'path': '$bank_details',
-            'preserveNullAndEmptyArrays': True
-        }
-    }, {
         '$lookup': {
             'from': 'all_banks',
             'localField': 'account',
             'foreignField': '_id',
             'as': 'account_details'
-        }
-    }, {
-        '$unwind': {
-            'path': '$account_details',
-            'preserveNullAndEmptyArrays': True
         }
     }, {
         '$lookup': {
@@ -146,45 +126,37 @@ ar_receipt_details_pipeline = [
                 }, {
                     '$lookup': {
                         'from': 'all_receipts_invoices',
-                        'let': {
-                            'jobId': '$job_id'
-                        },
+                        'localField': 'job_id',
+                        'foreignField': 'job_id',
                         'pipeline': [
                             {
-                                '$match': {
-                                    '$expr': {
-                                        '$eq': [
-                                            '$job_id', '$$jobId'
-                                        ]
+                                '$group': {
+                                    '_id': '$job_id',
+                                    'total_paid_for_job': {
+                                        '$sum': '$amount'
                                     }
                                 }
                             }
                         ],
-                        'as': 'all_receipts_for_job'
+                        'as': 'job_payment_summary'
                     }
                 }, {
                     '$addFields': {
                         'total_paid_for_job': {
-                            '$sum': '$all_receipts_for_job.amount'
+                            '$ifNull': [
+                                {
+                                    '$arrayElemAt': [
+                                        '$job_payment_summary.total_paid_for_job', 0
+                                    ]
+                                }, 0
+                            ]
                         }
                     }
                 }, {
                     '$lookup': {
                         'from': 'job_cards',
-                        'let': {
-                            'job_id': '$job_id'
-                        },
-                        'pipeline': [
-                            {
-                                '$match': {
-                                    '$expr': {
-                                        '$eq': [
-                                            '$_id', '$$job_id'
-                                        ]
-                                    }
-                                }
-                            }
-                        ],
+                        'localField': 'job_id',
+                        'foreignField': '_id',
                         'as': 'job_details'
                     }
                 }, {
@@ -195,20 +167,8 @@ ar_receipt_details_pipeline = [
                 }, {
                     '$lookup': {
                         'from': 'all_brands',
-                        'let': {
-                            'brand_id': '$job_details.car_brand'
-                        },
-                        'pipeline': [
-                            {
-                                '$match': {
-                                    '$expr': {
-                                        '$eq': [
-                                            '$_id', '$$brand_id'
-                                        ]
-                                    }
-                                }
-                            }
-                        ],
+                        'localField': 'job_details.car_brand',
+                        'foreignField': '_id',
                         'as': 'brand_details'
                     }
                 }, {
@@ -219,20 +179,8 @@ ar_receipt_details_pipeline = [
                 }, {
                     '$lookup': {
                         'from': 'all_brand_models',
-                        'let': {
-                            'model_id': '$job_details.car_model'
-                        },
-                        'pipeline': [
-                            {
-                                '$match': {
-                                    '$expr': {
-                                        '$eq': [
-                                            '$_id', '$$model_id'
-                                        ]
-                                    }
-                                }
-                            }
-                        ],
+                        'localField': 'job_details.car_model',
+                        'foreignField': '_id',
                         'as': 'model_details'
                     }
                 }, {
@@ -243,16 +191,14 @@ ar_receipt_details_pipeline = [
                 }, {
                     '$lookup': {
                         'from': 'job_cards_invoice_items',
-                        'let': {
-                            'job_id': '$job_details._id'
-                        },
+                        'localField': 'job_details._id',
+                        'foreignField': 'job_card_id',
                         'pipeline': [
                             {
-                                '$match': {
-                                    '$expr': {
-                                        '$eq': [
-                                            '$job_card_id', '$$job_id'
-                                        ]
+                                '$group': {
+                                    '_id': '$job_card_id',
+                                    'net_amount': {
+                                        '$sum': '$net'
                                     }
                                 }
                             }
@@ -262,7 +208,13 @@ ar_receipt_details_pipeline = [
                 }, {
                     '$addFields': {
                         'net_amount': {
-                            '$sum': '$invoice_items_details.net'
+                            '$ifNull': [
+                                {
+                                    '$arrayElemAt': [
+                                        '$invoice_items_details.net_amount', 0
+                                    ]
+                                }, 0
+                            ]
                         },
                         'receipt_amount': {
                             '$ifNull': [
@@ -294,12 +246,18 @@ ar_receipt_details_pipeline = [
                     }
                 }, {
                     '$project': {
-                        '_id': 1,
-                        'receipt_id': 1,
+                        '_id': {
+                            '$toString': '$_id'
+                        },
+                        'receipt_id': {
+                            '$toString': '$receipt_id'
+                        },
                         'is_selected': {
                             '$literal': True
                         },
-                        'job_id': '$job_details._id',
+                        'job_id': {
+                            '$toString': '$job_details._id'
+                        },
                         'invoice_number': '$job_details.invoice_number',
                         'invoice_date': '$invoice_date_str',
                         'invoice_amount': {
@@ -337,30 +295,67 @@ ar_receipt_details_pipeline = [
         }
     }, {
         '$addFields': {
+            '_id': {
+                '$toString': '$_id'
+            },
+            'customer': {
+                '$toString': '$customer'
+            },
+            'receipt_type': {
+                '$toString': '$receipt_type'
+            },
+            'account': {
+                '$toString': '$account'
+            },
+            'company_id': {
+                '$toString': '$company_id'
+            },
             'customer_name': {
                 '$ifNull': [
-                    '$customer_details.entity_name', None
+                    {
+                        '$arrayElemAt': [
+                            '$customer_details.entity_name', 0
+                        ]
+                    }, None
                 ]
             },
             'receipt_type_name': {
                 '$ifNull': [
-                    '$receipt_type_details.name', None
+                    {
+                        '$arrayElemAt': [
+                            '$receipt_type_details.name', 0
+                        ]
+                    }, None
                 ]
             },
             'account_number': {
                 '$ifNull': [
-                    '$account_details.account_number', None
+                    {
+                        '$arrayElemAt': [
+                            '$account_details.account_number', 0
+                        ]
+                    }, None
                 ]
             },
             'bank_name': {
                 '$ifNull': [
-                    '$bank_details.name', None
+                    {
+                        '$arrayElemAt': [
+                            '$bank_details.name', 0
+                        ]
+                    }, None
                 ]
             },
             'bank_name_id': {
-                '$ifNull': [
-                    '$bank_details._id', None
-                ]
+                '$toString': {
+                    '$ifNull': [
+                        {
+                            '$arrayElemAt': [
+                                '$bank_details._id', 0
+                            ]
+                        }, None
+                    ]
+                }
             }
         }
     }, {
@@ -948,29 +943,10 @@ async def search_engine_for_ar_receipts(
             match_stage["status"] = filter_receipts.status
 
         # 2️⃣ Handle date filters
-        now = datetime.now(timezone.utc)
         date_field = "receipt_date"
         date_filter = {}
 
-        if filter_receipts.today:
-            start = datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
-            end = start + timedelta(days=1)
-            date_filter[date_field] = {"$gte": start, "$lt": end}
-
-        elif filter_receipts.this_month:
-            start = datetime(now.year, now.month, 1, tzinfo=timezone.utc)
-            if now.month == 12:
-                end = datetime(now.year + 1, 1, 1, tzinfo=timezone.utc)
-            else:
-                end = datetime(now.year, now.month + 1, 1, tzinfo=timezone.utc)
-            date_filter[date_field] = {"$gte": start, "$lt": end}
-
-        elif filter_receipts.this_year:
-            start = datetime(now.year, 1, 1, tzinfo=timezone.utc)
-            end = datetime(now.year + 1, 1, 1, tzinfo=timezone.utc)
-            date_filter[date_field] = {"$gte": start, "$lt": end}
-
-        elif filter_receipts.from_date or filter_receipts.to_date:
+        if filter_receipts.from_date or filter_receipts.to_date:
             date_filter[date_field] = {}
             if filter_receipts.from_date:
                 date_filter[date_field]["$gte"] = filter_receipts.from_date
@@ -989,43 +965,85 @@ async def search_engine_for_ar_receipts(
                 "total_received": {"$sum": "$invoices_details.receipt_amount"}
             }
         })
-        search_pipeline.append({
-            "$facet": {
-                "receipts": [
-                    {"$sort": {"receipt_number": -1}},
-                ],
-                "grand_totals": [
-                    {
-                        "$group": {
-                            "_id": None,
-                            "grand_received": {"$sum": "$total_received"},
+
+        totals_pipeline = [
+            {
+                '$lookup': {
+                    'from': 'all_receipts_invoices',
+                    'localField': '_id',
+                    'foreignField': 'receipt_id',
+                    'as': 'receipts_invoices'
+                }
+            }, {
+                '$group': {
+                    '_id': None,
+                    'total_received': {
+                        '$sum': {
+                            '$sum': '$receipts_invoices.amount'
                         }
                     },
-                    {
-                        "$project": {
-                            "_id": 0
-                        }
-                    }
-                ]
+                    'count': {"$sum": 1}
+                }
+            }, {
+                '$project': {
+                    '_id': 0
+                }
             }
-        })
-
+        ]
+        totals_pipeline.insert(0, {"$match": match_stage})
+        # search_pipeline.append({
+        #     '$facet': {
+        #         'receipts': [
+        #             {
+        #                 '$limit': 200
+        #             },
+        #             {
+        #                 '$sort':{
+        #                     'receipt_number': -1
+        #                 }
+        #             }
+        #         ],
+        #         'grand_totals': [
+        #             {
+        #                 '$group': {
+        #                     '_id': None,
+        #                     'grand_received': {
+        #                         '$sum': '$total_received'
+        #                     },
+        #                     'grand_count': {
+        #                         '$sum': 1
+        #                     }
+        #                 }
+        #             }, {
+        #                 '$project': {
+        #                     '_id': 0
+        #                 }
+        #             }
+        #         ]
+        #     }
+        # })
         cursor = await receipts_collection.aggregate(search_pipeline)
         result = await cursor.to_list(None)
+        print(len(result))
+        cursor2 = await receipts_collection.aggregate(totals_pipeline)
+        totals_result = await cursor2.to_list(length=1)
+        print(totals_result)
 
-        if result and len(result) > 0:
-            data = result[0]
-            receipts = [serializer(r) for r in data.get("receipts", [])]
-            totals = data.get("grand_totals", [])
-            grand_totals = totals[0] if totals else {"grand_received": 0}
-        else:
-            receipts = []
-            grand_totals = {"grand_received": 0}
+        return {"receipts": result if result else [], "grand_totals": totals_result if totals_result else  {"total_received": 0, "count":0}}
 
-        return {
-            "receipts": receipts,
-            "grand_totals": grand_totals
-        }
+        # if result and len(result) > 0:
+        #     data = result[0]
+        #     receipts = data.get("receipts", [])
+        #     totals = data.get("grand_totals", [])
+        #     grand_totals = totals[0] if totals else {"grand_received": 0}
+        # else:
+        #     receipts = []
+        #     grand_totals = {"grand_received": 0}
+        #
+        # return {
+        #     "receipts": receipts,
+        #     "grand_totals": grand_totals
+        # }
 
 
     except HTTPException:

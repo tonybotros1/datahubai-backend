@@ -634,13 +634,13 @@ async def dealing_with_ar_receipts(file: UploadFile, data: dict, delete_every_th
             if col in df.columns:
                 df[col] = pd.to_datetime(df[col], errors="coerce")
         # df_2025 = df[(df["receipt_date"].dt.year == 2025)]
-        df_2025 = df[
-            (
-                    (df["receipt_date"].dt.year == 2025) & (df["receipt_date"].dt.month == 12)
-            )
-        ].sort_values(by=df.columns[0])
-        print(df_2025.shape)
-        print(df_2025.head())
+        # df_2025 = df[
+        #     (
+        #             (df["receipt_date"].dt.year == 2025) & (df["receipt_date"].dt.month == 12)
+        #     )
+        # ].sort_values(by=df.columns[0])
+        # print(df_2025.shape)
+        # print(df_2025.head())
         # print(df_2025["receipt_type"].value_counts())
         # print(df_2025.head())
 
@@ -649,18 +649,18 @@ async def dealing_with_ar_receipts(file: UploadFile, data: dict, delete_every_th
         bank_name_list_id = str(bank_name_doc["_id"])
         account_types_bank_doc = await value_collection.find_one({"name": "Bank"})
         account_types_list_id = str(account_types_bank_doc["_id"])
-        existing_customers = {b['entity_name']: b for b in
+        existing_customers = {b['entity_name'].strip(): b for b in
                               await entity_information_collection.find({}).to_list(length=None)}
-        existing_values = {b["name"].capitalize(): ObjectId(b["_id"]) for b in
+        existing_values = {b["name"].strip(): ObjectId(b["_id"]) for b in
                            await value_collection.find({}).to_list(length=None)}
-        existing_banks = {b["account_number"]: ObjectId(b["_id"]) for b in
+        existing_banks = {b["account_number"].strip(): ObjectId(b["_id"]) for b in
                           await banks_collection.find({}).to_list(length=None)}
         uae_country_doc = await countries_collection.find_one({"code": "UAE"})
         uae_country_id = str(uae_country_doc["_id"])
         uae_currency_doc = await currencies_collection.find_one({"country_id": ObjectId(uae_country_id)})
         uae_currency_id = str(uae_currency_doc["_id"])
 
-        for i, row in enumerate(df_2025.itertuples(index=False), start=1):
+        for i, row in enumerate(df.itertuples(index=False), start=1):
             receipt_id = clean_value(row[0])
             receipt_number = normalize_number_to_string(row[1])
             receipt_date = to_mongo_datetime(row[2])
@@ -680,7 +680,7 @@ async def dealing_with_ar_receipts(file: UploadFile, data: dict, delete_every_th
                     customer_id = None
 
             if receipt_type:
-                receipt_type_id = existing_values.get(str(receipt_type).capitalize().strip())
+                receipt_type_id = existing_values.get(str(receipt_type).strip())
                 if not receipt_type_id:
                     receipt_type_id = None
             else:
@@ -693,7 +693,7 @@ async def dealing_with_ar_receipts(file: UploadFile, data: dict, delete_every_th
                         new_bank_name = await add_new_value(list_id=bank_name_list_id, name=str(bank_name),
                                                             mastered_by_id=None)
                         bank_name_id = ObjectId(new_bank_name['list']['_id'])
-                        existing_values[str(bank_name)] = bank_name_id
+                        existing_values[str(bank_name).strip()] = bank_name_id
                 else:
                     bank_name_id = None
 
@@ -713,7 +713,7 @@ async def dealing_with_ar_receipts(file: UploadFile, data: dict, delete_every_th
                         )
                         new_account = await add_new_bank(bank=account_model, data=data)
                         account_id = ObjectId(new_account['account']['_id'])
-                        existing_banks[str(new_account).strip()] = account_id
+                        existing_banks[str(new_account['account']['account_number']).strip()] = account_id
                 else:
                     account_id = None
             except Exception as e:

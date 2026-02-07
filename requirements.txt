@@ -14,3 +14,4 @@ python-dotenv
 python-multipart
 pydantic[email]
 argon2_cffi
+xlrd
