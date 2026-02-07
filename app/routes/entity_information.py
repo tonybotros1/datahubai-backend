@@ -861,13 +861,35 @@ async def search_engine_for_entity_information(filter_entities: EntityInformatio
                     "number": filter_entities.number
                 }
             }
-        print(match_stage)
+
         base_search_pipeline.insert(0, {"$match": match_stage})
         base_search_pipeline.insert(1, {"$sort": {"entity_name": 1}})
-        # base_search_pipeline.append({'$limit':200})
+        base_search_pipeline.append({
+            '$facet': {
+                'entities': [
+                    {
+                        '$limit': 200
+                    }
+                ],
+                'grand_totals': [
+                    {
+                        '$group': {
+                            '_id': None,
+                            'grand_count': {
+                                '$sum': 1
+                            }
+                        }
+                    }, {
+                        '$project': {
+                            '_id': 0
+                        }
+                    }
+                ]
+            }
+        })
         cursor = await entity_information_collection.aggregate(base_search_pipeline)
         results = await cursor.to_list(None)
-        return {"entities": results}
+        return {"entities": results[0].get('entities',[]),'count' : results[0].get('grand_totals')[0]}
 
     except Exception as error:
         raise HTTPException(status_code=500, detail=str(error))

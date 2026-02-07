@@ -966,84 +966,84 @@ async def search_engine_for_ar_receipts(
             }
         })
 
-        totals_pipeline = [
-            {
-                '$lookup': {
-                    'from': 'all_receipts_invoices',
-                    'localField': '_id',
-                    'foreignField': 'receipt_id',
-                    'as': 'receipts_invoices'
-                }
-            }, {
-                '$group': {
-                    '_id': None,
-                    'total_received': {
-                        '$sum': {
-                            '$sum': '$receipts_invoices.amount'
-                        }
-                    },
-                    'count': {"$sum": 1}
-                }
-            }, {
-                '$project': {
-                    '_id': 0
-                }
-            }
-        ]
-        totals_pipeline.insert(0, {"$match": match_stage})
-        # search_pipeline.append({
-        #     '$facet': {
-        #         'receipts': [
-        #             {
-        #                 '$limit': 200
+        # totals_pipeline = [
+        #     {
+        #         '$lookup': {
+        #             'from': 'all_receipts_invoices',
+        #             'localField': '_id',
+        #             'foreignField': 'receipt_id',
+        #             'as': 'receipts_invoices'
+        #         }
+        #     }, {
+        #         '$group': {
+        #             '_id': None,
+        #             'total_received': {
+        #                 '$sum': {
+        #                     '$sum': '$receipts_invoices.amount'
+        #                 }
         #             },
-        #             {
-        #                 '$sort':{
-        #                     'receipt_number': -1
-        #                 }
-        #             }
-        #         ],
-        #         'grand_totals': [
-        #             {
-        #                 '$group': {
-        #                     '_id': None,
-        #                     'grand_received': {
-        #                         '$sum': '$total_received'
-        #                     },
-        #                     'grand_count': {
-        #                         '$sum': 1
-        #                     }
-        #                 }
-        #             }, {
-        #                 '$project': {
-        #                     '_id': 0
-        #                 }
-        #             }
-        #         ]
+        #             'count': {"$sum": 1}
+        #         }
+        #     }, {
+        #         '$project': {
+        #             '_id': 0
+        #         }
         #     }
-        # })
+        # ]
+        # totals_pipeline.insert(0, {"$match": match_stage})
+        search_pipeline.append({
+            '$facet': {
+                'receipts': [
+                    {
+                        '$limit': 200
+                    },
+                    {
+                        '$sort':{
+                            'receipt_number': -1
+                        }
+                    }
+                ],
+                'grand_totals': [
+                    {
+                        '$group': {
+                            '_id': None,
+                            'grand_received': {
+                                '$sum': '$total_received'
+                            },
+                            'grand_count': {
+                                '$sum': 1
+                            }
+                        }
+                    }, {
+                        '$project': {
+                            '_id': 0
+                        }
+                    }
+                ]
+            }
+        })
         cursor = await receipts_collection.aggregate(search_pipeline)
         result = await cursor.to_list(None)
-        print(len(result))
-        cursor2 = await receipts_collection.aggregate(totals_pipeline)
-        totals_result = await cursor2.to_list(length=1)
-        print(totals_result)
+        # print(len(result))
+        # cursor2 = await receipts_collection.aggregate(totals_pipeline)
+        # totals_result = await cursor2.to_list(length=1)
+        # print(totals_result)
 
-        return {"receipts": result if result else [], "grand_totals": totals_result if totals_result else  {"total_received": 0, "count":0}}
+        # return {"receipts": result if result else [], "grand_totals": totals_result if totals_result else  {"total_received": 0, "count":0}}
 
-        # if result and len(result) > 0:
-        #     data = result[0]
-        #     receipts = data.get("receipts", [])
-        #     totals = data.get("grand_totals", [])
-        #     grand_totals = totals[0] if totals else {"grand_received": 0}
-        # else:
-        #     receipts = []
-        #     grand_totals = {"grand_received": 0}
-        #
-        # return {
-        #     "receipts": receipts,
-        #     "grand_totals": grand_totals
-        # }
+        if result and len(result) > 0:
+            data = result[0]
+            receipts = data.get("receipts", [])
+            totals = data.get("grand_totals", [])
+            grand_totals = totals[0] if totals else {"grand_received": 0, "grand_count" : 0}
+        else:
+            receipts = []
+            grand_totals = {"grand_received": 0}
+
+        return {
+            "receipts": receipts,
+            "grand_totals": grand_totals
+        }
 
 
     except HTTPException:

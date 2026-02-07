@@ -1342,7 +1342,7 @@ async def search_engine_for_job_cards_3(
             {
                 "$facet": {
                     "job_cards": [
-                        # {"$limit": 200},
+                        {"$limit": 200},
                         {"$project": {
                             'car_brand_details': 0,
                             'car_model_details': 0,
