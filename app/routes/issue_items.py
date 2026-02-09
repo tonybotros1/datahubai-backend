@@ -6,7 +6,7 @@ from pydantic import BaseModel
 from app import database
 from app.core import security
 from app.database import get_collection
-from datetime import datetime, timezone, timedelta
+from datetime import datetime
 from app.routes.car_trading import PyObjectId
 from app.routes.counters import create_custom_counter
 
@@ -96,157 +96,193 @@ issuing_pipeline = [
     {
         '$lookup': {
             'from': 'all_lists_values',
-            'localField': 'issue_type',
-            'foreignField': '_id',
-            'as': 'issue_type_details'
-        }
-    }, {
-        '$unwind': {
-            'path': '$issue_type_details',
-            'preserveNullAndEmptyArrays': True
-        }
-    }, {
-        '$lookup': {
-            'from': 'job_cards',
             'let': {
-                'job_card_id': '$job_card_id'
+                'issue_type': '$issue_type',
+                'received_by': '$received_by'
             },
             'pipeline': [
                 {
                     '$match': {
                         '$expr': {
-                            '$eq': [
-                                '$_id', '$$job_card_id'
+                            '$in': [
+                                '$_id', [
+                                    '$$issue_type', '$$received_by'
+                                ]
                             ]
                         }
                     }
                 }, {
-                    '$lookup': {
-                        'from': 'all_brands',
-                        'localField': 'car_brand',
-                        'foreignField': '_id',
-                        'as': 'brand_details'
-                    }
-                }, {
-                    '$unwind': {
-                        'path': '$brand_details',
-                        'preserveNullAndEmptyArrays': True
-                    }
-                }, {
-                    '$lookup': {
-                        'from': 'all_brand_models',
-                        'localField': 'car_model',
-                        'foreignField': '_id',
-                        'as': 'model_details'
-                    }
-                }, {
-                    '$unwind': {
-                        'path': '$model_details',
-                        'preserveNullAndEmptyArrays': True
-                    }
-                }, {
-                    '$addFields': {
-                        'car_brand_name': {
-                            '$ifNull': [
-                                '$brand_details.name', ''
-                            ]
-                        },
-                        'car_model_name': {
-                            '$ifNull': [
-                                '$model_details.name', ''
-                            ]
-                        }
+                    '$project': {
+                        'name': 1
                     }
                 }
             ],
-            'as': 'job_card_details'
-        }
-    }, {
-        '$unwind': {
-            'path': '$job_card_details',
-            'preserveNullAndEmptyArrays': True
-        }
-    }, {
-        '$lookup': {
-            'from': 'converters',
-            'localField': 'converter_id',
-            'foreignField': '_id',
-            'as': 'converters_details'
-        }
-    }, {
-        '$unwind': {
-            'path': '$converters_details',
-            'preserveNullAndEmptyArrays': True
+            'as': 'lists'
         }
     }, {
         '$lookup': {
             'from': 'branches',
             'localField': 'branch',
             'foreignField': '_id',
+            'pipeline': [
+                {
+                    '$project': {
+                        'name': 1
+                    }
+                }
+            ],
             'as': 'branch_details'
         }
     }, {
-        '$unwind': {
-            'path': '$branch_details',
-            'preserveNullAndEmptyArrays': True
+        '$lookup': {
+            'from': 'converters',
+            'localField': 'converter_id',
+            'foreignField': '_id',
+            'pipeline': [
+                {
+                    '$project': {
+                        'name': 1,
+                        'converter_number': 1
+                    }
+                }
+            ],
+            'as': 'converter_details'
         }
     }, {
         '$lookup': {
-            'from': 'all_lists_values',
-            'localField': 'received_by',
+            'from': 'job_cards',
+            'localField': 'job_card_id',
             'foreignField': '_id',
-            'as': 'received_by_details'
+            'pipeline': [
+                {
+                    '$project': {
+                        'job_number': 1,
+                        'car_brand': 1,
+                        'car_model': 1,
+                        'plate_number': 1
+                    }
+                }
+            ],
+            'as': 'job_card'
         }
     }, {
-        '$unwind': {
-            'path': '$received_by_details',
-            'preserveNullAndEmptyArrays': True
+        '$lookup': {
+            'from': 'all_brands',
+            'localField': 'job_card.car_brand',
+            'foreignField': '_id',
+            'pipeline': [
+                {
+                    '$project': {
+                        'name': 1
+                    }
+                }
+            ],
+            'as': 'brand'
+        }
+    }, {
+        '$lookup': {
+            'from': 'all_brand_models',
+            'localField': 'job_card.car_model',
+            'foreignField': '_id',
+            'pipeline': [
+                {
+                    '$project': {
+                        'name': 1
+                    }
+                }
+            ],
+            'as': 'model'
         }
     }, {
         '$addFields': {
-            'branch_name': {
-                '$ifNull': [
-                    '$branch_details.name', None
-                ]
+            'job_card': {
+                '$first': '$job_card'
             },
+            'branch_details': {
+                '$first': '$branch_details'
+            },
+            'converter_details': {
+                '$first': '$converter_details'
+            },
+            'brand': {
+                '$first': '$brand'
+            },
+            'model': {
+                '$first': '$model'
+            }
+        }
+    }, {
+        '$addFields': {
             'issue_type_name': {
-                '$ifNull': [
-                    '$issue_type_details.name', None
-                ]
+                '$let': {
+                    'vars': {
+                        'match': {
+                            '$first': {
+                                '$filter': {
+                                    'input': '$lists',
+                                    'as': 'l',
+                                    'cond': {
+                                        '$eq': [
+                                            '$$l._id', '$issue_type'
+                                        ]
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    'in': '$$match.name'
+                }
             },
             'received_by_name': {
-                '$ifNull': [
-                    '$received_by_details.name', None
-                ]
-            },
+                '$let': {
+                    'vars': {
+                        'match': {
+                            '$first': {
+                                '$filter': {
+                                    'input': '$lists',
+                                    'as': 'l',
+                                    'cond': {
+                                        '$eq': [
+                                            '$$l._id', '$received_by'
+                                        ]
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    'in': '$$match.name'
+                }
+            }
+        }
+    }, {
+        '$addFields': {
+            'branch_name': '$branch_details.name',
+            'car_brand_name': '$brand.name',
+            'car_model_name': '$model.name',
             'details_string': {
                 '$cond': {
                     'if': {
-                        '$ne': [
-                            {
-                                '$ifNull': [
-                                    '$job_card_details._id', None
-                                ]
-                            }, None
+                        '$ifNull': [
+                            '$job_card._id', False
                         ]
                     },
                     'then': {
                         '$concat': [
                             {
                                 '$ifNull': [
-                                    '$job_card_details.job_number', ''
+                                    '$job_card.job_number', ''
                                 ]
                             }, ' [', {
                                 '$ifNull': [
-                                    '$job_card_details.car_brand_name', ''
+                                    '$brand.name', ''
                                 ]
                             }, ' ', {
                                 '$ifNull': [
-                                    '$job_card_details.car_model_name', ''
+                                    '$model.name', ''
                                 ]
-                            }, ']', ' [', {
+                            }, '] [', {
                                 '$ifNull': [
-                                    '$job_card_details.plate_number', ''
+                                    '$job_card.plate_number', ''
                                 ]
                             }, ']'
                         ]
@@ -255,11 +291,11 @@ issuing_pipeline = [
                         '$concat': [
                             {
                                 '$ifNull': [
-                                    '$converters_details.converter_number', ''
+                                    '$converter_details.converter_number', ''
                                 ]
                             }, ' [', {
                                 '$ifNull': [
-                                    '$converters_details.name', ''
+                                    '$converter_details.name', ''
                                 ]
                             }, ']'
                         ]
@@ -270,42 +306,37 @@ issuing_pipeline = [
     }, {
         '$lookup': {
             'from': 'issuing_items_details',
-            'let': {
-                'issue_id': '$_id'
-            },
+            'localField': '_id',
+            'foreignField': 'issue_id',
             'pipeline': [
                 {
-                    '$match': {
-                        '$expr': {
-                            '$eq': [
-                                '$issue_id', '$$issue_id'
-                            ]
-                        }
-                    }
-                }, {
                     '$lookup': {
                         'from': 'inventory_items',
                         'localField': 'inventory_item_id',
                         'foreignField': '_id',
-                        'as': 'inventory_items_details'
-                    }
-                }, {
-                    '$unwind': {
-                        'path': '$inventory_items_details',
-                        'preserveNullAndEmptyArrays': True
+                        'pipeline': [
+                            {
+                                '$project': {
+                                    'name': 1,
+                                    'code': 1
+                                }
+                            }
+                        ],
+                        'as': 'item'
                     }
                 }, {
                     '$addFields': {
-                        'name': {
-                            '$ifNull': [
-                                '$inventory_items_details.name', None
-                            ]
+                        'item': {
+                            '$first': '$item'
                         },
-                        'code': {
-                            '$ifNull': [
-                                '$inventory_items_details.code', None
-                            ]
-                        },
+                        '_id': {
+                            '$toString': '$_id'
+                        }
+                    }
+                }, {
+                    '$project': {
+                        'name': '$item.name',
+                        'code': '$item.code',
                         'last_price': '$price',
                         'final_quantity': '$quantity',
                         'total': {
@@ -313,14 +344,6 @@ issuing_pipeline = [
                                 '$price', '$quantity'
                             ]
                         }
-                    }
-                }, {
-                    '$project': {
-                        'inventory_items_details': 0,
-                        'quantity': 0,
-                        'price': 0,
-                        'updatedAt': 0,
-                        'createdAt': 0
                     }
                 }
             ],
@@ -329,42 +352,37 @@ issuing_pipeline = [
     }, {
         '$lookup': {
             'from': 'issuing_converters_details',
-            'let': {
-                'issue_id': '$_id'
-            },
+            'localField': '_id',
+            'foreignField': 'issue_id',
             'pipeline': [
                 {
-                    '$match': {
-                        '$expr': {
-                            '$eq': [
-                                '$issue_id', '$$issue_id'
-                            ]
-                        }
-                    }
-                }, {
                     '$lookup': {
                         'from': 'converters',
                         'localField': 'converter_id',
                         'foreignField': '_id',
-                        'as': 'converter_details'
-                    }
-                }, {
-                    '$unwind': {
-                        'path': '$converter_details',
-                        'preserveNullAndEmptyArrays': True
+                        'pipeline': [
+                            {
+                                '$project': {
+                                    'name': 1,
+                                    'converter_number': 1
+                                }
+                            }
+                        ],
+                        'as': 'conv'
                     }
                 }, {
                     '$addFields': {
-                        'name': {
-                            '$ifNull': [
-                                '$converter_details.name', None
-                            ]
+                        'conv': {
+                            '$first': '$conv'
                         },
-                        'converter_number': {
-                            '$ifNull': [
-                                '$converter_details.converter_number', None
-                            ]
-                        },
+                        '_id': {
+                            '$toString': '$_id'
+                        }
+                    }
+                }, {
+                    '$project': {
+                        'name': '$conv.name',
+                        'converter_number': '$conv.converter_number',
                         'last_price': '$price',
                         'final_quantity': '$quantity',
                         'total': {
@@ -373,29 +391,21 @@ issuing_pipeline = [
                             ]
                         }
                     }
-                }, {
-                    '$project': {
-                        'converter_details': 0,
-                        'quantity': 0,
-                        'price': 0,
-                        'updatedAt': 0,
-                        'createdAt': 0
-                    }
                 }
             ],
             'as': 'converters_details_section'
         }
     }, {
         '$project': {
-            'received_by_details': 0,
+            'lists': 0,
             'branch_details': 0,
-            'issue_type_details': 0,
-            'converters_details': 0,
-            'job_card_details': 0
+            'converter_details': 0,
+            'job_card': 0,
+            'brand': 0,
+            'model': 0
         }
     }
 ]
-
 items_details_pipeline = [
     {
         '$lookup': {
@@ -1306,29 +1316,10 @@ async def search_engine_for_issuing(
             match_stage["status"] = filter_issuing.status
 
         # 2️⃣ Handle date filters
-        now = datetime.now(timezone.utc)
         date_field = "date"
         date_filter = {}
 
-        if filter_issuing.today:
-            start = datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
-            end = start + timedelta(days=1)
-            date_filter[date_field] = {"$gte": start, "$lt": end}
-
-        elif filter_issuing.this_month:
-            start = datetime(now.year, now.month, 1, tzinfo=timezone.utc)
-            if now.month == 12:
-                end = datetime(now.year + 1, 1, 1, tzinfo=timezone.utc)
-            else:
-                end = datetime(now.year, now.month + 1, 1, tzinfo=timezone.utc)
-            date_filter[date_field] = {"$gte": start, "$lt": end}
-
-        elif filter_issuing.this_year:
-            start = datetime(now.year, 1, 1, tzinfo=timezone.utc)
-            end = datetime(now.year + 1, 1, 1, tzinfo=timezone.utc)
-            date_filter[date_field] = {"$gte": start, "$lt": end}
-
-        elif filter_issuing.from_date or filter_issuing.to_date:
+        if filter_issuing.from_date or filter_issuing.to_date:
             date_filter[date_field] = {}
             if filter_issuing.from_date:
                 date_filter[date_field]["$gte"] = filter_issuing.from_date
@@ -1356,20 +1347,54 @@ async def search_engine_for_issuing(
             }
         })
         search_pipeline.append({
-            "$facet": {
-                "issuing": [
-                    {"$sort": {"issuing_number": -1}},
-                ],
-                "grand_totals": [
+            '$facet': {
+                'issuing': [
                     {
-                        "$group": {
-                            "_id": None,
-                            "grand_total": {"$sum": "$totals"},
+                        '$sort': {
+                            'issuing_number': -1
                         }
-                    },
+                    }, {
+                        '$limit': 200
+                    }, {
+                        '$addFields': {
+                            '_id': {
+                                '$toString': '$_id'
+                            },
+                            'branch': {
+                                '$toString': '$branch'
+                            },
+                            'issue_type': {
+                                '$toString': '$issue_type'
+                            },
+                            'converter_id': {
+                                '$toString': '$converter_id'
+                            },
+                            'received_by': {
+                                '$toString': '$received_by'
+                            },
+                            'company_id': {
+                                '$toString': '$company_id'
+                            },
+                            'job_card_id': {
+                                '$toString': '$job_card_id'
+                            }
+                        }
+                    }
+                ],
+                'grand_totals': [
                     {
-                        "$project": {
-                            "_id": 0
+                        '$group': {
+                            '_id': None,
+                            'grand_total': {
+                                '$sum': '$totals'
+                            },
+                            'grand_count': {
+                                '$sum': 1
+                            }
+                        }
+                    }, {
+                        '$project': {
+                            '_id': 0
                         }
                     }
                 ]
@@ -1381,12 +1406,12 @@ async def search_engine_for_issuing(
 
         if result and len(result) > 0:
             data = result[0]
-            receiving = [serializer(r) for r in data.get("issuing", [])]
+            receiving = data.get("issuing", [])
             totals = data.get("grand_totals", [])
-            grand_totals = totals[0] if totals else {"grand_total": 0}
+            grand_totals = totals[0] if totals else {"grand_total": 0, "grand_count": 0}
         else:
             receiving = []
-            grand_totals = {"grand_totals": 0}
+            grand_totals = {"grand_totals": 0, "grand_count": 0}
 
         return {
             "issuing": receiving,

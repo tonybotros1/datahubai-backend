@@ -7,7 +7,7 @@ from starlette.responses import JSONResponse
 from app import database
 from app.core import security
 from app.database import get_collection
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 
 from app.routes.car_trading import PyObjectId
 from app.routes.counters import create_custom_counter
@@ -1670,23 +1670,8 @@ async def search_engine_for_quotation_cards(filter_quotations: QuotationCardSear
         print(now)
         date_field = "quotation_date"
         date_filter = {}
-        if filter_quotations.today:
-            start = datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
-            end = start + timedelta(days=1)
-            print(start, end)
-            date_filter[date_field] = {"$gte": start, "$lt": end}
 
-        elif filter_quotations.this_month:
-            start = datetime(now.year, now.month, 1, tzinfo=timezone.utc)
-            end = datetime(now.year + (now.month // 12), ((now.month % 12) + 1), 1)
-            date_filter[date_field] = {"$gte": start, "$lt": end}
-
-        elif filter_quotations.this_year:
-            start = datetime(now.year, 1, 1, tzinfo=timezone.utc)
-            end = datetime(now.year + 1, 1, 1)
-            date_filter[date_field] = {"$gte": start, "$lt": end}
-
-        elif filter_quotations.from_date or filter_quotations.to_date:
+        if filter_quotations.from_date or filter_quotations.to_date:
             date_filter[date_field] = {}
             if filter_quotations.from_date:
                 print("from date")
