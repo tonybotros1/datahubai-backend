@@ -472,9 +472,7 @@ async def search_engine(filtered_invoices: APInvoicesSearch, data: dict = Depend
         if filtered_invoices.invoice_number:
             match_stage["invoice_number"] = filtered_invoices.invoice_number
         if filtered_invoices.reference_number:
-            match_stage["reference_number"] = {
-                "$regex": filtered_invoices.reference_number, "$options": "i"
-            }
+            match_stage["reference_number"] = filtered_invoices.reference_number
         if filtered_invoices.vendor:
             match_stage["vendor"] = filtered_invoices.vendor
         if filtered_invoices.status:
@@ -513,7 +511,8 @@ async def search_engine(filtered_invoices: APInvoicesSearch, data: dict = Depend
                     {
                         '$sort': {
                             'reference_number': -1
-                        }
+                        },
+
                     },
                     {
                         '$addFields': {

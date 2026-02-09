@@ -26,6 +26,11 @@ class ConnectionManager:
         for connection in self.active_connections:
             await connection.send_text(message_json)
 
+    async def send_progress(self, percent: int):
+        await self.broadcast({
+            "type": "progress",
+            "progress": percent
+        })
 
 # إنشاء نسخة عامة من المدير
 manager = ConnectionManager()

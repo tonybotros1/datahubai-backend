@@ -1,4 +1,4 @@
-from datetime import timedelta
+from datetime import timedelta, datetime
 from typing import Any, Optional
 from bson import ObjectId
 from fastapi import APIRouter, HTTPException, Depends, UploadFile, File, Form
@@ -18,6 +18,8 @@ from app.routes.list_of_values import add_new_value
 from app.routes.salesman import add_new_salesman, SaleManModel
 import pandas as pd
 from io import BytesIO
+
+from app.websocket_config import manager
 
 router = APIRouter()
 job_cards_collection = get_collection("job_cards")
@@ -95,9 +97,22 @@ def clean_value(value, number: Optional[bool] = False):
 
 
 def to_mongo_datetime(value):
-    if pd.isna(value):
+    if value is None or value == "" or pd.isna(value):
         return None
-    return value.to_pydatetime()
+
+    # If Pandas Timestamp
+    if hasattr(value, "to_pydatetime"):
+        return value.to_pydatetime()
+
+    # If already Python datetime
+    if isinstance(value, datetime):
+        return value
+
+    # Try parsing string
+    try:
+        return pd.to_datetime(value, errors="coerce").to_pydatetime()
+    except:
+        return None
 
 
 def safe_float(value, default=0.0):
@@ -153,8 +168,8 @@ async def dealing_with_receiving_items(file, data, delete_every_thing: bool):
         df.columns = df.columns.str.strip().str.lower()
         existing_inventory_items = {b['name'].upper().strip(): ObjectId(b['_id']) for b in
                                     await inventory_items_collection.find({"company_id": company_id},
-                                                                        {"_id": 1, "name": 1}
-                                                                        ).to_list(
+                                                                          {"_id": 1, "name": 1}
+                                                                          ).to_list(
                                         length=None)}
         existing_receiving = {b['receiving_id']: ObjectId(b['_id']) for b in
                               await receiving_collection.find({"company_id": company_id},
@@ -407,20 +422,21 @@ async def dealing_with_ap_invoices(file, data, delete_every_thing: bool):
             print("all deleted")
         contents = await file.read()
         df = pd.read_excel(BytesIO(contents))
+        total_rows = len(df)
         df.columns = df.columns.str.strip().str.lower()
         date_cols = ["transaction_date", "invoice_date"]
         for col in date_cols:
             if col in df.columns:
                 df[col] = pd.to_datetime(df[col], errors="coerce")
         # df_2025 = df[(df["transaction_date"].dt.year >= 2025) | df['invoice_Date'].dt.year >= 2025]
-        df_2025 = df[
-            (
-                    (df["transaction_date"].dt.year == 2025) & (df["transaction_date"].dt.month == 12)
-            ) |
-            (
-                    (df["invoice_date"].dt.year == 2025) & (df["invoice_date"].dt.month == 12)
-            )
-            ].sort_values(by=df.columns[0])
+        # df_2025 = df[
+        #     (
+        #             (df["transaction_date"].dt.year == 2025) & (df["transaction_date"].dt.month == 12)
+        #     ) |
+        #     (
+        #             (df["invoice_date"].dt.year == 2025) & (df["invoice_date"].dt.month == 12)
+        #     )
+        #     ].sort_values(by=df.columns[0])
 
         existing_values = {b["name"].capitalize(): ObjectId(b["_id"]) for b in
                            await value_collection.find({}).to_list(length=None)}
@@ -452,8 +468,8 @@ async def dealing_with_ap_invoices(file, data, delete_every_thing: bool):
         uae_currency_id = str(uae_currency_doc["_id"])
 
         print("starting the loop...")
-
-        for i, row in enumerate(df_2025.itertuples(index=False), start=1):
+        await manager.broadcast({"type": "start", "total": total_rows})
+        for i, row in enumerate(df.itertuples(index=False), start=1):
             reference_number = normalize_number_to_string(row[0])
             status = clean_value(row[1])
             transaction_date = row[2]
@@ -465,9 +481,9 @@ async def dealing_with_ap_invoices(file, data, delete_every_thing: bool):
             payment_type = clean_value(row[8])
             account = clean_value(row[9])
             cheque_number = clean_value(row[10])
-            cheque_date = to_mongo_datetime(row[11])
+            cheque_date = to_mongo_datetime(row[11]) if row[11] else None
             rate = clean_value(row[13], number=True)
-            payment_date = to_mongo_datetime(row[14])
+            payment_date = to_mongo_datetime(row[14]) if row[14] else None
             payment_number = clean_value(row[15], number=True)
             payment_amount = clean_value(row[16], number=True)
             transaction_type = clean_value(row[17])
@@ -512,10 +528,10 @@ async def dealing_with_ap_invoices(file, data, delete_every_thing: bool):
                 "company_id": company_id,
                 "reference_number": reference_number.strip(),
                 "status": status.capitalize().strip(),
-                "transaction_date": to_mongo_datetime(transaction_date),
+                "transaction_date": to_mongo_datetime(transaction_date) if transaction_date else None,
                 "invoice_type": ObjectId(invoice_type_id),
                 "invoice_number": invoice_number.strip(),
-                "invoice_date": to_mongo_datetime(invoice_date),
+                "invoice_date": to_mongo_datetime(invoice_date) if invoice_date else None,
                 "vendor": ObjectId(vendor_id) if vendor_id else None,
                 "description": description,
                 "createdAt": security.now_utc(),
@@ -610,6 +626,10 @@ async def dealing_with_ap_invoices(file, data, delete_every_thing: bool):
             }
             await ap_payment_invoices_collection.insert_one(ap_payment_invoice_dict)
             print(f"added new AP Payment Item for row: {i}")
+            progress = int((i / total_rows) * 100)
+            await manager.send_progress(progress)
+        await manager.broadcast({"type": "done"})
+
 
 
     except Exception as e:
@@ -627,6 +647,7 @@ async def dealing_with_ar_receipts(file: UploadFile, data: dict, delete_every_th
 
         contents = await file.read()
         df = pd.read_excel(BytesIO(contents))
+        total_rows = len(df)
         df.columns = df.columns.str.strip().str.lower()
         # print(df.columns)
         date_cols = ["receipt_date", "cheque_date"]
@@ -660,6 +681,7 @@ async def dealing_with_ar_receipts(file: UploadFile, data: dict, delete_every_th
         uae_currency_doc = await currencies_collection.find_one({"country_id": ObjectId(uae_country_id)})
         uae_currency_id = str(uae_currency_doc["_id"])
 
+        await manager.broadcast({"type": "start", "total": total_rows})
         for i, row in enumerate(df.itertuples(index=False), start=1):
             receipt_id = clean_value(row[0])
             receipt_number = normalize_number_to_string(row[1])
@@ -741,6 +763,10 @@ async def dealing_with_ar_receipts(file: UploadFile, data: dict, delete_every_th
             }
             await receipts_collection.insert_one(receipt_dict)
             print(f"added {i}")
+            progress = int((i / total_rows) * 100)
+            await manager.send_progress(progress)
+        await manager.broadcast({"type": "done"})
+
 
     except Exception as e:
         print(e)
@@ -757,6 +783,7 @@ async def dealing_with_ar_receipts_invoices(file: UploadFile, data: dict, delete
 
         contents = await file.read()
         df = pd.read_excel(BytesIO(contents))
+        total_rows = len(df)
         df.columns = df.columns.str.strip().str.lower()
         existing_ar_receipts = {b.get("receipt_id", None): ObjectId(b["_id"]) for b in
                                 await receipts_collection.find({"company_id": company_id}).to_list()}
@@ -765,6 +792,7 @@ async def dealing_with_ar_receipts_invoices(file: UploadFile, data: dict, delete
 
         invoice_items_buffer = []
 
+        await manager.broadcast({"type": "start", "total": total_rows})
         for i, row in enumerate(df.itertuples(index=False), start=1):
             receipt_id = normalize_number_to_string(row[0])
             job_id = clean_value(row[1])
@@ -790,10 +818,12 @@ async def dealing_with_ar_receipts_invoices(file: UploadFile, data: dict, delete
                 }
                 invoice_items_buffer.append(invoice_dict)
                 print(f"Row: {i}")
+                progress = int((i / total_rows) * 100)
+                await manager.send_progress(progress)
 
         if invoice_items_buffer:
             await receipts_invoices_collection.insert_many(invoice_items_buffer)
-
+        await manager.broadcast({"type": "done"})
 
     except Exception as e:
         print(e)
@@ -904,6 +934,7 @@ async def dealing_with_job_cards(file: UploadFile, data: dict, delete_every_thin
 
         contents = await file.read()
         df = pd.read_excel(BytesIO(contents))
+        total_rows = len(df)
         df.columns = df.columns.str.strip().str.lower()
         date_cols = ["job_date", "invoice_date", "cancellation_date", "approval_date",
                      "start_date", "end_date", "delivery_date", "invoice_new_date"]
@@ -961,6 +992,7 @@ async def dealing_with_job_cards(file: UploadFile, data: dict, delete_every_thin
         existing_customers = {b['entity_name'].strip(): b for b in
                               await entity_information_collection.find({}).to_list(length=None)}
 
+        await manager.broadcast({"type": "start", "total": total_rows})
         for i, row in enumerate(df.itertuples(index=False), start=1):
             # for row in df[:50].itertuples(index=False):  # 20604
             brand = clean_value(row[1])
@@ -1010,7 +1042,7 @@ async def dealing_with_job_cards(file: UploadFile, data: dict, delete_every_thin
             customer_warranty_days = clean_value(row[52], number=True)
             customer_salesman = clean_value(row[53])
             customer_lpo_required = clean_value(row[54])
-            internal_notes = clean_value(row[29])
+            internal_notes = clean_value(row[36])
 
             try:
                 # brand section
@@ -1309,14 +1341,19 @@ async def dealing_with_job_cards(file: UploadFile, data: dict, delete_every_thin
                 internal_note_dict["type"] = 'text'
                 internal_note_dict["job_card_id"] = job_id
                 internal_note_dict['company_id'] = company_id
-                internal_note_dict["notes"] = internal_notes
+                internal_note_dict["note"] = internal_notes
                 internal_note_dict["user_id"] = user_id
-                internal_note_dict["createdAt"] = security.now_utc()
-                internal_note_dict["updatedAt"] = security.now_utc()
+                internal_note_dict["createdAt"] = to_mongo_datetime(job_date)
+                internal_note_dict["updatedAt"] = to_mongo_datetime(job_date)
                 internal_note_dict["file_type"] = None
                 internal_note_dict["note_public_id"] = None
                 await job_cards_internal_notes_collection.insert_one(internal_note_dict)
             print(f"added new job for row: {i}")
+            progress = int((i / total_rows) * 100)
+            await manager.send_progress(progress)
+        await manager.broadcast({"type": "done"})
+
+
 
 
 
@@ -1346,7 +1383,9 @@ async def dealing_with_job_cards_items(file: UploadFile, data: dict, delete_ever
                               await job_cards_collection.find({"company_id": company_id}).to_list()}
 
         invoice_items_buffer = []
+        total_rows = len(df)
 
+        await manager.broadcast({"type": "start", "total": total_rows})
         for i, row in enumerate(df.itertuples(index=False), start=1):
             job_id = clean_value(row[0])
             item_code = clean_value(row[1])
@@ -1408,10 +1447,13 @@ async def dealing_with_job_cards_items(file: UploadFile, data: dict, delete_ever
                 }
                 invoice_items_buffer.append(invoice_items_dict)
                 print(i)
+                progress = int((i / total_rows) * 100)
+                await manager.send_progress(progress)
 
         if invoice_items_buffer:
             print(len(invoice_items_buffer))
             await job_cards_invoice_items_collection.insert_many(invoice_items_buffer)
+        await manager.broadcast({"type": "done"})
 
 
     except Exception as e:

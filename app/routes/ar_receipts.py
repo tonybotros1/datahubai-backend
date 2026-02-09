@@ -930,9 +930,7 @@ async def search_engine_for_ar_receipts(
         if filter_receipts.receipt_type:
             match_stage["receipt_type"] = filter_receipts.receipt_type
         if filter_receipts.receipt_number:
-            match_stage["receipt_number"] = {
-                "$regex": filter_receipts.receipt_number, "$options": "i"
-            }
+            match_stage["receipt_number"] = filter_receipts.receipt_number
         if filter_receipts.cheque_number:
             match_stage["cheque_number"] = {
                 "$regex": filter_receipts.cheque_number, "$options": "i"

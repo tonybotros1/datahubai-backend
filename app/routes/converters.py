@@ -5,7 +5,7 @@ from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from app.core import security
 from app.database import get_collection
-from datetime import datetime, timezone, timedelta
+from datetime import datetime
 from app.routes.counters import create_custom_counter
 
 router = APIRouter()
@@ -313,29 +313,11 @@ async def search_engine_for_converters(
             match_stage["status"] = filter_converters.status
 
         # 2️⃣ Handle date filters
-        now = datetime.now(timezone.utc)
         date_field = "date"
         date_filter = {}
 
-        if filter_converters.today:
-            start = datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
-            end = start + timedelta(days=1)
-            date_filter[date_field] = {"$gte": start, "$lt": end}
 
-        elif filter_converters.this_month:
-            start = datetime(now.year, now.month, 1, tzinfo=timezone.utc)
-            if now.month == 12:
-                end = datetime(now.year + 1, 1, 1, tzinfo=timezone.utc)
-            else:
-                end = datetime(now.year, now.month + 1, 1, tzinfo=timezone.utc)
-            date_filter[date_field] = {"$gte": start, "$lt": end}
-
-        elif filter_converters.this_year:
-            start = datetime(now.year, 1, 1, tzinfo=timezone.utc)
-            end = datetime(now.year + 1, 1, 1, tzinfo=timezone.utc)
-            date_filter[date_field] = {"$gte": start, "$lt": end}
-
-        elif filter_converters.from_date or filter_converters.to_date:
+        if filter_converters.from_date or filter_converters.to_date:
             date_filter[date_field] = {}
             if filter_converters.from_date:
                 date_filter[date_field]["$gte"] = filter_converters.from_date
