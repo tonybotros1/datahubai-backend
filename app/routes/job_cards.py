@@ -1075,6 +1075,8 @@ async def search_engine_for_job_cards_3(
             else:
                 match_stage["job_status_2"] = filter_jobs.status
 
+        print(match_stage)
+
         pipeline_special = [
             {
                 "$addFields": {
@@ -1337,6 +1339,7 @@ async def search_engine_for_job_cards_3(
                     "currency": {"$toString": "$currency"},
                     "customer": {"$toString": "$customer"},
                     "quotation_id": {"$toString": "$quotation_id"},
+                    "technician": {"$toString": "$technician"},
                 }
             },
             {

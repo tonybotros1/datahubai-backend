@@ -3,19 +3,14 @@ import json
 from typing import Optional, List, Any
 from bson import ObjectId
 from fastapi import APIRouter, HTTPException, Depends, UploadFile, Form, File
-from pydantic import BaseModel
 from app import database
 from app.core import security
 from app.database import get_collection
-from datetime import datetime, timezone, timedelta
-from app.routes.car_trading import PyObjectId
+from datetime import datetime
 from app.routes.counters import create_custom_counter
-from app.routes.quotation_cards import get_quotation_card_details
+from app.routes.job_cards import get_user_branches
 from app.websocket_config import manager
 from app.widgets import upload_images
-from app.widgets.check_date import is_date_equals_today_or_older
-from app.widgets.upload_files import upload_file, delete_file_from_server
-from app.widgets.upload_images import upload_image
 
 router = APIRouter()
 job_cards_collection = get_collection("job_cards")
@@ -44,81 +39,94 @@ def safe_json_load(s):
 inspection_reports_pipeline = [
     {
         '$lookup': {
-            'from': 'employees',
-            'localField': 'technician',
-            'foreignField': '_id',
-            'as': 'technician_details'
-        }
-    }, {
-        '$unwind': {
-            'path': '$technician_details',
-            'preserveNullAndEmptyArrays': True
-        }
-    }, {
-        '$lookup': {
             'from': 'all_lists_values',
-            'localField': 'color',
-            'foreignField': '_id',
-            'as': 'color_details'
-        }
-    }, {
-        '$unwind': {
-            'path': '$color_details',
-            'preserveNullAndEmptyArrays': True
+            'let': {
+                'technicianId': '$technician',
+                'colorId': '$color',
+                'engineTypeId': '$engine_type'
+            },
+            'pipeline': [
+                {
+                    '$match': {
+                        '$expr': {
+                            '$in': [
+                                '$_id', [
+                                    '$$technicianId', '$$colorId', '$$engineTypeId'
+                                ]
+                            ]
+                        }
+                    }
+                }, {
+                    '$project': {
+                        'name': 1
+                    }
+                }
+            ],
+            'as': 'lists_cache'
         }
     }, {
         '$lookup': {
             'from': 'all_brands',
             'localField': 'car_brand',
             'foreignField': '_id',
+            'pipeline': [
+                {
+                    '$project': {
+                        'name': 1,
+                        'logo': 1
+                    }
+                }
+            ],
             'as': 'brand_details'
-        }
-    }, {
-        '$unwind': {
-            'path': '$brand_details',
-            'preserveNullAndEmptyArrays': True
         }
     }, {
         '$lookup': {
             'from': 'all_brand_models',
             'localField': 'car_model',
             'foreignField': '_id',
+            'pipeline': [
+                {
+                    '$project': {
+                        'name': 1
+                    }
+                }
+            ],
             'as': 'model_details'
-        }
-    }, {
-        '$unwind': {
-            'path': '$model_details',
-            'preserveNullAndEmptyArrays': True
         }
     }, {
         '$lookup': {
             'from': 'entity_information',
             'localField': 'customer',
             'foreignField': '_id',
+            'pipeline': [
+                {
+                    '$project': {
+                        'entity_name': 1
+                    }
+                }
+            ],
             'as': 'customer_details'
-        }
-    }, {
-        '$unwind': {
-            'path': '$customer_details',
-            'preserveNullAndEmptyArrays': True
-        }
-    }, {
-        '$lookup': {
-            'from': 'all_lists_values',
-            'localField': 'engine_type',
-            'foreignField': '_id',
-            'as': 'engine_type_details'
-        }
-    }, {
-        '$unwind': {
-            'path': '$engine_type_details',
-            'preserveNullAndEmptyArrays': True
         }
     }, {
         '$lookup': {
             'from': 'job_cards_inspection_reports',
             'localField': '_id',
             'foreignField': 'job_card_id',
+            'pipeline': [
+                {
+                    '$addFields': {
+                        '_id': {
+                            '$toString': '$_id'
+                        },
+                        'company_id': {
+                            '$toString': '$company_id'
+                        },
+                        'job_card_id': {
+                            '$toString': '$job_card_id'
+                        }
+                    }
+                }
+            ],
             'as': 'inspection_report_details'
         }
     }, {
@@ -128,53 +136,144 @@ inspection_reports_pipeline = [
         }
     }, {
         '$addFields': {
-            'job_warranty_end_date': {
-                '$ifNull': ['$job_warranty_end_date', None],
-            },
             'technician_name': {
-                '$ifNull': [
-                    '$technician_details.name', None
-                ]
+                '$let': {
+                    'vars': {
+                        'match': {
+                            '$arrayElemAt': [
+                                {
+                                    '$filter': {
+                                        'input': '$lists_cache',
+                                        'cond': {
+                                            '$eq': [
+                                                '$$this._id', '$technician'
+                                            ]
+                                        }
+                                    }
+                                }, 0
+                            ]
+                        }
+                    },
+                    'in': '$$match.name'
+                }
+            },
+            'color_name': {
+                '$let': {
+                    'vars': {
+                        'match': {
+                            '$arrayElemAt': [
+                                {
+                                    '$filter': {
+                                        'input': '$lists_cache',
+                                        'cond': {
+                                            '$eq': [
+                                                '$$this._id', '$color'
+                                            ]
+                                        }
+                                    }
+                                }, 0
+                            ]
+                        }
+                    },
+                    'in': '$$match.name'
+                }
+            },
+            'engine_type_name': {
+                '$let': {
+                    'vars': {
+                        'match': {
+                            '$arrayElemAt': [
+                                {
+                                    '$filter': {
+                                        'input': '$lists_cache',
+                                        'cond': {
+                                            '$eq': [
+                                                '$$this._id', '$engine_type'
+                                            ]
+                                        }
+                                    }
+                                }, 0
+                            ]
+                        }
+                    },
+                    'in': '$$match.name'
+                }
             },
             'customer_name': {
-                '$ifNull': [
-                    '$customer_details.entity_name', None
+                '$arrayElemAt': [
+                    '$customer_details.entity_name', 0
                 ]
             },
             'car_brand_name': {
-                '$ifNull': [
-                    '$brand_details.name', None
-                ]
-            },
-            'car_model_name': {
-                '$ifNull': [
-                    '$model_details.name', None
+                '$arrayElemAt': [
+                    '$brand_details.name', 0
                 ]
             },
             'car_brand_logo': {
-                '$ifNull': [
-                    '$brand_details.logo', None
+                '$arrayElemAt': [
+                    '$brand_details.logo', 0
                 ]
             },
-            'engine_type_name': {
-                '$ifNull': [
-                    '$engine_type_details.name', None
+            'car_model_name': {
+                '$arrayElemAt': [
+                    '$model_details.name', 0
                 ]
             },
-            'color_name': {
+            'job_warranty_end_date': {
                 '$ifNull': [
-                    '$color_details.name', None
+                    '$job_warranty_end_date', None
                 ]
             }
         }
     }, {
         '$project': {
-            'technician_details': 0,
+            'lists_cache': 0,
             'customer_details': 0,
             'brand_details': 0,
             'model_details': 0,
-            'engine_type_details': 0,
-            'color_details': 0
+            'invoice_items': 0
+        }
+    }, {
+        '$addFields': {
+            '_id': {
+                '$toString': '$_id'
+            },
+            'car_brand': {
+                '$toString': '$car_brand'
+            },
+            'car_model': {
+                '$toString': '$car_model'
+            },
+            'country': {
+                '$toString': '$country'
+            },
+            'customer': {
+                '$toString': '$customer'
+            },
+            'currency': {
+                '$toString': '$currency'
+            },
+            'company_id': {
+                '$toString': '$company_id'
+            },
+            'color': {
+                '$toString': '$color'
+            },
+            'city': {
+                '$toString': '$city'
+            },
+            'branch': {
+                '$toString': '$branch'
+            },
+            'salesman': {
+                '$toString': '$salesman'
+            },
+            'engine_type': {
+                '$toString': '$engine_type'
+            },
+            'technician': {
+                '$toString': '$technician'
+            }
         }
     }
 ]
@@ -192,7 +291,7 @@ async def get_current_job_card_inspection_report_details(job_id: str, _: dict = 
         })
         cursor = await job_cards_collection.aggregate(new_pipeline)
         result = await cursor.next()
-        return {"inspection_report": serializer(result)}
+        return {"inspection_report": result}
 
     except HTTPException:
         raise
@@ -205,22 +304,48 @@ async def get_current_job_card_inspection_report_details(job_id: str, _: dict = 
 async def get_new_job_cards_inspection_reports(data: dict = Depends(security.get_current_user)):
     try:
         company_id = ObjectId(data.get('company_id'))
+        user_id = ObjectId(data.get('sub'))
+        user_branches = await get_user_branches(user_id)
+        if user_branches:
+            branch_filters = [{"branch": b, "company_id": company_id} for b in user_branches]
+            match_stage: Any = {"$or": branch_filters}
+        else:
+            match_stage = {"company_id": company_id}
+        match_stage['job_status_2'] = 'Draft'
+
         new_pipeline = copy.deepcopy(inspection_reports_pipeline)
         new_pipeline.insert(0, {
-            "$match": {
-                "company_id": company_id,
-                "job_status_2": "New",
+            "$addFields": {
+                "date_field_to_filter": {
+                    "$switch": {
+                        "branches": [
+                            {
+                                "case": {"$eq": [{"$toLower": "$job_status_1"}, "new"]},
+                                "then": "$job_date"
+                            },
+                            {
+                                "case": {"$eq": [{"$toLower": "$job_status_1"}, "cancelled"]},
+                                "then": "$job_cancellation_date"
+                            },
+                            {
+                                "case": {"$eq": [{"$toLower": "$job_status_1"}, "posted"]},
+                                "then": "$invoice_date"
+                            }
+                        ],
+                        "default": "$job_date"
+                    }
+                }
             }
         })
-        new_pipeline.insert(1, {
+        new_pipeline.insert(1,{"$match": match_stage},)
+        new_pipeline.insert(2, {
             "$sort": {
-                "job_number": -1
+                "date_field_to_filter": -1
             }
         })
         cursor = await job_cards_collection.aggregate(new_pipeline)
         results = await cursor.to_list(None)
-        serialized = [serializer(r) for r in results]
-        return {"inspection_reports": serialized}
+        return {"inspection_reports": results}
 
     except HTTPException:
         raise
@@ -232,23 +357,55 @@ async def get_new_job_cards_inspection_reports(data: dict = Depends(security.get
 async def get_done_job_cards_inspection_reports(data: dict = Depends(security.get_current_user)):
     try:
         company_id = ObjectId(data.get('company_id'))
-        new_pipeline = copy.deepcopy(inspection_reports_pipeline)
+        user_id = ObjectId(data.get('sub'))
+        new_pipeline: Any = copy.deepcopy(inspection_reports_pipeline)
+        user_branches = await get_user_branches(user_id)
+        if user_branches:
+            branch_filters = [{"branch": b, "company_id": company_id} for b in user_branches]
+            match_stage: Any = {"$or": branch_filters}
+        else:
+            match_stage = {"company_id": company_id}
+        match_stage['job_status_2'] = {"$ne": "Draft"}
+
+
         new_pipeline.insert(0, {
-            "$match": {
-                "company_id": company_id,
-                "job_status_2": {"$ne": "New"}
+            "$addFields": {
+                "date_field_to_filter": {
+                    "$switch": {
+                        "branches": [
+                            {
+                                "case": {"$eq": [{"$toLower": "$job_status_1"}, "new"]},
+                                "then": "$job_date"
+                            },
+                            {
+                                "case": {"$eq": [{"$toLower": "$job_status_1"}, "cancelled"]},
+                                "then": "$job_cancellation_date"
+                            },
+                            {
+                                "case": {"$eq": [{"$toLower": "$job_status_1"}, "posted"]},
+                                "then": "$invoice_date"
+                            }
+                        ],
+                        "default": "$job_date"
+                    }
+                }
             }
         })
-        new_pipeline.insert(1, {
+        # new_pipeline.insert(1, {
+        #     "$match": {
+        #         "job_status_2": {"$ne": "Draft"}
+        #     }
+        # })
+        new_pipeline.insert(1,{"$match": match_stage},)
+        new_pipeline.insert(2, {
             "$sort": {
-                "job_number": -1
+                "date_field_to_filter": -1
             }
         })
         new_pipeline.append({"$limit": 200})
         cursor = await job_cards_collection.aggregate(new_pipeline)
         results = await cursor.to_list(None)
-        serialized = [serializer(r) for r in results]
-        return {"inspection_reports": serialized}
+        return {"inspection_reports": results}
 
     except HTTPException:
         raise
@@ -296,7 +453,8 @@ async def create_job_from_inspection_report(job_date: Optional[datetime] = Form(
         try:
             await session.start_transaction()
             company_id = ObjectId(data.get("company_id"))
-            new_job_counter = await create_custom_counter("JCN", "J",description='Inspection Reports Number', data= data,session= session)
+            new_job_counter = await create_custom_counter("JCN", "J", description='Inspection Reports Number',
+                                                          data=data, session=session)
             print(type(left_front_wheel))
 
             job_card_section_dict = {
@@ -435,6 +593,7 @@ async def update_job_from_inspection_report(
         extra_checks: Optional[str] = Form(None),
         new_images: Optional[List[UploadFile]] = File(None),
         kept_images: Optional[str] = Form("[]"),
+        branch: Optional[str] = Form(None),
         _: dict = Depends(security.get_current_user)
 ):
     try:
@@ -488,6 +647,7 @@ async def update_job_from_inspection_report(
             "contact_number": customer_phone if customer_phone else job_card.get("contact_number"),
             "credit_limit": float(credit_limit) if credit_limit else job_card.get("credit_limit", 0),
             "salesman": ObjectId(salesman) if salesman else job_card.get("salesman"),
+            "branch": ObjectId(branch) if branch else job_card.get("branch"),
             "car_brand": ObjectId(car_brand) if car_brand else job_card.get("car_brand"),
             "car_model": ObjectId(car_model) if car_model else job_card.get("car_model"),
             "car_brand_logo": car_brand_logo if car_brand_logo else job_card.get("car_brand_logo"),
