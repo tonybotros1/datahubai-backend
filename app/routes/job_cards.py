@@ -1075,8 +1075,6 @@ async def search_engine_for_job_cards_3(
             else:
                 match_stage["job_status_2"] = filter_jobs.status
 
-        print(match_stage)
-
         pipeline_special = [
             {
                 "$addFields": {

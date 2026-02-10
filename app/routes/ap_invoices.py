@@ -555,7 +555,7 @@ async def search_engine(filtered_invoices: APInvoicesSearch, data: dict = Depend
             match_stage.update(date_filter)
 
         search_pipeline.insert(0, {"$match": match_stage})
-        search_pipeline.insert(0, {"$limit": 200})
+        search_pipeline.insert(1, {"$limit": 200})
 
         search_total_pipeline.insert(0, {"$match": match_stage})
 
@@ -569,67 +569,12 @@ async def search_engine(filtered_invoices: APInvoicesSearch, data: dict = Depend
                 }
             }
         })
-        # search_pipeline.append({
-        #     '$facet': {
-        #         'invoices': [
-        #             {
-        #                 '$sort': {
-        #                     'reference_number': -1
-        #                 },
-        #
-        #             },
-        #             {
-        #                 '$addFields': {
-        #                     '_id': {
-        #                         '$toString': '$_id'
-        #                     },
-        #                     'company_id': {
-        #                         '$toString': '$company_id'
-        #                     },
-        #                     'invoice_type': {
-        #                         '$toString': '$invoice_type'
-        #                     },
-        #                     'vendor': {
-        #                         '$toString': '$vendor'
-        #                     }
-        #                 }
-        #             }
-        #
-        #         ],
-        #         'grand_totals': [
-        #             {
-        #                 '$group': {
-        #                     '_id': None,
-        #                     'grand_amounts': {
-        #                         '$sum': '$total_amounts'
-        #                     },
-        #                     'grand_vats': {
-        #                         '$sum': '$total_vats'
-        #                     }
-        #                 }
-        #             }, {
-        #                 '$project': {
-        #                     '_id': 0
-        #                 }
-        #             }
-        #         ]
-        #     }
-        # })
 
         cursor = await ap_invoices_collection.aggregate(search_pipeline)
         result = await cursor.to_list(None)
         cursor = await ap_invoices_collection.aggregate(search_total_pipeline)
         total_result = await cursor.to_list(None)
         print(total_result)
-        # if result and len(result) > 0:
-        #     data = result[0]
-        #     invoices = data.get("invoices", [])
-        #     totals = data.get("grand_totals", [])
-        #     grand_totals = totals[0] if totals else {"grand_amounts": 0, "grand_vats": 0}
-        # else:
-        #     invoices = []
-        #     grand_totals = {"grand_amounts": 0, "grand_vats": 0}
-        #
         return {
             "invoices": result,
             "grand_totals": total_result[0] if total_result else {"grand_amount": 0, "grand_vat": 0,
