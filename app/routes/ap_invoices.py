@@ -65,21 +65,11 @@ pipeline: List[dict[str, Any]] = [
             'as': 'invoice_type_details'
         }
     }, {
-        '$unwind': {
-            'path': '$invoice_type_details',
-            'preserveNullAndEmptyArrays': True
-        }
-    }, {
         '$lookup': {
             'from': 'entity_information',
             'localField': 'vendor',
             'foreignField': '_id',
             'as': 'vendor_details'
-        }
-    }, {
-        '$unwind': {
-            'path': '$vendor_details',
-            'preserveNullAndEmptyArrays': True
         }
     }, {
         '$lookup': {
@@ -157,12 +147,20 @@ pipeline: List[dict[str, Any]] = [
         '$addFields': {
             'vendor_name': {
                 '$ifNull': [
-                    '$vendor_details.entity_name', None
+                    {
+                        '$arrayElemAt': [
+                            '$vendor_details.entity_name', 0
+                        ]
+                    }, None
                 ]
             },
             'invoice_type_name': {
                 '$ifNull': [
-                    '$invoice_type_details.name', None
+                    {
+                        '$arrayElemAt': [
+                            '$invoice_type_details.name', 0
+                        ]
+                    }, None
                 ]
             }
         }
@@ -171,14 +169,76 @@ pipeline: List[dict[str, Any]] = [
             'vendor_details': 0,
             'invoice_type_details': 0
         }
-    },
-    {
+    }, {
         '$addFields': {
             'total_amounts': {
                 '$sum': '$items.amount'
             },
             'total_vats': {
                 '$sum': '$items.vat'
+            }
+        }
+    }, {
+        '$addFields': {
+            '_id': {
+                '$toString': '$_id'
+            },
+            'company_id': {
+                '$toString': '$company_id'
+            },
+            'invoice_type': {
+                '$toString': '$invoice_type'
+            },
+            'vendor': {
+                '$toString': '$vendor'
+            }
+        }
+    }
+]
+
+total_summary_pipeline = [
+    {
+        '$lookup': {
+            'from': 'ap_invoices_items',
+            'localField': '_id',
+            'foreignField': 'ap_invoice_id',
+            'as': 'item_list'
+        }
+    }, {
+        '$project': {
+            'inv_amount': {
+                '$sum': '$item_list.amount'
+            },
+            'inv_vat': {
+                '$sum': '$item_list.vat'
+            },
+            'inv_count': {
+                '$size': '$item_list'
+            }
+        }
+    }, {
+        '$group': {
+            '_id': None,
+            'total_amount': {
+                '$sum': '$inv_amount'
+            },
+            'total_vat': {
+                '$sum': '$inv_vat'
+            },
+            'total_items_count': {
+                '$sum': '$inv_count'
+            }
+        }
+    }, {
+        '$project': {
+            '_id': 0,
+            'total_amount': 1,
+            'total_vat': 1,
+            'total_items_count': 1,
+            'all_total': {
+                '$add': [
+                    '$total_amount', '$total_vat'
+                ]
             }
         }
     }
@@ -463,6 +523,7 @@ async def search_engine(filtered_invoices: APInvoicesSearch, data: dict = Depend
             raise HTTPException(status_code=400, detail="Company ID missing")
         company_id = ObjectId(company_id)
         search_pipeline = copy.deepcopy(pipeline)
+        search_total_pipeline = copy.deepcopy(total_summary_pipeline)
 
         match_stage = {}
         if company_id:
@@ -494,6 +555,9 @@ async def search_engine(filtered_invoices: APInvoicesSearch, data: dict = Depend
             match_stage.update(date_filter)
 
         search_pipeline.insert(0, {"$match": match_stage})
+        search_pipeline.insert(0, {"$limit": 200})
+
+        search_total_pipeline.insert(0, {"$match": match_stage})
 
         search_pipeline.append({
             '$addFields': {
@@ -505,67 +569,71 @@ async def search_engine(filtered_invoices: APInvoicesSearch, data: dict = Depend
                 }
             }
         })
-        search_pipeline.append({
-            '$facet': {
-                'invoices': [
-                    {
-                        '$sort': {
-                            'reference_number': -1
-                        },
-
-                    },
-                    {
-                        '$addFields': {
-                            '_id': {
-                                '$toString': '$_id'
-                            },
-                            'company_id': {
-                                '$toString': '$company_id'
-                            },
-                            'invoice_type': {
-                                '$toString': '$invoice_type'
-                            },
-                            'vendor': {
-                                '$toString': '$vendor'
-                            }
-                        }
-                    }
-
-                ],
-                'grand_totals': [
-                    {
-                        '$group': {
-                            '_id': None,
-                            'grand_amounts': {
-                                '$sum': '$total_amounts'
-                            },
-                            'grand_vats': {
-                                '$sum': '$total_vats'
-                            }
-                        }
-                    }, {
-                        '$project': {
-                            '_id': 0
-                        }
-                    }
-                ]
-            }
-        })
+        # search_pipeline.append({
+        #     '$facet': {
+        #         'invoices': [
+        #             {
+        #                 '$sort': {
+        #                     'reference_number': -1
+        #                 },
+        #
+        #             },
+        #             {
+        #                 '$addFields': {
+        #                     '_id': {
+        #                         '$toString': '$_id'
+        #                     },
+        #                     'company_id': {
+        #                         '$toString': '$company_id'
+        #                     },
+        #                     'invoice_type': {
+        #                         '$toString': '$invoice_type'
+        #                     },
+        #                     'vendor': {
+        #                         '$toString': '$vendor'
+        #                     }
+        #                 }
+        #             }
+        #
+        #         ],
+        #         'grand_totals': [
+        #             {
+        #                 '$group': {
+        #                     '_id': None,
+        #                     'grand_amounts': {
+        #                         '$sum': '$total_amounts'
+        #                     },
+        #                     'grand_vats': {
+        #                         '$sum': '$total_vats'
+        #                     }
+        #                 }
+        #             }, {
+        #                 '$project': {
+        #                     '_id': 0
+        #                 }
+        #             }
+        #         ]
+        #     }
+        # })
 
         cursor = await ap_invoices_collection.aggregate(search_pipeline)
         result = await cursor.to_list(None)
-        if result and len(result) > 0:
-            data = result[0]
-            invoices = data.get("invoices", [])
-            totals = data.get("grand_totals", [])
-            grand_totals = totals[0] if totals else {"grand_amounts": 0, "grand_vats": 0}
-        else:
-            invoices = []
-            grand_totals = {"grand_amounts": 0, "grand_vats": 0}
-
+        cursor = await ap_invoices_collection.aggregate(search_total_pipeline)
+        total_result = await cursor.to_list(None)
+        print(total_result)
+        # if result and len(result) > 0:
+        #     data = result[0]
+        #     invoices = data.get("invoices", [])
+        #     totals = data.get("grand_totals", [])
+        #     grand_totals = totals[0] if totals else {"grand_amounts": 0, "grand_vats": 0}
+        # else:
+        #     invoices = []
+        #     grand_totals = {"grand_amounts": 0, "grand_vats": 0}
+        #
         return {
-            "invoices": invoices,
-            "grand_totals": grand_totals
+            "invoices": result,
+            "grand_totals": total_result[0] if total_result else {"grand_amount": 0, "grand_vat": 0,
+                                                                  "total_items_count": 0, "all_total": 0},
         }
 
     except HTTPException:
