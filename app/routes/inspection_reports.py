@@ -337,7 +337,7 @@ async def get_new_job_cards_inspection_reports(data: dict = Depends(security.get
                 }
             }
         })
-        new_pipeline.insert(1,{"$match": match_stage},)
+        new_pipeline.insert(1, {"$match": match_stage}, )
         new_pipeline.insert(2, {
             "$sort": {
                 "date_field_to_filter": -1
@@ -367,7 +367,6 @@ async def get_done_job_cards_inspection_reports(data: dict = Depends(security.ge
             match_stage = {"company_id": company_id}
         match_stage['job_status_2'] = {"$ne": "Draft"}
 
-
         new_pipeline.insert(0, {
             "$addFields": {
                 "date_field_to_filter": {
@@ -396,7 +395,7 @@ async def get_done_job_cards_inspection_reports(data: dict = Depends(security.ge
         #         "job_status_2": {"$ne": "Draft"}
         #     }
         # })
-        new_pipeline.insert(1,{"$match": match_stage},)
+        new_pipeline.insert(1, {"$match": match_stage}, )
         new_pipeline.insert(2, {
             "$sort": {
                 "date_field_to_filter": -1
@@ -415,6 +414,7 @@ async def get_done_job_cards_inspection_reports(data: dict = Depends(security.ge
 
 @router.post("/create_job_from_inspection_report")
 async def create_job_from_inspection_report(job_date: Optional[datetime] = Form(None),
+                                            branch: Optional[str] = Form(None),
                                             technician: Optional[str] = Form(None),
                                             customer: Optional[str] = Form(None),
                                             customer_name: Optional[str] = Form(None),
@@ -464,6 +464,7 @@ async def create_job_from_inspection_report(job_date: Optional[datetime] = Form(
                 "job_status_2": "Draft",
                 "job_number": new_job_counter['final_counter'] if new_job_counter['success'] else None,
                 "technician": ObjectId(technician) if technician else None,
+                "branch": ObjectId(branch) if branch else None,
                 "customer": ObjectId(customer) if customer else None,
                 "contact_name": customer_name,
                 "contact_email": customer_email,
@@ -593,7 +594,6 @@ async def update_job_from_inspection_report(
         extra_checks: Optional[str] = Form(None),
         new_images: Optional[List[UploadFile]] = File(None),
         kept_images: Optional[str] = Form("[]"),
-        branch: Optional[str] = Form(None),
         _: dict = Depends(security.get_current_user)
 ):
     try:
@@ -647,7 +647,6 @@ async def update_job_from_inspection_report(
             "contact_number": customer_phone if customer_phone else job_card.get("contact_number"),
             "credit_limit": float(credit_limit) if credit_limit else job_card.get("credit_limit", 0),
             "salesman": ObjectId(salesman) if salesman else job_card.get("salesman"),
-            "branch": ObjectId(branch) if branch else job_card.get("branch"),
             "car_brand": ObjectId(car_brand) if car_brand else job_card.get("car_brand"),
             "car_model": ObjectId(car_model) if car_model else job_card.get("car_model"),
             "car_brand_logo": car_brand_logo if car_brand_logo else job_card.get("car_brand_logo"),
