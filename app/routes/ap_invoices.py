@@ -574,7 +574,6 @@ async def search_engine(filtered_invoices: APInvoicesSearch, data: dict = Depend
         result = await cursor.to_list(None)
         cursor = await ap_invoices_collection.aggregate(search_total_pipeline)
         total_result = await cursor.to_list(None)
-        print(total_result)
         return {
             "invoices": result,
             "grand_totals": total_result[0] if total_result else {"grand_amount": 0, "grand_vat": 0,
