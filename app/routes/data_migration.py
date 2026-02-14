@@ -1376,7 +1376,7 @@ async def dealing_with_job_cards_items(file: UploadFile, data: dict, delete_ever
         df.columns = df.columns.str.strip().str.lower()
         df["new"] = df["item_code"] + "-" + df["item_name"]
         print(df.head())
-        existing_invoice_items = {b["name"]: ObjectId(b["_id"]) for b in
+        existing_invoice_items = {b["name"].strip(): ObjectId(b["_id"]) for b in
                                   await invoice_items_collection.find({"company_id": company_id}).to_list(
                                       length=None)}
         existing_job_cards = {b.get("job_id", None): ObjectId(b["_id"]) for b in
@@ -1389,7 +1389,7 @@ async def dealing_with_job_cards_items(file: UploadFile, data: dict, delete_ever
         for i, row in enumerate(df.itertuples(index=False), start=1):
             job_id = clean_value(row[0])
             item_code = clean_value(row[1])
-            item_name = clean_value(row[2])
+            item_name = str(clean_value(row[2]) or "").strip()
             item_description = clean_value(row[3])
             quantity = clean_value(row[4], number=True)
             price = clean_value(row[5], number=True)
@@ -1413,13 +1413,13 @@ async def dealing_with_job_cards_items(file: UploadFile, data: dict, delete_ever
                         item_id = existing_invoice_items.get(str(item_name))
                         if not item_id:
                             item_model = InvoiceItem(
-                                name=(str(item_name)),
+                                name=(str(item_name.strip())),
                                 price=0,
-                                description=str(item_description),
+                                description=str(clean_value(row[3]) or ""),
                             )
                             new_item = await add_new_invoice_item(invoice=item_model, data=data)
                             item_id = ObjectId(new_item['invoice']['_id'])
-                            existing_invoice_items[str(item_code + " - " + item_name)] = item_id
+                            existing_invoice_items[item_name] = item_id
                             print(f"yes added new invoice item: {item_id}")
 
                     else:

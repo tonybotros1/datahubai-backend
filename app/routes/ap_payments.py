@@ -274,6 +274,58 @@ ap_payment_details_pipeline: list[dict[str, Any]] = [
             'account_details': 0
         }
     },
+    {
+        '$addFields': {
+            '_id': {
+                '$toString': '$_id'
+            },
+            'company_id': {
+                '$toString': '$company_id'
+            },
+            'payment_type': {
+                '$toString': '$payment_type'
+            },
+            'vendor': {
+                '$toString': '$vendor'
+            },
+            'account': {
+                '$toString': '$account'
+            }
+        }
+    }
+]
+
+all_payments_totals_pipeline = [
+    {
+        '$lookup': {
+            'from': 'all_payments_invoices',
+            'localField': '_id',
+            'foreignField': 'payment_id',
+            'as': 'item_list'
+        }
+    }, {
+        '$project': {
+            'inv_amount': {
+                '$sum': '$item_list.amount'
+            }
+        }
+    }, {
+        '$group': {
+            '_id': None,
+            'grand_given': {
+                '$sum': '$inv_amount'
+            },
+            'total_items_count': {
+                '$sum': 1
+            }
+        }
+    }, {
+        '$project': {
+            '_id': 0,
+            'grand_given': 1,
+            'total_items_count': 1
+        }
+    }
 ]
 
 
@@ -519,7 +571,8 @@ async def add_new_payment(
         try:
             await session.start_transaction()
             company_id = ObjectId(data.get("company_id"))
-            new_payment_counter = await create_custom_counter("PN", "P",description='AP Payments Number',data= data,session= session)
+            new_payment_counter = await create_custom_counter("PN", "P", description='AP Payments Number', data=data,
+                                                              session=session)
 
             payment_dict = payment.model_dump(exclude_unset=True)
             payment_invoices = payment_dict.pop("invoices", None)
@@ -758,6 +811,7 @@ async def search_engine_for_ap_payments(
 
         company_id = ObjectId(company_id)
         search_pipeline = copy.deepcopy(ap_payment_details_pipeline)
+        totals_search_pipeline = copy.deepcopy(all_payments_totals_pipeline)
 
         match_stage = {}
         if company_id:
@@ -789,73 +843,29 @@ async def search_engine_for_ap_payments(
             if filter_payments.to_date:
                 date_filter[date_field]["$lte"] = filter_payments.to_date
 
-        # Merge both filters into one $match
         if date_filter:
             match_stage.update(date_filter)
 
         search_pipeline.insert(0, {"$match": match_stage})
+        search_pipeline.insert(1, {"$sort": {"payment_date": -1}})
+        search_pipeline.insert(2, {"$limit": 200})
 
-        # 3️⃣ Add computed field
+        totals_search_pipeline.insert(0, {"$match": match_stage})
+
         search_pipeline.append({
             "$addFields": {
                 "total_given": {"$sum": "$invoices_details.payment_amount"}
             }
         })
-        search_pipeline.append({
-            "$facet": {
-                "payments": [
-                    {"$sort": {"payment_number": -1}},
-                    {
-                        '$addFields': {
-                            '_id': {
-                                '$toString': '$_id'
-                            },
-                            'company_id': {
-                                '$toString': '$company_id'
-                            },
-                            'payment_type': {
-                                '$toString': '$payment_type'
-                            },
-                            'vendor': {
-                                '$toString': '$vendor'
-                            },
-                            'account': {
-                                '$toString': '$account'
-                            }
-                        }
-                    }
-                ],
-                "grand_totals": [
-                    {
-                        "$group": {
-                            "_id": None,
-                            "grand_given": {"$sum": "$total_given"},
-                        }
-                    },
-                    {
-                        "$project": {
-                            "_id": 0
-                        }
-                    }
-                ]
-            }
-        })
 
         cursor = await ap_payment_collection.aggregate(search_pipeline)
         result = await cursor.to_list(None)
-
-        if result and len(result) > 0:
-            data = result[0]
-            payments = data.get("payments", [])
-            totals = data.get("grand_totals", [])
-            grand_totals = totals[0] if totals else {"grand_given": 0}
-        else:
-            payments = []
-            grand_totals = {"grand_given": 0}  # fixed
+        cursor2 = await ap_payment_collection.aggregate(totals_search_pipeline)
+        total_result = await cursor2.to_list(None)
 
         return {
-            "payments": payments,
-            "grand_totals": grand_totals
+            "payments": result,
+            "grand_totals": total_result[0] if total_result else {"grand_given": 0, "total_items_count": 0},
         }
 
 

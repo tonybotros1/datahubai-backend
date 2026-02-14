@@ -86,20 +86,23 @@ converter_pipeline: list[dict[str, Any]] = [
                                     'as': 'inventory_details'
                                 }
                             }, {
-                                '$unwind': {
-                                    'path': '$inventory_details',
-                                    'preserveNullAndEmptyArrays': True
-                                }
-                            }, {
                                 '$addFields': {
                                     'item_code': {
                                         '$ifNull': [
-                                            '$inventory_details.code', None
+                                            {
+                                                '$arrayElemAt': [
+                                                    '$inventory_details.code', 0
+                                                ]
+                                            }, None
                                         ]
                                     },
                                     'item_name': {
                                         '$ifNull': [
-                                            '$inventory_details.name', None
+                                            {
+                                                '$arrayElemAt': [
+                                                    '$inventory_details.name', 0
+                                                ]
+                                            }, None
                                         ]
                                     }
                                 }
@@ -142,6 +145,15 @@ converter_pipeline: list[dict[str, Any]] = [
                             '$multiply': [
                                 '$quantity', '$price'
                             ]
+                        },
+                        '_id': {
+                            '$toString': '$_id'
+                        },
+                        'branch': {
+                            '$toString': '$branch'
+                        },
+                        'company_id': {
+                            '$toString': '$company_id'
                         }
                     }
                 }, {
@@ -158,6 +170,15 @@ converter_pipeline: list[dict[str, Any]] = [
                 }
             ],
             'as': 'issues'
+        }
+    }, {
+        '$addFields': {
+            '_id': {
+                '$toString': '$_id'
+            },
+            'company_id': {
+                '$toString': '$company_id'
+            }
         }
     }
 ]
@@ -316,7 +337,6 @@ async def search_engine_for_converters(
         date_field = "date"
         date_filter = {}
 
-
         if filter_converters.from_date or filter_converters.to_date:
             date_filter[date_field] = {}
             if filter_converters.from_date:
@@ -363,7 +383,7 @@ async def search_engine_for_converters(
 
         if result and len(result) > 0:
             data = result[0]
-            converters = [serializer(r) for r in data.get("converters", [])]
+            converters = data.get("converters", [])
             totals = data.get("grand_totals", [])
             grand_totals = totals[0] if totals else {"grand_total": 0}
         else:

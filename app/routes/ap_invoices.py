@@ -211,9 +211,6 @@ total_summary_pipeline = [
             },
             'inv_vat': {
                 '$sum': '$item_list.vat'
-            },
-            'inv_count': {
-                '$size': '$item_list'
             }
         }
     }, {
@@ -226,7 +223,7 @@ total_summary_pipeline = [
                 '$sum': '$inv_vat'
             },
             'total_items_count': {
-                '$sum': '$inv_count'
+                '$sum': 1
             }
         }
     }, {
@@ -555,7 +552,8 @@ async def search_engine(filtered_invoices: APInvoicesSearch, data: dict = Depend
             match_stage.update(date_filter)
 
         search_pipeline.insert(0, {"$match": match_stage})
-        search_pipeline.insert(1, {"$limit": 200})
+        search_pipeline.insert(0, {"$sort": {"invoice_date": -1}})
+        search_pipeline.insert(2, {"$limit": 200})
 
         search_total_pipeline.insert(0, {"$match": match_stage})
 
@@ -572,8 +570,8 @@ async def search_engine(filtered_invoices: APInvoicesSearch, data: dict = Depend
 
         cursor = await ap_invoices_collection.aggregate(search_pipeline)
         result = await cursor.to_list(None)
-        cursor = await ap_invoices_collection.aggregate(search_total_pipeline)
-        total_result = await cursor.to_list(None)
+        cursor2 = await ap_invoices_collection.aggregate(search_total_pipeline)
+        total_result = await cursor2.to_list(None)
         return {
             "invoices": result,
             "grand_totals": total_result[0] if total_result else {"grand_amount": 0, "grand_vat": 0,

@@ -141,9 +141,9 @@ async def search_engine_for_inventory_items(items: InventoryItem, data: dict = D
                 }
             }
         })
-        pipeline.append({
-            '$limit': 200
-        })
+        # pipeline.append({
+        #     '$limit': 200
+        # })
         cursor = await inventory_items_collection.aggregate(pipeline)
         results = await cursor.to_list(None)
         return {"inventory_items": results}

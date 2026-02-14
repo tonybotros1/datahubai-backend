@@ -368,6 +368,39 @@ ar_receipt_details_pipeline: Any = [
     }
 ]
 
+all_ar_receipts_totals_pipeline = [
+    {
+        '$lookup': {
+            'from': 'all_receipts_invoices',
+            'localField': '_id',
+            'foreignField': 'receipt_id',
+            'as': 'item_list'
+        }
+    }, {
+        '$project': {
+            'inv_amount': {
+                '$sum': '$item_list.amount'
+            }
+        }
+    }, {
+        '$group': {
+            '_id': None,
+            'total_amount': {
+                '$sum': '$inv_amount'
+            },
+            'total_items_count': {
+                '$sum': 1
+            }
+        }
+    }, {
+        '$project': {
+            '_id': 0,
+            'total_amount': 1,
+            'total_items_count': 1
+        }
+    }
+]
+
 all_customer_invoices_pipeline = [
     {
         '$lookup': {
@@ -919,6 +952,7 @@ async def search_engine_for_ar_receipts(
 
         company_id = ObjectId(company_id)
         search_pipeline = copy.deepcopy(ar_receipt_details_pipeline)
+        totals_search_pipeline = copy.deepcopy(all_ar_receipts_totals_pipeline)
 
         match_stage = {}
         if company_id:
@@ -940,7 +974,6 @@ async def search_engine_for_ar_receipts(
         if filter_receipts.status:
             match_stage["status"] = filter_receipts.status
 
-        # 2️⃣ Handle date filters
         date_field = "receipt_date"
         date_filter = {}
 
@@ -951,96 +984,32 @@ async def search_engine_for_ar_receipts(
             if filter_receipts.to_date:
                 date_filter[date_field]["$lte"] = filter_receipts.to_date
 
-        # Merge both filters into one $match
         if date_filter:
             match_stage.update(date_filter)
 
         search_pipeline.insert(0, {"$match": match_stage})
+        search_pipeline.insert(1, {
+            '$sort': {
+                'receipt_date': -1
+            }
+        })
+        search_pipeline.insert(2, {"$limit": 200})
+        totals_search_pipeline.insert(0, {"$match": match_stage})
 
-        # 3️⃣ Add computed field
         search_pipeline.append({
             "$addFields": {
                 "total_received": {"$sum": "$invoices_details.receipt_amount"}
             }
         })
 
-        # totals_pipeline = [
-        #     {
-        #         '$lookup': {
-        #             'from': 'all_receipts_invoices',
-        #             'localField': '_id',
-        #             'foreignField': 'receipt_id',
-        #             'as': 'receipts_invoices'
-        #         }
-        #     }, {
-        #         '$group': {
-        #             '_id': None,
-        #             'total_received': {
-        #                 '$sum': {
-        #                     '$sum': '$receipts_invoices.amount'
-        #                 }
-        #             },
-        #             'count': {"$sum": 1}
-        #         }
-        #     }, {
-        #         '$project': {
-        #             '_id': 0
-        #         }
-        #     }
-        # ]
-        # totals_pipeline.insert(0, {"$match": match_stage})
-        search_pipeline.append({
-            '$facet': {
-                'receipts': [
-                    {
-                        '$limit': 200
-                    },
-                    {
-                        '$sort':{
-                            'receipt_number': -1
-                        }
-                    }
-                ],
-                'grand_totals': [
-                    {
-                        '$group': {
-                            '_id': None,
-                            'grand_received': {
-                                '$sum': '$total_received'
-                            },
-                            'grand_count': {
-                                '$sum': 1
-                            }
-                        }
-                    }, {
-                        '$project': {
-                            '_id': 0
-                        }
-                    }
-                ]
-            }
-        })
         cursor = await receipts_collection.aggregate(search_pipeline)
         result = await cursor.to_list(None)
-        # print(len(result))
-        # cursor2 = await receipts_collection.aggregate(totals_pipeline)
-        # totals_result = await cursor2.to_list(length=1)
-        # print(totals_result)
-
-        # return {"receipts": result if result else [], "grand_totals": totals_result if totals_result else  {"total_received": 0, "count":0}}
-
-        if result and len(result) > 0:
-            data = result[0]
-            receipts = data.get("receipts", [])
-            totals = data.get("grand_totals", [])
-            grand_totals = totals[0] if totals else {"grand_received": 0, "grand_count" : 0}
-        else:
-            receipts = []
-            grand_totals = {"grand_received": 0}
+        cursor2 = await receipts_collection.aggregate(totals_search_pipeline)
+        total_result = await cursor2.to_list(None)
 
         return {
-            "receipts": receipts,
-            "grand_totals": grand_totals
+            "receipts": result,
+            "grand_totals": total_result[0] if total_result else {"grand_received": 0, "total_items_count": 0},
         }
 
 
