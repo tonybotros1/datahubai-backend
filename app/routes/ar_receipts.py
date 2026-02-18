@@ -1008,8 +1008,8 @@ async def search_engine_for_ar_receipts(
         total_result = await cursor2.to_list(None)
 
         return {
-            "receipts": result,
-            "grand_totals": total_result[0] if total_result else {"grand_received": 0, "total_items_count": 0},
+            "receipts": result if result else [],
+            "grand_totals": total_result[0] if total_result else {"total_amount": 0, "total_items_count": 0},
         }
 
 

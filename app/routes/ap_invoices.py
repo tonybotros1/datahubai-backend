@@ -409,10 +409,14 @@ async def update_invoice_items(
                     continue
                 item_id = ObjectId(item["id"])
                 print('yes modified')
-                print(item_id)
                 item["updatedAt"] = security.now_utc()
                 if "ap_invoice_id" in item:
                     item.pop("ap_invoice_id", None)
+
+                if "transaction_type" in item:
+                    item['transaction_type'] = ObjectId(item['transaction_type']) if item['transaction_type'] else None
+                if "job_number_id" in item:
+                    item['job_number_id'] = ObjectId(item['job_number_id']) if item['job_number_id'] else None
                 item.pop("is_deleted", None)
                 item.pop("is_added", None)
                 item.pop("is_modified", None)
@@ -552,7 +556,7 @@ async def search_engine(filtered_invoices: APInvoicesSearch, data: dict = Depend
             match_stage.update(date_filter)
 
         search_pipeline.insert(0, {"$match": match_stage})
-        search_pipeline.insert(0, {"$sort": {"invoice_date": -1}})
+        search_pipeline.insert(1, {"$sort": {"invoice_date": -1}})
         search_pipeline.insert(2, {"$limit": 200})
 
         search_total_pipeline.insert(0, {"$match": match_stage})
@@ -573,8 +577,8 @@ async def search_engine(filtered_invoices: APInvoicesSearch, data: dict = Depend
         cursor2 = await ap_invoices_collection.aggregate(search_total_pipeline)
         total_result = await cursor2.to_list(None)
         return {
-            "invoices": result,
-            "grand_totals": total_result[0] if total_result else {"grand_amount": 0, "grand_vat": 0,
+            "invoices": result if result else [],
+            "grand_totals": total_result[0] if total_result else {"total_amount": 0, "total_vat": 0,
                                                                   "total_items_count": 0, "all_total": 0},
         }
 

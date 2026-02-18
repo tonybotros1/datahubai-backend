@@ -1,3 +1,4 @@
+import copy
 from typing import Optional, List, Any
 from bson import ObjectId
 from fastapi import APIRouter, HTTPException, Depends, UploadFile, Form, File
@@ -94,6 +95,83 @@ class QuotationCardSearch(BaseModel):
     this_month: Optional[bool] = False
     this_year: Optional[bool] = False
 
+
+quotation_totals_pipeline = [
+    {
+        '$lookup': {
+            'from': 'quotation_cards_invoice_items',
+            'localField': '_id',
+            'foreignField': 'quotation_card_id',
+            'as': 'item_list'
+        }
+    }, {
+        '$project': {
+            'inv_total': {
+                '$sum': {
+                    '$map': {
+                        'input': '$item_list',
+                        'as': 'item',
+                        'in': {
+                            '$ifNull': [
+                                '$$item.total', 0
+                            ]
+                        }
+                    }
+                }
+            },
+            'inv_vat': {
+                '$sum': {
+                    '$map': {
+                        'input': '$item_list',
+                        'as': 'item',
+                        'in': {
+                            '$ifNull': [
+                                '$$item.vat', 0
+                            ]
+                        }
+                    }
+                }
+            },
+            'inv_net': {
+                '$sum': {
+                    '$map': {
+                        'input': '$item_list',
+                        'as': 'item',
+                        'in': {
+                            '$ifNull': [
+                                '$$item.net', 0
+                            ]
+                        }
+                    }
+                }
+            }
+        }
+    }, {
+        '$group': {
+            '_id': None,
+            'grand_total': {
+                '$sum': '$inv_total'
+            },
+            'total_vat': {
+                '$sum': '$inv_vat'
+            },
+            'total_items_net': {
+                '$sum': '$inv_net'
+            },
+            'total_items_count': {
+                '$sum': 1
+            }
+        }
+    }, {
+        '$project': {
+            '_id': 0,
+            'grand_total': 1,
+            'total_vat': 1,
+            'total_items_count': 1,
+            'total_items_net': 1
+        }
+    }
+]
 
 pipeline: list[dict[str, Any]] = [
     {
@@ -664,7 +742,8 @@ async def add_new_quotation_card(quotation_data: QuotationCard, data: dict = Dep
             company_id = ObjectId(data.get("company_id"))
 
             quotation_data_dict = quotation_data.model_dump(exclude_unset=True)
-            new_quotation_counter = await create_custom_counter("QN", "Q", data, description='Quotation Number', session=session)
+            new_quotation_counter = await create_custom_counter("QN", "Q", data, description='Quotation Number',
+                                                                session=session)
 
             invoices = []
             if quotation_data_dict.get("invoice_items"):
@@ -720,12 +799,8 @@ async def add_new_quotation_card(quotation_data: QuotationCard, data: dict = Dep
             return {"quotation_card": serialized}
 
         except ValidationError as e:
-            print("\n=== VALIDATION ERROR ===")
-            print(e.errors())
-            print("========================\n")
             return JSONResponse(status_code=422, content={"detail": e.errors()})
         except Exception as e:
-            print(e)
             await session.abort_transaction()
             raise HTTPException(status_code=500, detail=str(e))
 
@@ -764,7 +839,6 @@ async def delete_quotation_card(quotation_id: str, _: dict = Depends(security.ge
             raise
 
         except Exception as e:
-            print(e)
             await session.abort_transaction()
             raise HTTPException(status_code=500, detail=f"Delete failed: {str(e)}")
 
@@ -880,7 +954,6 @@ async def update_quotation_invoice_items(
         return {"updated_items": updated_list, "deleted_items": [str(d) for d in deleted_list]}
 
     except Exception as e:
-        print(e)
         await s.abort_transaction()
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -924,7 +997,8 @@ async def copy_quotation_card(quotation_id: str, data: dict = Depends(security.g
                 raise HTTPException(status_code=403, detail="Only Posted / Cancelled Quotation Cards allowed")
             original_quotation.pop("_id", None)
             original_quotation['quotation_status'] = "New"
-            new_quotation_counter = await create_custom_counter("QN", "Q",description='Quotation Number',data= data,session= session)
+            new_quotation_counter = await create_custom_counter("QN", "Q", description='Quotation Number', data=data,
+                                                                session=session)
             original_quotation["quotation_number"] = new_quotation_counter["final_counter"] if new_quotation_counter[
                 "success"] else None
 
@@ -947,7 +1021,6 @@ async def copy_quotation_card(quotation_id: str, data: dict = Depends(security.g
             await session.abort_transaction()
             raise
         except Exception as e:
-            print(e)
             await session.abort_transaction()
             raise HTTPException(status_code=500, detail=f"Delete failed: {str(e)}")
 
@@ -968,12 +1041,15 @@ async def search_engine_for_quotation_cards_2(filter_quotations: QuotationCardSe
     try:
         company_id = ObjectId(data.get("company_id"))
         user_id = ObjectId(data.get("sub"))
+
         user_branches = await get_user_branches(user_id)
+        totals_pipeline = copy.deepcopy(quotation_totals_pipeline)
         if user_branches:
             branch_filters = [{"branch": b, "company_id": company_id} for b in user_branches]
             match_stage: Any = {"$or": branch_filters}
         else:
             match_stage = {"company_id": company_id}
+
         if filter_quotations.from_date or filter_quotations.to_date:
             match_stage['quotation_date'] = {}
             if filter_quotations.from_date:
@@ -995,6 +1071,8 @@ async def search_engine_for_quotation_cards_2(filter_quotations: QuotationCardSe
             match_stage["customer"] = filter_quotations.customer_name
         if filter_quotations.status:
             match_stage["quotation_status"] = filter_quotations.status
+        print(match_stage)
+        totals_pipeline.insert(0, {"$match": match_stage})
 
         search_pipeline = [
             {
@@ -1368,495 +1446,448 @@ async def search_engine_for_quotation_cards_2(filter_quotations: QuotationCardSe
                         '$toString': '$job_card_id'
                     }
                 }
-            }, {
-                '$facet': {
-                    'quotation_cards': [
-                        {
-                            '$limit': 200
-                        }, {
-                            '$project': {
-                                'car_brand_details': 0,
-                                'car_model_details': 0,
-                                'country_details': 0,
-                                'city_details': 0,
-                                'color_details': 0,
-                                'engine_type_details': 0,
-                                'customer_details': 0,
-                                'salesman_details': 0,
-                                'branch_details': 0,
-                                'currency_details': 0,
-                                'currency_country_details': 0,
-                                'quotation_details': 0,
-                                'user_details': 0,
-                                'list_values': 0,
-                                'receipts_invoices_details': 0
-                            }
-                        }
-                    ],
-                    'grand_totals': [
-                        {
-                            '$group': {
-                                '_id': None,
-                                'grand_total': {
-                                    '$sum': '$total_amount'
-                                },
-                                'grand_vat': {
-                                    '$sum': '$total_vat'
-                                },
-                                'grand_net': {
-                                    '$sum': '$total_net'
-                                },
-                                'grand_count': {
-                                    '$sum': 1
-                                }
-                            }
-                        }, {
-                            '$project': {
-                                '_id': 0
-                            }
-                        }
-                    ]
-                }
-            }
+            },
         ]
-
-        cursor = await quotation_cards_collection.aggregate(search_pipeline)
-        result = await cursor.next()
-
-        if result.get("quotation_cards"):
-            all_quotation_cards = result["quotation_cards"]
-            print(len(all_quotation_cards))
-        else:
-            all_quotation_cards = []
-        if result.get('grand_totals'):
-            all_grand_totals = result['grand_totals'][0]
-        else:
-            all_grand_totals = {}
-        return {"quotation_cards": all_quotation_cards, "grand_totals": all_grand_totals}
-
-
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        print(e)
-        raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
-
-
-@router.post("/search_engine_for_quotation_cards")
-async def search_engine_for_quotation_cards(filter_quotations: QuotationCardSearch,
-                                            data: dict = Depends(security.get_current_user)):
-    try:
-        company_id = ObjectId(data.get("company_id"))
-        search_pipeline: list[dict] = []
-        match_stage = {}
-
-        if company_id:
-            match_stage["company_id"] = company_id
-        if filter_quotations.car_brand:
-            match_stage["car_brand"] = filter_quotations.car_brand
-        if filter_quotations.car_model:
-            match_stage["car_model"] = filter_quotations.car_model
-        if filter_quotations.quotation_number:
-            match_stage["quotation_number"] = {"$regex": filter_quotations.quotation_number, "$options": "i"}
-        if filter_quotations.plate_number:
-            match_stage["plate_number"] = {"$regex": filter_quotations.plate_number, "$options": "i"}
-        if filter_quotations.vin:
-            match_stage["vehicle_identification_number"] = {"$regex": filter_quotations.vin, "$options": "i"}
-        if filter_quotations.customer_name:
-            match_stage["customer"] = filter_quotations.customer_name
-        if filter_quotations.status:
-            match_stage["quotation_status"] = filter_quotations.status
-
-        search_pipeline.append({"$match": match_stage})
-
-        lookups = [
-            ("car_brand", "all_brands"),
-            ("car_model", "all_brand_models"),
-            ("color", "all_lists_values"),
-            ("engine_type", "all_lists_values"),
-            ("country", "all_countries"),
-            ("city", "all_countries_cities"),
-            ("salesman", "sales_man"),
-            ("branch", "branches"),
-        ]
-
-        for local_field, collection in lookups:
-            search_pipeline.append({
-                "$lookup": {
-                    "from": collection,
-                    "let": {"field_id": f"${local_field}"},
-                    "pipeline": [
-                        {"$match": {"$expr": {"$eq": ["$_id", "$$field_id"]}}},
-                        {"$project": {"name": 1, "logo": 1}}
-                    ],
-                    "as": f"{local_field}_details"
-                }
-            })
-            search_pipeline.append({"$unwind": {"path": f"${local_field}_details", "preserveNullAndEmptyArrays": True}})
-
-        search_pipeline.append({
-            "$lookup": {
-                "from": "entity_information",
-                "localField": "customer",
-                "foreignField": "_id",
-                "as": "customer_details"
-            }
-        })
-        search_pipeline.append({"$unwind": {"path": "$customer_details", "preserveNullAndEmptyArrays": True}})
-
-        search_pipeline.append({
-            '$lookup': {
-                'from': 'job_cards',
-                'let': {
-                    'job_card_id': '$job_card_id'
-                },
-                'pipeline': [
-                    {
-                        '$match': {
-                            '$expr': {
-                                '$eq': [
-                                    '$_id', '$$job_card_id'
-                                ]
-                            }
-                        }
-                    }, {
-                        '$project': {
-                            '_id': 1,
-                            'job_number': 1
-                        }
-                    }
-                ],
-                'as': 'job_details'
-            }
-        })
-
-        search_pipeline.append({
-            '$unwind': {
-                'path': '$job_details',
-                'preserveNullAndEmptyArrays': True
-            }
-        })
-
-        search_pipeline.append({
-            '$lookup': {
-                'from': 'currencies',
-                'let': {
-                    'currency_id': '$currency'
-                },
-                'pipeline': [
-                    {
-                        '$match': {
-                            '$expr': {
-                                '$eq': [
-                                    '$_id', '$$currency_id'
-                                ]
-                            }
-                        }
-                    }, {
-                        '$project': {
-                            '_id': 1,
-                            'country_id': 1
-                        }
-                    }
-                ],
-                'as': 'currency_details'
-            }
-        }, )
-
-        search_pipeline.append({
-            '$unwind': {
-                'path': '$currency_details',
-                'preserveNullAndEmptyArrays': True
-            }
-        }, )
-
-        search_pipeline.append({
-            '$lookup': {
-                'from': 'all_countries',
-                'let': {
-                    'currency_country_id': '$currency_details.country_id'
-                },
-                'pipeline': [
-                    {
-                        '$match': {
-                            '$expr': {
-                                '$eq': [
-                                    '$_id', '$$currency_country_id'
-                                ]
-                            }
-                        }
-                    }, {
-                        '$project': {
-                            '_id': 1,
-                            'currency_code': 1
-                        }
-                    }
-                ],
-                'as': 'currency_country_details'
-            }
-        }, )
-
-        search_pipeline.append({
-            '$unwind': {
-                'path': '$currency_country_details',
-                'preserveNullAndEmptyArrays': True
-            }
-        })
-
-        search_pipeline.append({
-            '$lookup': {
-                'from': 'quotation_cards_invoice_items',
-                'let': {
-                    'quotation_id': '$_id'
-                },
-                'pipeline': [
-                    {
-                        '$match': {
-                            '$expr': {
-                                '$eq': [
-                                    '$quotation_card_id', '$$quotation_id'
-                                ]
-                            }
-                        }
-                    }, {
-                        '$lookup': {
-                            'from': 'invoice_items',
-                            'let': {
-                                'nameId': '$name'
-                            },
-                            'pipeline': [
-                                {
-                                    '$match': {
-                                        '$expr': {
-                                            '$eq': [
-                                                '$_id', '$$nameId'
-                                            ]
-                                        }
-                                    }
-                                }, {
-                                    '$project': {
-                                        '_id': 1,
-                                        'name': 1
-                                    }
-                                }
-                            ],
-                            'as': 'name_details'
-                        }
-                    }, {
-                        '$unwind': {
-                            'path': '$name_details',
-                            'preserveNullAndEmptyArrays': True
-                        }
-                    }, {
-                        '$addFields': {
-                            'name_text': {
-                                '$ifNull': [
-                                    '$name_details.name', None
-                                ]
-                            }
-                        }
-                    }, {
-                        '$project': {
-                            'name_details': 0
-                        }
-                    }
-                ],
-                'as': 'invoice_items_details'
-            }
-        }, )
-
-        now = datetime.now(timezone.utc)
-        print(now)
-        date_field = "quotation_date"
-        date_filter = {}
-
-        if filter_quotations.from_date or filter_quotations.to_date:
-            date_filter[date_field] = {}
-            if filter_quotations.from_date:
-                print("from date")
-                date_filter[date_field]["$gte"] = filter_quotations.from_date
-            if filter_quotations.to_date:
-                print("to date")
-                date_filter[date_field]["$lte"] = filter_quotations.to_date
-            print(date_filter)
-
-        if date_filter:
-            search_pipeline.append({"$match": date_filter})
-
-        search_pipeline.append({
-            '$addFields': {
-                'total_amount': {
-                    '$sum': {
-                        '$map': {
-                            'input': '$invoice_items_details',
-                            'as': 'item',
-                            'in': {
-                                '$ifNull': [
-                                    '$$item.total', 0
-                                ]
-                            }
-                        }
-                    }
-                },
-                'total_vat': {
-                    '$sum': {
-                        '$map': {
-                            'input': '$invoice_items_details',
-                            'as': 'item',
-                            'in': {
-                                '$ifNull': [
-                                    '$$item.vat', 0
-                                ]
-                            }
-                        }
-                    }
-                },
-                'total_net': {
-                    '$sum': {
-                        '$map': {
-                            'input': '$invoice_items_details',
-                            'as': 'item',
-                            'in': {
-                                '$ifNull': [
-                                    '$$item.net', 0
-                                ]
-                            }
-                        }
-                    }
-                }
-            }
-        })
-
-        search_pipeline.append({
-            '$addFields': {
-                'car_brand_name': {
-                    '$ifNull': [
-                        '$car_brand_details.name', None
-                    ]
-                },
-                'car_brand_logo': {
-                    '$ifNull': [
-                        '$car_brand_details.logo', None
-                    ]
-                },
-                'car_model_name': {
-                    '$ifNull': [
-                        '$car_model_details.name', None
-                    ]
-                },
-                'country_name': {
-                    '$ifNull': [
-                        '$country_details.name', None
-                    ]
-                },
-                'city_name': {
-                    '$ifNull': [
-                        '$city_details.name', None
-                    ]
-                },
-                'color_name': {
-                    '$ifNull': [
-                        '$color_details.name', None
-                    ]
-                },
-                'engine_type_name': {
-                    '$ifNull': [
-                        '$engine_type_details.name', None
-                    ]
-                },
-                'customer_name': {
-                    '$ifNull': [
-                        '$customer_details.entity_name', None
-                    ]
-                },
-                'salesman_name': {
-                    '$ifNull': [
-                        '$salesman_details.name', None
-                    ]
-                },
-                'branch_name': {
-                    '$ifNull': [
-                        '$branch_details.name', None
-                    ]
-                },
-                'currency_code': {
-                    '$ifNull': [
-                        '$currency_country_details.currency_code', None
-                    ]
-                },
-                'job_number': {
-                    '$ifNull': [
-                        '$job_details.job_number', None
-                    ]
-                },
-                "job_card_id": {
-                    "$ifNull": [
-                        "$job_details._id", None
-                    ]
-                }
-            }
-        })
-        search_pipeline.append({
-            "$facet": {
-                "quotation_cards": [
-                    {"$sort": {"quotation_number": -1}},
-                    {"$project": {
-                        'car_brand_details': 0,
-                        'car_model_details': 0,
-                        'country_details': 0,
-                        'city_details': 0,
-                        'color_details': 0,
-                        'engine_type_details': 0,
-                        'customer_details': 0,
-                        'salesman_details': 0,
-                        'branch_details': 0,
-                        'currency_details': 0,
-                        'currency_country_details': 0,
-                        'job_details': 0
-                    }}
-                ],
-                "grand_totals": [
-                    {
-                        "$group": {
-                            "_id": None,
-                            "grand_total": {"$sum": "$total_amount"},
-                            "grand_vat": {"$sum": "$total_vat"},
-                            "grand_net": {"$sum": "$total_net"}
-                        }
-                    },
-                    {
-                        "$project": {
-                            "_id": 0
-                        }
-                    }
-                ]
-            }
-        })
 
         cursor = await quotation_cards_collection.aggregate(search_pipeline)
         result = await cursor.to_list(None)
-
-        if result and len(result) > 0:
-            data = result[0]
-            quotation_cards = [serializer(r) for r in data.get("quotation_cards", [])]
-            totals = data.get("grand_totals", [])
-            grand_totals = totals[0] if totals else {"grand_total": 0, "grand_vat": 0, "grand_net": 0}
-        else:
-            quotation_cards = []
-            grand_totals = {"grand_total": 0, "grand_vat": 0, "grand_net": 0}
+        totals_cursor = await quotation_cards_collection.aggregate(totals_pipeline)
+        totals_result = await totals_cursor.to_list(None)
+        # print(totals_result)
+        # print(result)
 
         return {
-            "quotation_cards": quotation_cards,
-            "grand_totals": grand_totals
+            "quotation_cards": result,
+            "grand_totals": totals_result[0] if totals_result else {"grand_total": 0, "total_vat": 0,
+                                                                    "total_items_count": 0, "total_items_net": 0},
         }
-
 
     except HTTPException:
         raise
     except Exception as e:
         print(e)
         raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
+
+#
+# @router.post("/search_engine_for_quotation_cards")
+# async def search_engine_for_quotation_cards(filter_quotations: QuotationCardSearch,
+#                                             data: dict = Depends(security.get_current_user)):
+#     try:
+#         company_id = ObjectId(data.get("company_id"))
+#         search_pipeline: list[dict] = []
+#         match_stage = {}
+#         totals_pipeline = copy.deepcopy(quotation_totals_pipeline)
+#
+#         if company_id:
+#             match_stage["company_id"] = company_id
+#         if filter_quotations.car_brand:
+#             match_stage["car_brand"] = filter_quotations.car_brand
+#         if filter_quotations.car_model:
+#             match_stage["car_model"] = filter_quotations.car_model
+#         if filter_quotations.quotation_number:
+#             match_stage["quotation_number"] = {"$regex": filter_quotations.quotation_number, "$options": "i"}
+#         if filter_quotations.plate_number:
+#             match_stage["plate_number"] = {"$regex": filter_quotations.plate_number, "$options": "i"}
+#         if filter_quotations.vin:
+#             match_stage["vehicle_identification_number"] = {"$regex": filter_quotations.vin, "$options": "i"}
+#         if filter_quotations.customer_name:
+#             match_stage["customer"] = filter_quotations.customer_name
+#         if filter_quotations.status:
+#             match_stage["quotation_status"] = filter_quotations.status
+#
+#         search_pipeline.append({"$match": match_stage})
+#         totals_pipeline.insert(0, {"$match": match_stage})
+#
+#         lookups = [
+#             ("car_brand", "all_brands"),
+#             ("car_model", "all_brand_models"),
+#             ("color", "all_lists_values"),
+#             ("engine_type", "all_lists_values"),
+#             ("country", "all_countries"),
+#             ("city", "all_countries_cities"),
+#             ("salesman", "sales_man"),
+#             ("branch", "branches"),
+#         ]
+#
+#         for local_field, collection in lookups:
+#             search_pipeline.append({
+#                 "$lookup": {
+#                     "from": collection,
+#                     "let": {"field_id": f"${local_field}"},
+#                     "pipeline": [
+#                         {"$match": {"$expr": {"$eq": ["$_id", "$$field_id"]}}},
+#                         {"$project": {"name": 1, "logo": 1}}
+#                     ],
+#                     "as": f"{local_field}_details"
+#                 }
+#             })
+#             search_pipeline.append({"$unwind": {"path": f"${local_field}_details", "preserveNullAndEmptyArrays": True}})
+#
+#         search_pipeline.append({
+#             "$lookup": {
+#                 "from": "entity_information",
+#                 "localField": "customer",
+#                 "foreignField": "_id",
+#                 "as": "customer_details"
+#             }
+#         })
+#         search_pipeline.append({"$unwind": {"path": "$customer_details", "preserveNullAndEmptyArrays": True}})
+#
+#         search_pipeline.append({
+#             '$lookup': {
+#                 'from': 'job_cards',
+#                 'let': {
+#                     'job_card_id': '$job_card_id'
+#                 },
+#                 'pipeline': [
+#                     {
+#                         '$match': {
+#                             '$expr': {
+#                                 '$eq': [
+#                                     '$_id', '$$job_card_id'
+#                                 ]
+#                             }
+#                         }
+#                     }, {
+#                         '$project': {
+#                             '_id': 1,
+#                             'job_number': 1
+#                         }
+#                     }
+#                 ],
+#                 'as': 'job_details'
+#             }
+#         })
+#
+#         search_pipeline.append({
+#             '$unwind': {
+#                 'path': '$job_details',
+#                 'preserveNullAndEmptyArrays': True
+#             }
+#         })
+#
+#         search_pipeline.append({
+#             '$lookup': {
+#                 'from': 'currencies',
+#                 'let': {
+#                     'currency_id': '$currency'
+#                 },
+#                 'pipeline': [
+#                     {
+#                         '$match': {
+#                             '$expr': {
+#                                 '$eq': [
+#                                     '$_id', '$$currency_id'
+#                                 ]
+#                             }
+#                         }
+#                     }, {
+#                         '$project': {
+#                             '_id': 1,
+#                             'country_id': 1
+#                         }
+#                     }
+#                 ],
+#                 'as': 'currency_details'
+#             }
+#         }, )
+#
+#         search_pipeline.append({
+#             '$unwind': {
+#                 'path': '$currency_details',
+#                 'preserveNullAndEmptyArrays': True
+#             }
+#         }, )
+#
+#         search_pipeline.append({
+#             '$lookup': {
+#                 'from': 'all_countries',
+#                 'let': {
+#                     'currency_country_id': '$currency_details.country_id'
+#                 },
+#                 'pipeline': [
+#                     {
+#                         '$match': {
+#                             '$expr': {
+#                                 '$eq': [
+#                                     '$_id', '$$currency_country_id'
+#                                 ]
+#                             }
+#                         }
+#                     }, {
+#                         '$project': {
+#                             '_id': 1,
+#                             'currency_code': 1
+#                         }
+#                     }
+#                 ],
+#                 'as': 'currency_country_details'
+#             }
+#         }, )
+#
+#         search_pipeline.append({
+#             '$unwind': {
+#                 'path': '$currency_country_details',
+#                 'preserveNullAndEmptyArrays': True
+#             }
+#         })
+#
+#         search_pipeline.append({
+#             '$lookup': {
+#                 'from': 'quotation_cards_invoice_items',
+#                 'let': {
+#                     'quotation_id': '$_id'
+#                 },
+#                 'pipeline': [
+#                     {
+#                         '$match': {
+#                             '$expr': {
+#                                 '$eq': [
+#                                     '$quotation_card_id', '$$quotation_id'
+#                                 ]
+#                             }
+#                         }
+#                     }, {
+#                         '$lookup': {
+#                             'from': 'invoice_items',
+#                             'let': {
+#                                 'nameId': '$name'
+#                             },
+#                             'pipeline': [
+#                                 {
+#                                     '$match': {
+#                                         '$expr': {
+#                                             '$eq': [
+#                                                 '$_id', '$$nameId'
+#                                             ]
+#                                         }
+#                                     }
+#                                 }, {
+#                                     '$project': {
+#                                         '_id': 1,
+#                                         'name': 1
+#                                     }
+#                                 }
+#                             ],
+#                             'as': 'name_details'
+#                         }
+#                     }, {
+#                         '$unwind': {
+#                             'path': '$name_details',
+#                             'preserveNullAndEmptyArrays': True
+#                         }
+#                     }, {
+#                         '$addFields': {
+#                             'name_text': {
+#                                 '$ifNull': [
+#                                     '$name_details.name', None
+#                                 ]
+#                             }
+#                         }
+#                     }, {
+#                         '$project': {
+#                             'name_details': 0
+#                         }
+#                     }
+#                 ],
+#                 'as': 'invoice_items_details'
+#             }
+#         }, )
+#
+#         date_field = "quotation_date"
+#         date_filter = {}
+#
+#         if filter_quotations.from_date or filter_quotations.to_date:
+#             date_filter[date_field] = {}
+#             if filter_quotations.from_date:
+#                 date_filter[date_field]["$gte"] = filter_quotations.from_date
+#             if filter_quotations.to_date:
+#                 date_filter[date_field]["$lte"] = filter_quotations.to_date
+#
+#         if date_filter:
+#             search_pipeline.append({"$match": date_filter})
+#
+#         search_pipeline.append({
+#             '$addFields': {
+#                 'total_amount': {
+#                     '$sum': {
+#                         '$map': {
+#                             'input': '$invoice_items_details',
+#                             'as': 'item',
+#                             'in': {
+#                                 '$ifNull': [
+#                                     '$$item.total', 0
+#                                 ]
+#                             }
+#                         }
+#                     }
+#                 },
+#                 'total_vat': {
+#                     '$sum': {
+#                         '$map': {
+#                             'input': '$invoice_items_details',
+#                             'as': 'item',
+#                             'in': {
+#                                 '$ifNull': [
+#                                     '$$item.vat', 0
+#                                 ]
+#                             }
+#                         }
+#                     }
+#                 },
+#                 'total_net': {
+#                     '$sum': {
+#                         '$map': {
+#                             'input': '$invoice_items_details',
+#                             'as': 'item',
+#                             'in': {
+#                                 '$ifNull': [
+#                                     '$$item.net', 0
+#                                 ]
+#                             }
+#                         }
+#                     }
+#                 }
+#             }
+#         })
+#
+#         search_pipeline.append({
+#             '$addFields': {
+#                 'car_brand_name': {
+#                     '$ifNull': [
+#                         '$car_brand_details.name', None
+#                     ]
+#                 },
+#                 'car_brand_logo': {
+#                     '$ifNull': [
+#                         '$car_brand_details.logo', None
+#                     ]
+#                 },
+#                 'car_model_name': {
+#                     '$ifNull': [
+#                         '$car_model_details.name', None
+#                     ]
+#                 },
+#                 'country_name': {
+#                     '$ifNull': [
+#                         '$country_details.name', None
+#                     ]
+#                 },
+#                 'city_name': {
+#                     '$ifNull': [
+#                         '$city_details.name', None
+#                     ]
+#                 },
+#                 'color_name': {
+#                     '$ifNull': [
+#                         '$color_details.name', None
+#                     ]
+#                 },
+#                 'engine_type_name': {
+#                     '$ifNull': [
+#                         '$engine_type_details.name', None
+#                     ]
+#                 },
+#                 'customer_name': {
+#                     '$ifNull': [
+#                         '$customer_details.entity_name', None
+#                     ]
+#                 },
+#                 'salesman_name': {
+#                     '$ifNull': [
+#                         '$salesman_details.name', None
+#                     ]
+#                 },
+#                 'branch_name': {
+#                     '$ifNull': [
+#                         '$branch_details.name', None
+#                     ]
+#                 },
+#                 'currency_code': {
+#                     '$ifNull': [
+#                         '$currency_country_details.currency_code', None
+#                     ]
+#                 },
+#                 'job_number': {
+#                     '$ifNull': [
+#                         '$job_details.job_number', None
+#                     ]
+#                 },
+#                 "job_card_id": {
+#                     "$ifNull": [
+#                         "$job_details._id", None
+#                     ]
+#                 }
+#             }
+#         })
+#         # search_pipeline.append({
+#         #     "$facet": {
+#         #         "quotation_cards": [
+#         #             {"$sort": {"quotation_number": -1}},
+#         #             {"$project": {
+#         #                 'car_brand_details': 0,
+#         #                 'car_model_details': 0,
+#         #                 'country_details': 0,
+#         #                 'city_details': 0,
+#         #                 'color_details': 0,
+#         #                 'engine_type_details': 0,
+#         #                 'customer_details': 0,
+#         #                 'salesman_details': 0,
+#         #                 'branch_details': 0,
+#         #                 'currency_details': 0,
+#         #                 'currency_country_details': 0,
+#         #                 'job_details': 0
+#         #             }}
+#         #         ],
+#         #         "grand_totals": [
+#         #             {
+#         #                 "$group": {
+#         #                     "_id": None,
+#         #                     "grand_total": {"$sum": "$total_amount"},
+#         #                     "grand_vat": {"$sum": "$total_vat"},
+#         #                     "grand_net": {"$sum": "$total_net"}
+#         #                 }
+#         #             },
+#         #             {
+#         #                 "$project": {
+#         #                     "_id": 0
+#         #                 }
+#         #             }
+#         #         ]
+#         #     }
+#         # })
+#
+#         cursor = await quotation_cards_collection.aggregate(search_pipeline)
+#         result = await cursor.to_list(None)
+#         totals_cursor = await quotation_cards_collection.aggregate(totals_pipeline)
+#         totals_result = await totals_cursor.to_list(None)
+#
+#         return {
+#             "quotation_cards": [serializer(r) for r in result],
+#             "grand_totals": totals_result[0] if totals_result else {"grand_total": 0, "total_vat": 0,
+#                                                                     "total_items_count": 0, "total_items_net": 0},
+#         }
+#
+#         # if result and len(result) > 0:
+#         #     data = result[0]
+#         #     quotation_cards = [serializer(r) for r in data.get("quotation_cards", [])]
+#         #     totals = data.get("grand_totals", [])
+#         #     grand_totals = totals[0] if totals else {"grand_total": 0, "grand_vat": 0, "grand_net": 0}
+#         # else:
+#         #     quotation_cards = []
+#         #     grand_totals = {"grand_total": 0, "grand_vat": 0, "grand_net": 0}
+#         #
+#         # return {
+#         #     "quotation_cards": quotation_cards,
+#         #     "grand_totals": grand_totals
+#         # }
+#
+#
+#     except HTTPException:
+#         raise
+#     except Exception as e:
+#         print(e)
+#         raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
 
 
 def returning_internal_note_pipeline(company_id: ObjectId, user_id: ObjectId,
@@ -1940,7 +1971,6 @@ async def get_all_internal_notes_for_quotation_card(quotation_id: str, data: dic
     except HTTPException:
         raise
     except Exception as e:
-        print(e)
         raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
 
 
@@ -1992,7 +2022,6 @@ async def add_new_internal_note_for_job_card(quotation_id: str, note_type: str =
     except HTTPException:
         raise
     except Exception as e:
-        print(e)
         raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
 
 
@@ -2056,7 +2085,8 @@ async def create_job_card_for_current_quotation(quotation_id: str, data: dict = 
                 "payment_method": "Cash"
 
             })
-            new_job_counter = await create_custom_counter("JCN", "J",description='Job Cards Number',data= data,session= session)
+            new_job_counter = await create_custom_counter("JCN", "J", description='Job Cards Number', data=data,
+                                                          session=session)
             original_quotation["job_number"] = new_job_counter["final_counter"] if new_job_counter[
                 "success"] else None
 
@@ -2078,7 +2108,6 @@ async def create_job_card_for_current_quotation(quotation_id: str, data: dict = 
             await session.abort_transaction()
             raise
         except Exception as e:
-            print(e)
             await session.abort_transaction()
             raise HTTPException(status_code=500, detail=f"Delete failed: {str(e)}")
 
@@ -2095,5 +2124,4 @@ async def open_job_card_screen_by_job_number_for_quotation(job_id: str, _: dict 
     except HTTPException:
         raise
     except Exception as e:
-        print(e)
         raise HTTPException(status_code=500, detail=f"Delete failed: {str(e)}")

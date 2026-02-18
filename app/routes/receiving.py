@@ -9,7 +9,7 @@ from app.database import get_collection
 from datetime import datetime
 from app.routes.car_trading import PyObjectId
 from app.routes.counters import create_custom_counter
-from app.routes.job_cards import serializer
+from app.routes.job_cards import serializer, get_user_branches
 
 router = APIRouter()
 receiving_collection = get_collection("receiving")
@@ -24,9 +24,11 @@ receiving_details_pipeline: list[dict[str, Any]] = [
             'as': 'branch_details'
         }
     }, {
-        '$unwind': {
-            'path': '$branch_details',
-            'preserveNullAndEmptyArrays': True
+        '$lookup': {
+            'from': 'entity_information',
+            'localField': 'vendor',
+            'foreignField': '_id',
+            'as': 'vendor_details'
         }
     }, {
         '$lookup': {
@@ -46,20 +48,8 @@ receiving_details_pipeline: list[dict[str, Any]] = [
                 }, {
                     '$lookup': {
                         'from': 'all_countries',
-                        'let': {
-                            'country_id': '$country_id'
-                        },
-                        'pipeline': [
-                            {
-                                '$match': {
-                                    '$expr': {
-                                        '$eq': [
-                                            '$_id', '$$country_id'
-                                        ]
-                                    }
-                                }
-                            }
-                        ],
+                        'localField': 'country_id',
+                        'foreignField': '_id',
                         'as': 'country_details'
                     }
                 }, {
@@ -72,38 +62,25 @@ receiving_details_pipeline: list[dict[str, Any]] = [
             'as': 'currency_details'
         }
     }, {
-        '$unwind': {
-            'path': '$currency_details',
-            'preserveNullAndEmptyArrays': True
-        }
-    }, {
-        '$lookup': {
-            'from': 'entity_information',
-            'localField': 'vendor',
-            'foreignField': '_id',
-            'as': 'vendor_details'
-        }
-    }, {
-        '$unwind': {
-            'path': '$vendor_details',
-            'preserveNullAndEmptyArrays': True
-        }
-    }, {
         '$lookup': {
             'from': 'all_lists_values',
             'let': {
-                'approvedId': '$approved_by',
-                'orderedId': '$ordered_by',
-                'purchasedId': '$purchased_by'
+                'employeeIds': {
+                    '$setDifference': [
+                        [
+                            '$approved_by', '$ordered_by', '$purchased_by'
+                        ], [
+                            None
+                        ]
+                    ]
+                }
             },
             'pipeline': [
                 {
                     '$match': {
                         '$expr': {
                             '$in': [
-                                '$_id', [
-                                    '$$approvedId', '$$orderedId', '$$purchasedId'
-                                ]
+                                '$_id', '$$employeeIds'
                             ]
                         }
                     }
@@ -139,21 +116,36 @@ receiving_details_pipeline: list[dict[str, Any]] = [
                         'as': 'inventory_item_details'
                     }
                 }, {
-                    '$unwind': {
-                        'path': '$inventory_item_details',
-                        'preserveNullAndEmptyArrays': True
-                    }
-                }, {
                     '$addFields': {
                         'inventory_item_name': {
                             '$ifNull': [
-                                '$inventory_item_details.name', None
+                                {
+                                    '$arrayElemAt': [
+                                        '$inventory_item_details.name', 0
+                                    ]
+                                }, None
                             ]
                         },
                         'inventory_item_code': {
                             '$ifNull': [
-                                '$inventory_item_details.code', None
+                                {
+                                    '$arrayElemAt': [
+                                        '$inventory_item_details.code', 0
+                                    ]
+                                }, None
                             ]
+                        },
+                        '_id': {
+                            '$toString': '$_id'
+                        },
+                        'inventory_item_id': {
+                            '$toString': '$inventory_item_id'
+                        },
+                        'receiving_id': {
+                            '$toString': '$receiving_id'
+                        },
+                        'company_id': {
+                            '$toString': '$company_id'
                         }
                     }
                 }, {
@@ -166,11 +158,6 @@ receiving_details_pipeline: list[dict[str, Any]] = [
         }
     }, {
         '$addFields': {
-            'currency_code': {
-                '$ifNull': [
-                    '$currency_details.country_details.currency_code', None
-                ]
-            },
             'items_total': {
                 '$sum': {
                     '$map': {
@@ -180,10 +167,27 @@ receiving_details_pipeline: list[dict[str, Any]] = [
                             '$multiply': [
                                 {
                                     '$subtract': [
-                                        {'$toDouble': {'$ifNull': ['$$item.original_price', 0]}},
-                                        {'$toDouble': {'$ifNull': ['$$item.discount', 0]}}
+                                        {
+                                            '$toDouble': {
+                                                '$ifNull': [
+                                                    '$$item.original_price', 0
+                                                ]
+                                            }
+                                        }, {
+                                            '$toDouble': {
+                                                '$ifNull': [
+                                                    '$$item.discount', 0
+                                                ]
+                                            }
+                                        }
                                     ]
-                                }, {'$toDouble': {'$ifNull': ['$$item.quantity', 0]}}
+                                }, {
+                                    '$toDouble': {
+                                        '$ifNull': [
+                                            '$$item.quantity', 0
+                                        ]
+                                    }
+                                }
                             ]
                         }
                     }
@@ -197,175 +201,210 @@ receiving_details_pipeline: list[dict[str, Any]] = [
                     'input': '$items_details',
                     'as': 'item',
                     'in': {
-                        '$mergeObjects': [
-                            '$$item', {
-                                'add_cost': {
-                                    '$cond': [
+                        '$let': {
+                            'vars': {
+                                'price': {
+                                    '$toDouble': {
+                                        '$ifNull': [
+                                            '$$item.original_price', 0
+                                        ]
+                                    }
+                                },
+                                'discount': {
+                                    '$toDouble': {
+                                        '$ifNull': [
+                                            '$$item.discount', 0
+                                        ]
+                                    }
+                                },
+                                'quantity': {
+                                    '$toDouble': {
+                                        '$ifNull': [
+                                            '$$item.quantity', 0
+                                        ]
+                                    }
+                                },
+                                'rate': {
+                                    '$toDouble': {
+                                        '$ifNull': [
+                                            '$rate', 1
+                                        ]
+                                    }
+                                },
+                                'extraCosts': {
+                                    '$add': [
                                         {
-                                            '$or': [
-                                                {
-                                                    '$eq': [
-                                                        '$$item.quantity', 0
-                                                    ]
-                                                }, {
-                                                    '$eq': [
-                                                        '$items_total', 0
-                                                    ]
-                                                }
+                                            '$ifNull': [
+                                                '$handling', 0
                                             ]
-                                        }, 0, {
-                                            '$divide': [
+                                        }, {
+                                            '$ifNull': [
+                                                '$shipping', 0
+                                            ]
+                                        }, {
+                                            '$ifNull': [
+                                                '$other', 0
+                                            ]
+                                        }
+                                    ]
+                                },
+                                'amount': {
+                                    '$ifNull': [
+                                        '$amount', 0
+                                    ]
+                                }
+                            },
+                            'in': {
+                                '$let': {
+                                    'vars': {
+                                        'baseTotal': {
+                                            '$multiply': [
                                                 {
-                                                    '$multiply': [
+                                                    '$subtract': [
+                                                        '$$price', '$$discount'
+                                                    ]
+                                                }, '$$quantity'
+                                            ]
+                                        }
+                                    },
+                                    'in': {
+                                        '$let': {
+                                            'vars': {
+                                                'add_cost': {
+                                                    '$cond': [
                                                         {
+                                                            '$or': [
+                                                                {
+                                                                    '$eq': [
+                                                                        '$$quantity', 0
+                                                                    ]
+                                                                }, {
+                                                                    '$eq': [
+                                                                        '$items_total', 0
+                                                                    ]
+                                                                }
+                                                            ]
+                                                        }, 0, {
                                                             '$divide': [
                                                                 {
                                                                     '$multiply': [
                                                                         {
-                                                                            '$subtract': [
-                                                                                '$$item.original_price',
-                                                                                '$$item.discount'
+                                                                            '$divide': [
+                                                                                '$$baseTotal', '$items_total'
                                                                             ]
-                                                                        }, '$$item.quantity'
+                                                                        }, '$$extraCosts'
                                                                     ]
-                                                                }, '$items_total'
-                                                            ]
-                                                        }, {
-                                                            '$add': [
-                                                                '$handling', '$shipping', '$other'
+                                                                }, '$$quantity'
                                                             ]
                                                         }
                                                     ]
-                                                }, '$$item.quantity'
-                                            ]
-                                        }
-                                    ]
-                                },
-                                'add_disc': {
-                                    '$cond': [
-                                        {
-                                            '$or': [
-                                                {
-                                                    '$eq': [
-                                                        '$$item.quantity', 0
-                                                    ]
-                                                }, {
-                                                    '$eq': [
-                                                        '$items_total', 0
-                                                    ]
-                                                }
-                                            ]
-                                        }, 0, {
-                                            '$divide': [
-                                                {
-                                                    '$multiply': [
+                                                },
+                                                'add_disc': {
+                                                    '$cond': [
                                                         {
+                                                            '$or': [
+                                                                {
+                                                                    '$eq': [
+                                                                        '$$quantity', 0
+                                                                    ]
+                                                                }, {
+                                                                    '$eq': [
+                                                                        '$items_total', 0
+                                                                    ]
+                                                                }
+                                                            ]
+                                                        }, 0, {
                                                             '$divide': [
                                                                 {
                                                                     '$multiply': [
                                                                         {
-                                                                            '$subtract': [
-                                                                                '$$item.original_price',
-                                                                                '$$item.discount'
+                                                                            '$divide': [
+                                                                                '$$baseTotal', '$items_total'
                                                                             ]
-                                                                        }, '$$item.quantity'
+                                                                        }, '$$amount'
                                                                     ]
-                                                                }, '$items_total'
+                                                                }, '$$quantity'
                                                             ]
-                                                        }, '$amount'
-                                                    ]
-                                                }, '$$item.quantity'
-                                            ]
-                                        }
-                                    ]
-                                }
-                            }
-                        ]
-                    }
-                }
-            }
-        }
-    }, {
-        '$addFields': {
-            'items_details': {
-                '$map': {
-                    'input': '$items_details',
-                    'as': 'item',
-                    'in': {
-                        '$mergeObjects': [
-                            '$$item', {
-                                'local_price': {
-                                    '$multiply': [
-                                        {
-                                            '$add': [
-                                                {
-                                                    '$subtract': [
-                                                        {'$toDouble': {'$ifNull': ['$$item.original_price', 0]}},
-                                                        {'$toDouble': {'$ifNull': ['$$item.discount', 0]}}
-                                                    ]
-                                                }, {
-                                                    '$subtract': [
-                                                        {'$toDouble': {'$ifNull': ['$$item.add_cost', 0]}},
-                                                        {'$toDouble': {'$ifNull': ['$$item.add_disc', 0]}}
+                                                        }
                                                     ]
                                                 }
-                                            ]
-                                        }, {'$toDouble': {'$ifNull': ['$rate', 1]}}
-                                    ]
+                                            },
+                                            'in': {
+                                                '$let': {
+                                                    'vars': {
+                                                        'local_price': {
+                                                            '$multiply': [
+                                                                {
+                                                                    '$add': [
+                                                                        {
+                                                                            '$subtract': [
+                                                                                '$$price', '$$discount'
+                                                                            ]
+                                                                        }, {
+                                                                            '$subtract': [
+                                                                                '$$add_cost', '$$add_disc'
+                                                                            ]
+                                                                        }
+                                                                    ]
+                                                                }, '$$rate'
+                                                            ]
+                                                        }
+                                                    },
+                                                    'in': {
+                                                        '$mergeObjects': [
+                                                            '$$item', {
+                                                                'add_cost': '$$add_cost',
+                                                                'add_disc': '$$add_disc',
+                                                                'local_price': '$$local_price',
+                                                                'total': {
+                                                                    '$multiply': [
+                                                                        '$$local_price', '$$quantity'
+                                                                    ]
+                                                                },
+                                                                'net': {
+                                                                    '$add': [
+                                                                        {
+                                                                            '$multiply': [
+                                                                                '$$local_price', '$$quantity'
+                                                                            ]
+                                                                        }, {
+                                                                            '$ifNull': [
+                                                                                '$$item.vat', 0
+                                                                            ]
+                                                                        }
+                                                                    ]
+                                                                }
+                                                            }
+                                                        ]
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
                             }
-                        ]
+                        }
                     }
                 }
             }
         }
     }, {
         '$addFields': {
-            'items_details': {
-                '$map': {
-                    'input': '$items_details',
-                    'as': 'item',
-                    'in': {
-                        '$mergeObjects': [
-                            '$$item', {
-                                'total': {
-                                    '$multiply': [
-                                        '$$item.local_price', '$$item.quantity'
-                                    ]
-                                },
-                                'net': {
-                                    '$add': [
-                                        '$$item.total', '$$item.vat'
-                                    ]
-                                }
-                            }
-                        ]
-                    }
-                }
-            }
-        }
-    }, {
-        '$addFields': {
-            'items_details': {
-                '$map': {
-                    'input': '$items_details',
-                    'as': 'item',
-                    'in': {
-                        '$mergeObjects': [
-                            '$$item', {
-                                'net': {
-                                    '$add': [
-                                        '$$item.total', '$$item.vat'
-                                    ]
-                                }
-                            }
-                        ]
-                    }
-                }
-            }
-        }
-    }, {
-        '$addFields': {
+            'branch_name': {
+                '$arrayElemAt': [
+                    '$branch_details.name', 0
+                ]
+            },
+            'vendor_name': {
+                '$arrayElemAt': [
+                    '$vendor_details.entity_name', 0
+                ]
+            },
+            'currency_code': {
+                '$arrayElemAt': [
+                    '$currency_details.country_details.currency_code', 0
+                ]
+            },
             'approved_by_name': {
                 '$first': {
                     '$map': {
@@ -423,15 +462,29 @@ receiving_details_pipeline: list[dict[str, Any]] = [
                     }
                 }
             },
-            'branch_name': {
-                '$ifNull': [
-                    '$branch_details.name', None
-                ]
+            '_id': {
+                '$toString': '$_id'
             },
-            'vendor_name': {
-                '$ifNull': [
-                    '$vendor_details.entity_name', None
-                ]
+            'branch': {
+                '$toString': '$branch'
+            },
+            'vendor': {
+                '$toString': '$vendor'
+            },
+            'currency': {
+                '$toString': '$currency'
+            },
+            'approved_by': {
+                '$toString': '$approved_by'
+            },
+            'ordered_by': {
+                '$toString': '$ordered_by'
+            },
+            'purchased_by': {
+                '$toString': '$purchased_by'
+            },
+            'company_id': {
+                '$toString': '$company_id'
             }
         }
     }, {
@@ -440,6 +493,283 @@ receiving_details_pipeline: list[dict[str, Any]] = [
             'branch_details': 0,
             'vendor_details': 0,
             'currency_details': 0
+        }
+    }
+]
+
+receiving_totals_pipeline = [
+    {
+        '$lookup': {
+            'from': 'receiving_items',
+            'localField': '_id',
+            'foreignField': 'receiving_id',
+            'as': 'items_details'
+        }
+    }, {
+        '$addFields': {
+            'items_total': {
+                '$sum': {
+                    '$map': {
+                        'input': '$items_details',
+                        'as': 'item',
+                        'in': {
+                            '$multiply': [
+                                {
+                                    '$subtract': [
+                                        {
+                                            '$toDouble': {
+                                                '$ifNull': [
+                                                    '$$item.original_price', 0
+                                                ]
+                                            }
+                                        }, {
+                                            '$toDouble': {
+                                                '$ifNull': [
+                                                    '$$item.discount', 0
+                                                ]
+                                            }
+                                        }
+                                    ]
+                                }, {
+                                    '$toDouble': {
+                                        '$ifNull': [
+                                            '$$item.quantity', 0
+                                        ]
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        }
+    }, {
+        '$addFields': {
+            'items_details': {
+                '$map': {
+                    'input': '$items_details',
+                    'as': 'item',
+                    'in': {
+                        '$let': {
+                            'vars': {
+                                'price': {
+                                    '$toDouble': {
+                                        '$ifNull': [
+                                            '$$item.original_price', 0
+                                        ]
+                                    }
+                                },
+                                'discount': {
+                                    '$toDouble': {
+                                        '$ifNull': [
+                                            '$$item.discount', 0
+                                        ]
+                                    }
+                                },
+                                'quantity': {
+                                    '$toDouble': {
+                                        '$ifNull': [
+                                            '$$item.quantity', 0
+                                        ]
+                                    }
+                                },
+                                'vat': {
+                                    '$toDouble': {
+                                        '$ifNull': [
+                                            '$$item.vat', 0
+                                        ]
+                                    }
+                                },
+                                'rate': {
+                                    '$toDouble': {
+                                        '$ifNull': [
+                                            '$rate', 1
+                                        ]
+                                    }
+                                },
+                                'extraCosts': {
+                                    '$add': [
+                                        {
+                                            '$ifNull': [
+                                                '$handling', 0
+                                            ]
+                                        }, {
+                                            '$ifNull': [
+                                                '$shipping', 0
+                                            ]
+                                        }, {
+                                            '$ifNull': [
+                                                '$other', 0
+                                            ]
+                                        }
+                                    ]
+                                },
+                                'amount': {
+                                    '$ifNull': [
+                                        '$amount', 0
+                                    ]
+                                }
+                            },
+                            'in': {
+                                '$let': {
+                                    'vars': {
+                                        'baseTotal': {
+                                            '$multiply': [
+                                                {
+                                                    '$subtract': [
+                                                        '$$price', '$$discount'
+                                                    ]
+                                                }, '$$quantity'
+                                            ]
+                                        },
+                                        'safeItemsTotal': {
+                                            '$cond': [
+                                                {
+                                                    '$eq': [
+                                                        '$items_total', 0
+                                                    ]
+                                                }, 1, '$items_total'
+                                            ]
+                                        }
+                                    },
+                                    'in': {
+                                        '$let': {
+                                            'vars': {
+                                                'ratio': {
+                                                    '$divide': [
+                                                        '$$baseTotal', '$$safeItemsTotal'
+                                                    ]
+                                                },
+                                                'safeQty': {
+                                                    '$cond': [
+                                                        {
+                                                            '$eq': [
+                                                                '$$quantity', 0
+                                                            ]
+                                                        }, 1, '$$quantity'
+                                                    ]
+                                                }
+                                            },
+                                            'in': {
+                                                '$let': {
+                                                    'vars': {
+                                                        'add_cost': {
+                                                            '$cond': [
+                                                                {
+                                                                    '$eq': [
+                                                                        '$items_total', 0
+                                                                    ]
+                                                                }, 0, {
+                                                                    '$divide': [
+                                                                        {
+                                                                            '$multiply': [
+                                                                                '$$ratio', '$$extraCosts'
+                                                                            ]
+                                                                        }, '$$safeQty'
+                                                                    ]
+                                                                }
+                                                            ]
+                                                        },
+                                                        'add_disc': {
+                                                            '$cond': [
+                                                                {
+                                                                    '$eq': [
+                                                                        '$items_total', 0
+                                                                    ]
+                                                                }, 0, {
+                                                                    '$divide': [
+                                                                        {
+                                                                            '$multiply': [
+                                                                                '$$ratio', '$$amount'
+                                                                            ]
+                                                                        }, '$$safeQty'
+                                                                    ]
+                                                                }
+                                                            ]
+                                                        }
+                                                    },
+                                                    'in': {
+                                                        '$let': {
+                                                            'vars': {
+                                                                'local_price': {
+                                                                    '$multiply': [
+                                                                        {
+                                                                            '$add': [
+                                                                                {
+                                                                                    '$subtract': [
+                                                                                        '$$price', '$$discount'
+                                                                                    ]
+                                                                                }, {
+                                                                                    '$subtract': [
+                                                                                        '$$add_cost', '$$add_disc'
+                                                                                    ]
+                                                                                }
+                                                                            ]
+                                                                        }, '$$rate'
+                                                                    ]
+                                                                }
+                                                            },
+                                                            'in': {
+                                                                '$mergeObjects': [
+                                                                    '$$item', {
+                                                                        'add_cost': '$$add_cost',
+                                                                        'add_disc': '$$add_disc',
+                                                                        'local_price': '$$local_price',
+                                                                        'total': {
+                                                                            '$multiply': [
+                                                                                '$$local_price', '$$quantity'
+                                                                            ]
+                                                                        },
+                                                                        'net': {
+                                                                            '$add': [
+                                                                                {
+                                                                                    '$multiply': [
+                                                                                        '$$local_price', '$$quantity'
+                                                                                    ]
+                                                                                }, '$$vat'
+                                                                            ]
+                                                                        }
+                                                                    }
+                                                                ]
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }, {
+        '$group': {
+            '_id': None,
+            'total_amount': {
+                '$sum': {
+                    '$sum': '$items_details.total'
+                }
+            },
+            'vat_amount': {
+                '$sum': {
+                    '$sum': '$items_details.vat'
+                }
+            },
+            'net_amount': {
+                '$sum': {
+                    '$sum': '$items_details.net'
+                }
+            },
+            'total_items_count': {
+                '$sum': 1
+            }
+        }
+    }, {
+        '$project': {
+            '_id': 0
         }
     }
 ]
@@ -785,11 +1115,9 @@ async def add_new_receiving(receive: ReceivingModel, data: dict = Depends(securi
             result = await receiving_collection.insert_one(receive, session=session)
             if not result.inserted_id:
                 raise HTTPException(status_code=500, detail="Failed to insert receiving")
-            print('yes')
 
             if receiving_items:
                 for inv in receiving_items:
-                    print(inv)
                     if inv.get("inventory_item_id"):
                         inv["inventory_item_id"] = ObjectId(inv["inventory_item_id"])
                     inv["createdAt"] = security.now_utc()
@@ -815,7 +1143,6 @@ async def add_new_receiving(receive: ReceivingModel, data: dict = Depends(securi
             return {"receiving": serialized}
 
         except Exception as e:
-            print(e)
             await session.abort_transaction()
             raise HTTPException(status_code=500, detail=str(e))
 
@@ -843,7 +1170,6 @@ async def update_receiving(receiving_id: str, receiving: ReceivingModel, _: dict
         return {"receiving": serialized}
 
     except Exception as e:
-        print(e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -935,7 +1261,6 @@ async def update_receiving_items(
         return {"updated_items": updated_items}
 
     except Exception as e:
-        print(e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -965,7 +1290,6 @@ async def delete_receiving(receiving_id: str, _: dict = Depends(security.get_cur
             raise
 
         except Exception as e:
-            print(e)
             await session.abort_transaction()
             raise HTTPException(status_code=500, detail=f"Delete failed: {str(e)}")
 
@@ -1001,15 +1325,26 @@ async def search_engine_for_receiving(
 ):
     try:
         company_id = data.get("company_id")
+        user_id = ObjectId(data.get("sub"))
+
         if not company_id:
             raise HTTPException(status_code=400, detail="Company ID missing")
 
         company_id = ObjectId(company_id)
         search_pipeline = copy.deepcopy(receiving_details_pipeline)
+        totals_search_pipeline = copy.deepcopy(receiving_totals_pipeline)
 
-        match_stage = {}
-        if company_id:
-            match_stage['company_id'] = company_id
+        # match_stage = {}
+
+        user_branches = await get_user_branches(user_id)
+        if user_branches:
+            branch_filters = [{"branch": b, "company_id": company_id} for b in user_branches]
+            match_stage: Any = {"$or": branch_filters}
+        else:
+            match_stage = {"company_id": company_id}
+
+        # if company_id:
+        #     match_stage['company_id'] = company_id
         if filter_receiving.vendor:
             match_stage["vendor"] = filter_receiving.vendor
         if filter_receiving.receiving_number:
@@ -1037,8 +1372,11 @@ async def search_engine_for_receiving(
         # Merge both filters into one $match
         if date_filter:
             match_stage.update(date_filter)
-
         search_pipeline.insert(0, {"$match": match_stage})
+        search_pipeline.insert(1, {"$sort": {"date": -1}})
+        search_pipeline.insert(2, {"$limit": 200})
+
+        totals_search_pipeline.insert(0, {"$match": match_stage})
 
         # 3️⃣ Add computed field
         search_pipeline.append({
@@ -1048,49 +1386,22 @@ async def search_engine_for_receiving(
                 "nets": {"$sum": "$items_details.net"},
             }
         })
-        search_pipeline.append({
-            "$facet": {
-                "receiving": [
-                    {"$sort": {"receiving_number": -1}},
-                ],
-                "grand_totals": [
-                    {
-                        "$group": {
-                            "_id": None,
-                            "grand_total": {"$sum": "$totals"},
-                            "grand_vat": {"$sum": "$vats"},
-                            "grand_net": {"$sum": "$nets"},
-                        }
-                    },
-                    {
-                        "$project": {
-                            "_id": 0
-                        }
-                    }
-                ]
-            }
-        })
 
         cursor = await receiving_collection.aggregate(search_pipeline)
+        totals_cursor = await receiving_collection.aggregate(totals_search_pipeline)
         result = await cursor.to_list(None)
-
-        if result and len(result) > 0:
-            data = result[0]
-            receiving = [serializer(r) for r in data.get("receiving", [])]
-            totals = data.get("grand_totals", [])
-            grand_totals = totals[0] if totals else {"grand_total": 0, "grand_vat": 0, "grand_net": 0}
-        else:
-            receiving = []
-            grand_totals = {"grand_received": 0}
+        totals_result = await totals_cursor.to_list(None)
 
         return {
-            "receiving": receiving,
-            "grand_totals": grand_totals
+            "receiving": result if result else [],
+            "grand_totals": totals_result[0] if totals_result else {"total_amount": 0, "vat_amount": 0, "net_amount": 0,
+                                                                    "total_items_count": 0}
         }
+
+
 
 
     except HTTPException:
         raise
     except Exception as e:
-        print(e)
         raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")

@@ -337,7 +337,6 @@ async def register_company(
                 raise HTTPException(status_code=400, detail="Duplicate entry")
 
         except Exception as e:
-            print(e)
             # 👇 rollback إذا صار خطأ
             await s.abort_transaction()
             raise HTTPException(status_code=500, detail=f"Registration failed: {str(e)}")
@@ -458,10 +457,8 @@ async def delete_company(company_id: str, user_id: str, _: dict = Depends(securi
             return {"message": "Company and owner deleted successfully"}
 
     except PyMongoError as e:
-        print(e)
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
     except Exception as e:
-        print(e)
         raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
 
 
