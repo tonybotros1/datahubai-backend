@@ -2,6 +2,7 @@ from typing import Optional, Dict, Any
 from bson import ObjectId
 from fastapi import APIRouter, Depends, HTTPException, Body
 from pydantic import BaseModel
+from pymongo.errors import DuplicateKeyError
 
 from app.core import security
 from app.database import get_collection
@@ -27,7 +28,6 @@ class Currencies(BaseModel):
 
 
 pipeline: list[Dict[str, Any]] = [
-
     {
         '$lookup': {
             'from': 'all_countries',
@@ -47,7 +47,8 @@ pipeline: list[Dict[str, Any]] = [
                     '$project': {
                         'name': 1,
                         'code': 1,
-                        'currency_code': 1
+                        'currency_code': 1,
+                        'currency_name': 1
                     }
                 }
             ],
@@ -68,6 +69,7 @@ pipeline: list[Dict[str, Any]] = [
             'country_name': '$country.name',
             'country_code': '$country.code',
             'currency_code': '$country.currency_code',
+            'currency_name': '$country.currency_name',
             'country_id': 1
         }
     }
@@ -129,9 +131,17 @@ async def add_new_currency(currency: Currencies, data: dict = Depends(security.g
             "type": "currency_created",
             "data": serialized
         })
+    except DuplicateKeyError:
+        raise HTTPException(
+            status_code=409,
+            detail="Currency already exists for this company and country."
+        )
     except Exception as e:
         print(e)
-        raise e
+        raise HTTPException(
+            status_code=500,
+            detail="Something went wrong while adding currency."
+        )
 
 
 @router.patch("/update_currency/{currency_id}")

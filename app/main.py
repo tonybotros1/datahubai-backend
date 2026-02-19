@@ -15,12 +15,17 @@ from app.websocket_config import manager
 
 users_collection = get_collection("sys-users")
 companies_collection = get_collection("companies")
+currencies_collection = get_collection("currencies")
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     await companies_collection.create_index("company_name", unique=True)
     await users_collection.create_index("email", unique=True)
+    await currencies_collection.create_index(
+        [("company_id", 1), ("country_id", 1)],
+        unique=True
+    )
     print("✅ Unique indexes ensured at startup")
     yield
     print("👋 App is shutting down")
