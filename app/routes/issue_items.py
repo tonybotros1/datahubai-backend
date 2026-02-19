@@ -9,6 +9,7 @@ from app.database import get_collection
 from datetime import datetime
 from app.routes.car_trading import PyObjectId
 from app.routes.counters import create_custom_counter
+from app.routes.job_cards import get_user_branches
 
 router = APIRouter()
 issuing_collection = get_collection("issuing")
@@ -396,6 +397,30 @@ issuing_pipeline = [
             'as': 'converters_details_section'
         }
     }, {
+        '$addFields': {
+            '_id': {
+                '$toString': '$_id'
+            },
+            'branch': {
+                '$toString': '$branch'
+            },
+            'issue_type': {
+                '$toString': '$issue_type'
+            },
+            'job_card_id': {
+                '$toString': '$job_card_id'
+            },
+            'converter_id': {
+                '$toString': '$converter_id'
+            },
+            'received_by': {
+                '$toString': '$received_by'
+            },
+            'company_id': {
+                '$toString': '$company_id'
+            }
+        }
+    }, {
         '$project': {
             'lists': 0,
             'branch_details': 0,
@@ -403,6 +428,83 @@ issuing_pipeline = [
             'job_card': 0,
             'brand': 0,
             'model': 0
+        }
+    }
+]
+
+issuing_totals_pipeline = [
+    {
+        '$lookup': {
+            'from': 'issuing_items_details',
+            'localField': '_id',
+            'foreignField': 'issue_id',
+            'pipeline': [
+                {
+                    '$project': {
+                        'last_price': '$price',
+                        'final_quantity': '$quantity',
+                        'total': {
+                            '$multiply': [
+                                '$price', '$quantity'
+                            ]
+                        }
+                    }
+                }
+            ],
+            'as': 'items_details_section'
+        }
+    }, {
+        '$lookup': {
+            'from': 'issuing_converters_details',
+            'localField': '_id',
+            'foreignField': 'issue_id',
+            'pipeline': [
+                {
+                    '$project': {
+                        'last_price': '$price',
+                        'final_quantity': '$quantity',
+                        'total': {
+                            '$multiply': [
+                                '$price', '$quantity'
+                            ]
+                        }
+                    }
+                }
+            ],
+            'as': 'converters_details_section'
+        }
+    }, {
+        '$project': {
+            'converters_details_section': 1,
+            'items_details_section': 1
+        }
+    }, {
+        '$addFields': {
+            'totals': {
+                '$add': [
+                    {
+                        '$sum': '$items_details_section.total'
+                    }, {
+                        '$sum': '$converters_details_section.total'
+                    }
+                ]
+            }
+        }
+    }, {
+        '$group': {
+            '_id': None,
+            'total_amount': {
+                '$sum': '$totals'
+            },
+            'total_items_count': {
+                '$sum': 1
+            }
+        }
+    }, {
+        '$project': {
+            '_id': 0,
+            'total_amount': 1,
+            'total_items_count': 1
         }
     }
 ]
@@ -1295,19 +1397,30 @@ async def search_engine_for_issuing(
 ):
     try:
         company_id = data.get("company_id")
+        user_id = ObjectId(data.get("sub"))
         if not company_id:
             raise HTTPException(status_code=400, detail="Company ID missing")
 
         company_id = ObjectId(company_id)
         search_pipeline = copy.deepcopy(issuing_pipeline)
+        totals_search_pipeline = copy.deepcopy(issuing_totals_pipeline)
+        user_branches = await get_user_branches(user_id)
+        print(user_branches)
 
-        match_stage = {}
-        if company_id:
-            match_stage['company_id'] = company_id
+        # match_stage = {}
+        if user_branches:
+            branch_filters = [{"branch": b, "company_id": company_id} for b in user_branches]
+            match_stage: Any = {"$or": branch_filters}
+        else:
+            match_stage = {"company_id": company_id}
+
+
         if filter_issuing.issuing_number:
             match_stage["issuing_number"] = {
                 "$regex": filter_issuing.issuing_number, "$options": "i"
             }
+        if filter_issuing.received_by:
+            match_stage["received_by"] = filter_issuing.received_by
         if filter_issuing.job_card_id:
             match_stage["job_card_id"] = filter_issuing.job_card_id
         if filter_issuing.converter_id:
@@ -1331,6 +1444,10 @@ async def search_engine_for_issuing(
             match_stage.update(date_filter)
 
         search_pipeline.insert(0, {"$match": match_stage})
+        search_pipeline.insert(1, {"$sort": {"date": -1}})
+        search_pipeline.insert(2, {"$limit": 200})
+
+        totals_search_pipeline.insert(0, {"$match": match_stage})
 
         # 3️⃣ Add computed field
         search_pipeline.append({
@@ -1346,80 +1463,20 @@ async def search_engine_for_issuing(
                 }
             }
         })
-        search_pipeline.append({
-            '$facet': {
-                'issuing': [
-                    {
-                        '$sort': {
-                            'issuing_number': -1
-                        }
-                    }, {
-                        '$limit': 200
-                    }, {
-                        '$addFields': {
-                            '_id': {
-                                '$toString': '$_id'
-                            },
-                            'branch': {
-                                '$toString': '$branch'
-                            },
-                            'issue_type': {
-                                '$toString': '$issue_type'
-                            },
-                            'converter_id': {
-                                '$toString': '$converter_id'
-                            },
-                            'received_by': {
-                                '$toString': '$received_by'
-                            },
-                            'company_id': {
-                                '$toString': '$company_id'
-                            },
-                            'job_card_id': {
-                                '$toString': '$job_card_id'
-                            }
-                        }
-                    }
-                ],
-                'grand_totals': [
-                    {
-                        '$group': {
-                            '_id': None,
-                            'grand_total': {
-                                '$sum': '$totals'
-                            },
-                            'grand_count': {
-                                '$sum': 1
-                            }
-                        }
-                    }, {
-                        '$project': {
-                            '_id': 0
-                        }
-                    }
-                ]
-            }
-        })
 
         cursor = await issuing_collection.aggregate(search_pipeline)
         result = await cursor.to_list(None)
-
-        if result and len(result) > 0:
-            data = result[0]
-            receiving = data.get("issuing", [])
-            totals = data.get("grand_totals", [])
-            grand_totals = totals[0] if totals else {"grand_total": 0, "grand_count": 0}
-        else:
-            receiving = []
-            grand_totals = {"grand_totals": 0, "grand_count": 0}
-
+        cursor2 = await issuing_collection.aggregate(totals_search_pipeline)
+        total_result = await cursor2.to_list(None)
         return {
-            "issuing": receiving,
-            "grand_totals": grand_totals
+            "issuing": result if result else [],
+            "grand_totals": total_result[0] if total_result else {"total_amount": 0, "total_items_count": 0},
         }
+
 
 
     except HTTPException:
         raise
     except Exception as e:
+        print(e)
         raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")

@@ -183,6 +183,93 @@ converter_pipeline: list[dict[str, Any]] = [
     }
 ]
 
+converters_totals_pipeline = [
+    {
+        '$lookup': {
+            'from': 'issuing',
+            'let': {
+                'converter_id': '$_id'
+            },
+            'pipeline': [
+                {
+                    '$match': {
+                        '$expr': {
+                            '$eq': [
+                                '$converter_id', '$$converter_id'
+                            ]
+                        }
+                    }
+                }, {
+                    '$lookup': {
+                        'from': 'issuing_items_details',
+                        'let': {
+                            'issue_id': '$_id'
+                        },
+                        'pipeline': [
+                            {
+                                '$match': {
+                                    '$expr': {
+                                        '$eq': [
+                                            '$issue_id', '$$issue_id'
+                                        ]
+                                    }
+                                }
+                            }
+                        ],
+                        'as': 'items_details'
+                    }
+                }, {
+                    '$unwind': '$items_details'
+                }, {
+                    '$addFields': {
+                        'quantity': {
+                            '$ifNull': [
+                                '$items_details.quantity', 0
+                            ]
+                        },
+                        'price': {
+                            '$ifNull': [
+                                '$items_details.price', 0
+                            ]
+                        }
+                    }
+                }, {
+                    '$addFields': {
+                        'total': {
+                            '$multiply': [
+                                '$quantity', '$price'
+                            ]
+                        }
+                    }
+                }
+            ],
+            'as': 'issues'
+        }
+    }, {
+        '$addFields': {
+            'totals': {
+                '$sum': '$issues.total'
+            }
+        }
+    }, {
+        '$group': {
+            '_id': None,
+            'grand_total': {
+                '$sum': '$totals'
+            },
+            'grand_count': {
+                '$sum': 1
+            }
+        }
+    }, {
+        '$project': {
+            '_id': 0,
+            'grand_total': 1,
+            'grand_count': 1
+        }
+    }
+]
+
 
 async def get_converter_details(converter_id: ObjectId):
     new_pipeline = copy.deepcopy(converter_pipeline)
@@ -233,7 +320,6 @@ async def update_converter(converter_id: str, converter: Converter, _: dict = De
             raise HTTPException(status_code=500, detail="Failed to update converter")
 
         updated = await get_converter_details(converter_id)
-        print(updated)
         return {"updated_converter": serializer(updated)}
 
     except HTTPException:
@@ -314,6 +400,7 @@ async def search_engine_for_converters(
 
         company_id = ObjectId(company_id)
         search_pipeline = copy.deepcopy(converter_pipeline)
+        totals_search_pipeline = copy.deepcopy(converters_totals_pipeline)
 
         match_stage = {}
         if company_id:
@@ -349,6 +436,9 @@ async def search_engine_for_converters(
             match_stage.update(date_filter)
 
         search_pipeline.insert(0, {"$match": match_stage})
+        search_pipeline.insert(1, {"$sort": {"date": -1}})
+        search_pipeline.insert(2, {"$limit": 200})
+        totals_search_pipeline.insert(0, {"$match": match_stage})
 
         # 3️⃣ Add computed field
         search_pipeline.append({
@@ -356,45 +446,15 @@ async def search_engine_for_converters(
                 "totals": {"$sum": "$issues.total"},
             }
         })
-        search_pipeline.append({
-            "$facet": {
-                "converters": [
-                    {"$limit": 200},
-                    {"$sort": {"converter_number": -1}},
-                ],
-                "grand_totals": [
-                    {
-                        "$group": {
-                            "_id": None,
-                            "grand_total": {"$sum": "$totals"},
-                        }
-                    },
-                    {
-                        "$project": {
-                            "_id": 0
-                        }
-                    }
-                ]
-            }
-        })
 
         cursor = await converters_collection.aggregate(search_pipeline)
         result = await cursor.to_list(None)
-
-        if result and len(result) > 0:
-            data = result[0]
-            converters = data.get("converters", [])
-            totals = data.get("grand_totals", [])
-            grand_totals = totals[0] if totals else {"grand_total": 0}
-        else:
-            converters = []
-            grand_totals = {"grand_total": 0}
-
+        cursor2 = await converters_collection.aggregate(totals_search_pipeline)
+        total_result = await cursor2.to_list(None)
         return {
-            "converters": converters,
-            "grand_totals": grand_totals
+            "converters": result if result else [],
+            "grand_totals": total_result[0] if total_result else {"grand_total": 0, "grand_count": 0},
         }
-
 
     except HTTPException:
         raise

@@ -650,6 +650,90 @@ pipeline: list[dict[str, Any]] = [
     }
 ]
 
+totals_job_cards_pipeline = [
+    {
+        '$lookup': {
+            'from': 'job_cards_invoice_items',
+            'localField': '_id',
+            'foreignField': 'job_card_id',
+            'as': 'invoice_items_details'
+        }
+    }, {
+        '$addFields': {
+            'total_amount': {
+                '$sum': '$invoice_items_details.total'
+            },
+            'total_vat': {
+                '$sum': '$invoice_items_details.vat'
+            },
+            'total_net': {
+                '$sum': '$invoice_items_details.net'
+            }
+        }
+    }, {
+        '$lookup': {
+            'from': 'all_receipts_invoices',
+            'localField': '_id',
+            'foreignField': 'job_id',
+            'as': 'receipts_invoices_details'
+        }
+    }, {
+        '$addFields': {
+            'paid': {
+                '$sum': '$receipts_invoices_details.amount'
+            }
+        }
+    }, {
+        '$addFields': {
+            'final_outstanding': {
+                '$subtract': [
+                    '$total_net', '$paid'
+                ]
+            }
+        }
+    }, {
+        '$project': {
+            'total_amount': 1,
+            'total_vat': 1,
+            'total_net': 1,
+            'paid': 1,
+            'final_outstanding': 1
+        }
+    }, {
+        '$group': {
+            '_id': None,
+            'total_amount': {
+                '$sum': '$total_amount'
+            },
+            'total_vat': {
+                '$sum': '$total_vat'
+            },
+            'total_net': {
+                '$sum': '$total_net'
+            },
+            'total_outstanding': {
+                '$sum': '$final_outstanding'
+            },
+            'total_paid': {
+                '$sum': '$paid'
+            },
+            'total_items_count': {
+                '$sum': 1
+            }
+        }
+    }, {
+        '$project': {
+            '_id': 0,
+            'total_amount': 1,
+            'total_vat': 1,
+            'total_net': 1,
+            'total_items_count': 1,
+            'total_paid': 1,
+            'total_outstanding': 1
+        }
+    }
+]
+
 
 def serializer(doc: dict) -> dict:
     def convert(value):
@@ -1054,7 +1138,6 @@ async def search_engine_for_job_cards_3(
 
         if filter_jobs.type:
             match_stage["type"] = "SALES" if filter_jobs.type == "SALE" else "JOB"
-            print(match_stage)
 
         if filter_jobs.lpo:
             match_stage["lpo_number"] = {"$regex": filter_jobs.lpo, "$options": "i"}
@@ -1340,57 +1423,110 @@ async def search_engine_for_job_cards_3(
                     "technician": {"$toString": "$technician"},
                 }
             },
-            {
-                "$facet": {
-                    "job_cards": [
-                        {"$limit": 200},
-                        {"$project": {
-                            'car_brand_details': 0,
-                            'car_model_details': 0,
-                            'country_details': 0,
-                            'city_details': 0,
-                            'color_details': 0,
-                            'engine_type_details': 0,
-                            'customer_details': 0,
-                            'salesman_details': 0,
-                            'branch_details': 0,
-                            'currency_details': 0,
-                            'currency_country_details': 0,
-                            'quotation_details': 0,
-                            'user_details': 0,
-                            'list_values': 0,
-                            'receipts_invoices_details': 0
-                        }}
-                    ],
-                    "grand_totals": [
-                        {
-                            "$group": {
-                                "_id": None,
-                                "grand_total": {"$sum": "$total_amount"},
-                                "grand_vat": {"$sum": "$total_vat"},
-                                "grand_net": {"$sum": "$total_net"},
-                                "grand_paid": {"$sum": "$paid"},
-                                "grand_outstanding": {"$sum": "$final_outstanding"},
-                                "grand_count": {"$sum": 1}
+            {"$project": {
+                'car_brand_details': 0,
+                'car_model_details': 0,
+                'country_details': 0,
+                'city_details': 0,
+                'color_details': 0,
+                'engine_type_details': 0,
+                'customer_details': 0,
+                'salesman_details': 0,
+                'branch_details': 0,
+                'currency_details': 0,
+                'currency_country_details': 0,
+                'quotation_details': 0,
+                'user_details': 0,
+                'list_values': 0,
+                'receipts_invoices_details': 0
+            }},
+            {"$limit": 200}
+            # {
+            #     "$facet": {
+            #         "job_cards": [
+            #             {"$limit": 200},
+            #             {"$project": {
+            #                 'car_brand_details': 0,
+            #                 'car_model_details': 0,
+            #                 'country_details': 0,
+            #                 'city_details': 0,
+            #                 'color_details': 0,
+            #                 'engine_type_details': 0,
+            #                 'customer_details': 0,
+            #                 'salesman_details': 0,
+            #                 'branch_details': 0,
+            #                 'currency_details': 0,
+            #                 'currency_country_details': 0,
+            #                 'quotation_details': 0,
+            #                 'user_details': 0,
+            #                 'list_values': 0,
+            #                 'receipts_invoices_details': 0
+            #             }}
+            #         ],
+            #         "grand_totals": [
+            #             {
+            #                 "$group": {
+            #                     "_id": None,
+            #                     "grand_total": {"$sum": "$total_amount"},
+            #                     "grand_vat": {"$sum": "$total_vat"},
+            #                     "grand_net": {"$sum": "$total_net"},
+            #                     "grand_paid": {"$sum": "$paid"},
+            #                     "grand_outstanding": {"$sum": "$final_outstanding"},
+            #                     "grand_count": {"$sum": 1}
+            #                 }
+            #             },
+            #             {"$project": {"_id": 0}}
+            #         ]
+            #     }
+            # }
+        ]
+        job_totals_pipeline: Any = copy.deepcopy(totals_job_cards_pipeline)
+        job_totals_pipeline.insert(0, {
+            "$addFields": {
+                "date_field_to_filter": {
+                    "$switch": {
+                        "branches": [
+                            {
+                                "case": {"$eq": [{"$toLower": "$job_status_1"}, "new"]},
+                                "then": "$job_date"
+                            },
+                            {
+                                "case": {"$eq": [{"$toLower": "$job_status_1"}, "cancelled"]},
+                                "then": "$job_cancellation_date"
+                            },
+                            {
+                                "case": {"$eq": [{"$toLower": "$job_status_1"}, "posted"]},
+                                "then": "$invoice_date"
                             }
-                        },
-                        {"$project": {"_id": 0}}
-                    ]
+                        ],
+                        "default": "$job_date"
+                    }
                 }
             }
-        ]
+        }, )
+        job_totals_pipeline.insert(1, {"$match": match_stage})
 
         cursor = await job_cards_collection.aggregate(pipeline_special)
-        job_cards = await cursor.next()
-        if job_cards.get("job_cards"):
-            all_job_cards = job_cards["job_cards"]
-        else:
-            all_job_cards = []
-        if job_cards.get('grand_totals'):
-            all_grand_totals = job_cards['grand_totals'][0]
-        else:
-            all_grand_totals = {}
-        return {"job_cards": all_job_cards, "grand_totals": all_grand_totals}
+        job_cards = await cursor.to_list(None)
+        cursor2 = await job_cards_collection.aggregate(job_totals_pipeline)
+        total_result = await cursor2.to_list(None)
+        print(total_result)
+        return {
+            "job_cards": job_cards if job_cards else [],
+            "grand_totals": total_result[0] if total_result else {"total_amount": 0, "total_vat": 0,
+                                                                  "total_outstanding": 0, "total_paid": 0,
+                                                                  "total_items_count": 0, "total_net": 0},
+        }
+
+        # if job_cards.get("job_cards"):
+        #     all_job_cards = job_cards["job_cards"]
+        # else:
+        #     all_job_cards = []
+        # if job_cards.get('grand_totals'):
+        #     all_grand_totals = job_cards['grand_totals'][0]
+        # else:
+        #     all_grand_totals = {}
+        # return {"job_cards": all_job_cards, "grand_totals": all_grand_totals}
 
     except Exception as e:
         print(e)
