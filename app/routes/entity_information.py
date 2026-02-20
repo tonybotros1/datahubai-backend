@@ -498,6 +498,41 @@ customer_vendor_pipeline = [
                         'isPrimary': '$$phone.isPrimary'
                     }
                 }
+            },
+            'phone_numbers': {
+                '$reduce': {
+                    'input': {
+                        '$filter': {
+                            'input': {
+                                '$map': {
+                                    'input': '$entity_phone',
+                                    'as': 'phone',
+                                    'in': '$$phone.number'
+                                }
+                            },
+                            'as': 'num',
+                            'cond': {
+                                '$ne': [
+                                    '$$num', None
+                                ]
+                            }
+                        }
+                    },
+                    'initialValue': '',
+                    'in': {
+                        '$concat': [
+                            '$$value', {
+                                '$cond': [
+                                    {
+                                        '$eq': [
+                                            '$$value', ''
+                                        ]
+                                    }, '', ' - '
+                                ]
+                            }, '$$this'
+                        ]
+                    }
+                }
             }
         }
     }
@@ -889,7 +924,7 @@ async def search_engine_for_entity_information(filter_entities: EntityInformatio
         })
         cursor = await entity_information_collection.aggregate(base_search_pipeline)
         results = await cursor.to_list(None)
-        return {"entities": results[0].get('entities',[]),'count' : results[0].get('grand_totals')[0]}
+        return {"entities": results[0].get('entities', []), 'count': results[0].get('grand_totals')[0]}
 
     except Exception as error:
         raise HTTPException(status_code=500, detail=str(error))
