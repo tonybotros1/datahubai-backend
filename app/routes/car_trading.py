@@ -11,11 +11,15 @@ from app import database
 from app.core import security
 from app.database import get_collection
 from datetime import datetime, timezone, timedelta
+
+from app.routes.counters import create_custom_counter
 from app.websocket_config import manager
+from fastapi.encoders import jsonable_encoder
 
 router = APIRouter()
 all_trades_collection = get_collection("all_trades")
 all_trades_items_collection = get_collection("all_trades_items")
+all_trades_purchase_agreement_items_collection = get_collection("all_trades_purchase_agreement_items")
 all_capitals_collection = get_collection("all_capitals")
 all_outstanding_collection = get_collection("all_outstanding")
 all_general_expenses_collection = get_collection("all_general_expenses")
@@ -117,6 +121,7 @@ class CarTradingModel(BaseModel):
     specification: Optional[PyObjectId] = None
     engine_size: Optional[PyObjectId] = None
     year: Optional[PyObjectId] = None
+    vin: Optional[str] = None
     bought_from: Optional[PyObjectId] = None
     sold_to: Optional[PyObjectId] = None
     note: Optional[str] = None
@@ -136,6 +141,23 @@ class LastChangesFilter(BaseModel):
     account_name: Optional[PyObjectId] = None
     from_date: Optional[datetime] = None
     to_date: Optional[datetime] = None
+
+
+class PurchaseAgreementModel(BaseModel):
+    trade_id: Optional[str] = None
+    agreement_date: Optional[datetime] = None
+    agreement_note: Optional[str] = None
+    buyer_name: Optional[str] = None
+    buyer_ID: Optional[str] = None
+    buyer_phone: Optional[str] = None
+    buyer_email: Optional[str] = None
+    seller_name: Optional[str] = None
+    seller_ID: Optional[str] = None
+    seller_phone: Optional[str] = None
+    seller_email: Optional[str] = None
+    note: Optional[str] = None
+    agreement_amount: Optional[float] = None
+    agreement_down_payment: Optional[float] = None
 
 
 def bson_serializer(obj):
@@ -184,6 +206,156 @@ def general_expenses_serialize(document: dict) -> dict:
             document[key] = value.isoformat()
     return document
 
+
+@router.get("/get_purchase_agreement_for_current_trade/{trade_id}")
+async def get_purchase_agreement_for_current_trade(trade_id: str,
+                                                   _: dict = Depends(security.get_current_user)):
+    try:
+        trade_id = ObjectId(trade_id)
+        purchase_agreement_items_pipeline = [
+            {
+                '$match': {
+                    'trade_id': trade_id
+                }
+            }, {
+                '$sort': {
+                    'agreement_number': 1
+                }
+            }, {
+                '$addFields': {
+                    '_id': {
+                        '$toString': '$_id'
+                    },
+                    'trade_id': {
+                        '$toString': '$trade_id'
+                    },
+                    'company_id': {
+                        '$toString': '$company_id'
+                    }
+                }
+            }
+        ]
+        cursor = await all_trades_purchase_agreement_items_collection.aggregate(purchase_agreement_items_pipeline)
+        results = await cursor.to_list(None)
+        return {'purchase_agreement_items': results if results else []}
+
+    except Exception as e:
+        print(e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/add_purchase_agreement_item")
+async def add_purchase_agreement_item(purchase_agreement_item: PurchaseAgreementModel,
+                                      data: dict = Depends(security.get_current_user)):
+    try:
+        company_id = ObjectId(data.get('company_id'))
+        purchase_agreement_item_dict = purchase_agreement_item.model_dump(exclude_unset=True)
+        trade_id = purchase_agreement_item_dict.get("trade_id")
+        if not trade_id:
+            raise HTTPException(status_code=400, detail="No trade id found")
+        new_purchase_agreement_counter = await create_custom_counter("CMP", "CM", data=data,
+                                                                     description='Compass Motors Purchase Agreement')
+
+        purchase_agreement_item_dict.update({
+            "trade_id": ObjectId(purchase_agreement_item_dict["trade_id"]) if purchase_agreement_item_dict[
+                "trade_id"] else None,
+            "company_id": company_id,
+            "createdAt": security.now_utc(),
+            "updatedAt": security.now_utc(),
+            "agreement_number": new_purchase_agreement_counter['final_counter'] if new_purchase_agreement_counter[
+                'success'] else None,
+        })
+
+        result = await all_trades_purchase_agreement_items_collection.insert_one(purchase_agreement_item_dict)
+        if not result.inserted_id:
+            raise HTTPException(status_code=500, detail="Failed to insert purchase agreement item")
+
+        purchase_agreement_item_dict.update({
+            "_id": str(result.inserted_id),
+            "company_id": str(purchase_agreement_item_dict["company_id"]),
+            "trade_id": str(purchase_agreement_item_dict["trade_id"]),
+        })
+
+        encoded_data = jsonable_encoder(purchase_agreement_item_dict)
+        await manager.broadcast({
+            "type": "purchase_agreement_item_created",
+            "data": encoded_data
+        })
+
+
+    except Exception as e:
+        print(e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.patch("/update_purchase_agreement_item/{purchase_item_id}")
+async def update_purchase_agreement_item(purchase_item_id: str, purchase_agreement_item: PurchaseAgreementModel,
+                                         _: dict = Depends(security.get_current_user)):
+    try:
+        purchase_item_id = ObjectId(purchase_item_id)
+        print(purchase_item_id)
+        purchase_agreement_item_details_pipeline = [
+            {
+                '$match': {
+                    '_id': purchase_item_id
+                }
+            }, {
+                '$addFields': {
+                    '_id': {
+                        '$toString': '$_id'
+                    },
+                    'trade_id': {
+                        '$toString': '$trade_id'
+                    },
+                    'company_id': {
+                        '$toString': '$company_id'
+                    }
+                }
+            }
+        ]
+        purchase_agreement_item_dict = purchase_agreement_item.model_dump(exclude_unset=True)
+        purchase_agreement_item_dict.pop("trade_id")
+
+        purchase_agreement_item_dict.update({
+            "updatedAt": security.now_utc(),
+        })
+
+        result = await all_trades_purchase_agreement_items_collection.update_one({"_id": purchase_item_id},
+                                                                                 {"$set": purchase_agreement_item_dict})
+
+        if result.modified_count == 0:
+            raise HTTPException(status_code=404, detail="Purchase Agreement Item not found")
+
+        cursor = await all_trades_purchase_agreement_items_collection.aggregate(purchase_agreement_item_details_pipeline)
+        result = await cursor.next()
+
+        encoded_data = jsonable_encoder(result)
+        await manager.broadcast({
+            "type": "purchase_agreement_item_updated",
+            "data": encoded_data
+        })
+
+
+    except Exception as e:
+        print(e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/delete_purchase_agreement_item/{purchase_id}")
+async def delete_purchase_agreement_item(purchase_id: str, _: dict = Depends(security.get_current_user)):
+    try:
+        result = await all_trades_purchase_agreement_items_collection.delete_one({"_id": ObjectId(purchase_id)})
+        if result.deleted_count == 1:
+            await manager.broadcast({
+                "type": "purchase_agreement_item_deleted",
+                "data": {"_id": purchase_id}
+            })
+            return {"message": "Purchase Agreement Item removed successfully!"}
+        else:
+            raise HTTPException(status_code=404, detail="item not found")
+
+    except Exception as error:
+        return {"message": str(error)}
 
 # =========================================== Capitals and Outstanding Section ===========================================
 
@@ -1111,6 +1283,7 @@ async def add_new_trade(trade: CarTradingModel, data: dict = Depends(security.ge
                 "specification": trade.specification if trade.specification else "",
                 "engine_size": trade.engine_size if trade.engine_size else "",
                 "year": trade.year if trade.year else "",
+                "vin": trade.vin if trade.vin else "",
                 "status": "New",
                 "bought_from": trade.bought_from if trade.bought_from else "",
                 "sold_to": trade.sold_to if trade.sold_to else "",
@@ -1396,6 +1569,7 @@ async def search_engine_for_car_trading(
                 "car_brand": {"$first": "$car_brand"},
                 "car_model": {"$first": "$car_model"},
                 "car_year": {"$first": "$year"},
+                "vin": {"$first": "$vin"},
                 "car_color_in": {"$first": "$color_in"},
                 "car_color_out": {"$first": "$color_out"},
                 "car_specification": {"$first": "$specification"},
@@ -1509,6 +1683,7 @@ async def search_engine_for_car_trading(
                 "engine_size_id": {"$ifNull": ["$car_engine_size._id", ""]},
                 "engine_size": {"$ifNull": ["$car_engine_size.name", ""]},
                 "mileage": {"$ifNull": ["$mileage", 0]},
+                "vin": {"$ifNull": ["$vin", ""]},
                 "bought_from_id": {"$ifNull": ["$car_bought_from._id", ""]},
                 "bought_from": {"$ifNull": ["$car_bought_from.name", ""]},
                 "sold_to_id": {"$ifNull": ["$car_sold_to._id", ""]},
@@ -1587,6 +1762,9 @@ async def delete_trade(trade_id: str, _: dict = Depends(security.get_current_use
                 {"_id": ObjectId(trade_id)}, session=session
             )
             await all_trades_items_collection.delete_many(
+                {"trade_id": ObjectId(trade_id)}, session=session
+            )
+            await all_trades_purchase_agreement_items_collection.delete_many(
                 {"trade_id": ObjectId(trade_id)}, session=session
             )
             await session.commit_transaction()  # commit the transaction
