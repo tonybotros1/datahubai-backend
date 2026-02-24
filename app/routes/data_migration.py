@@ -14,6 +14,7 @@ from app.routes.countries_and_cities import add_new_city
 from app.routes.employees import create_employee, EmployeesModel
 from app.routes.inventory_items import InventoryItem, add_new_inventory_item
 from app.routes.invoice_items import InvoiceItem, add_new_invoice_item
+from app.routes.job_tasks import JobTaskModel, add_new_job_task
 from app.routes.list_of_values import add_new_value
 from app.routes.salesman import add_new_salesman, SaleManModel
 import pandas as pd
@@ -50,6 +51,15 @@ receiving_collection = get_collection("receiving")
 receiving_items_collection = get_collection("receiving_items")
 employees_collection = get_collection("employees")
 inventory_items_collection = get_collection("inventory_items")
+
+time_sheets_collection = get_collection("time_sheets")
+job_tasks_collection = get_collection("all_job_tasks")
+
+converters_collection = get_collection("converters")
+
+issuing_collection = get_collection("issuing")
+issuing_items_details_collection = get_collection("issuing_items_details")
+issuing_converters_details_collection = get_collection("issuing_converters_details")
 
 
 def normalize_number_to_string(value):
@@ -147,8 +157,366 @@ async def get_file(file: UploadFile = File(...), screen_name: str = Form(...),
             await dealing_with_receiving_header(file, data, delete_every_thing)
         elif screen_name.lower() == 'receiving items':
             await dealing_with_receiving_items(file, data, delete_every_thing)
+        elif screen_name.lower() == 'time sheets':
+            await dealing_with_time_sheets(file, data, delete_every_thing)
+        elif screen_name.lower() == 'converters':
+            await dealing_with_converters(file, data, delete_every_thing)
+        elif screen_name.lower() == 'issuing header':
+            await dealing_with_issuing_header(file, data, delete_every_thing)
+        elif screen_name.lower() == 'issuing items details':
+            await dealing_with_issuing_items_details(file, data, delete_every_thing)
+        elif screen_name.lower() == 'issuing converters details':
+            await dealing_with_issuing_converters_details(file, data, delete_every_thing)
 
 
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# =========================== Converters Section ===========================
+async def dealing_with_issuing_converters_details(file, data, delete_every_thing):
+    try:
+        company_id = ObjectId(data.get('company_id'))
+        if delete_every_thing:
+            await issuing_converters_details_collection.delete_many({'company_id': company_id})
+        contents = await file.read()
+        df = pd.read_excel(BytesIO(contents))
+        df = df.fillna("")
+        total_rows = len(df)
+        existing_issuing = {b.get("issue_id", None): ObjectId(b["_id"]) for b in
+                            await issuing_collection.find({"company_id": company_id}).to_list()}
+        print("got existing_issuing")
+        existing_converters = {b.get("converter_id", None): ObjectId(b['_id']) for b in
+                               await converters_collection.find({"company_id": company_id}).to_list()}
+        print("got existing_converters")
+
+        await manager.broadcast({"type": "start", "total": total_rows})
+        for i, row in enumerate(df.itertuples(index=False), start=1):
+            issue_id = int(row[0])
+            converter_id = int(row[1])
+            quantity = int(row[2])
+            price = safe_float(row[3])
+
+            if issue_id:
+                current_issue_id = existing_issuing.get(issue_id, None)
+            else:
+                current_issue_id = None
+
+            if converter_id:
+                current_converter_id = existing_converters.get(converter_id, None)
+            else:
+                current_converter_id = None
+
+            if current_issue_id:
+                issuing_converter_details_dict = {
+                    "company_id": company_id,
+                    "converter_id": ObjectId(current_converter_id),
+                    "quantity": quantity,
+                    "price": price,
+                    "issue_id": current_issue_id,
+                    "createdAt": security.now_utc(),
+                    "updatedAt": security.now_utc(),
+                }
+                await issuing_converters_details_collection.insert_one(issuing_converter_details_dict)
+                print(i)
+            progress = int((i / total_rows) * 100)
+            await manager.send_progress(progress)
+        await manager.broadcast({"type": "done"})
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+async def dealing_with_issuing_items_details(file, data, delete_every_thing):
+    try:
+        company_id = ObjectId(data.get('company_id'))
+        if delete_every_thing:
+            await issuing_items_details_collection.delete_many({'company_id': company_id})
+
+        contents = await file.read()
+        df = pd.read_excel(BytesIO(contents))
+        df = df.fillna("")
+        total_rows = len(df)
+        existing_issuing = {b.get("issue_id", None): ObjectId(b["_id"]) for b in
+                            await issuing_collection.find({"company_id": company_id}).to_list()}
+        print("got existing_issuing")
+        existing_inventory_items = {b.get("code", None): ObjectId(b['_id']) for b in
+                                    await inventory_items_collection.find({"company_id": company_id}).to_list()}
+        print("got existing_inventory_items")
+
+        await manager.broadcast({"type": "start", "total": total_rows})
+        for i, row in enumerate(df.itertuples(index=False), start=1):
+            issue_id = int(row[0])
+            # item_code = row[1]
+            item_name = row[2]
+            quantity = int(row[3])
+            price = safe_float(row[4])
+
+            if item_name:
+                inventory_item_id = existing_inventory_items.get(str(item_name.upper().strip()))
+                if not inventory_item_id:
+                    item_model = InventoryItem(
+                        name=str(item_name).upper().strip(),
+                        code=str(item_name).upper().strip(),
+                        min_quantity=0,
+                    )
+                    new_item = await add_new_inventory_item(inventory_item=item_model, data=data)
+                    inventory_item_id = ObjectId(new_item['item']['_id'])
+                    existing_inventory_items[str(item_name.upper().strip())] = inventory_item_id
+                    print(f"yes added new inventory item: {inventory_item_id}")
+
+            else:
+                inventory_item_id = None
+
+            if issue_id:
+                current_issue_id = existing_issuing.get(issue_id, None)
+            else:
+                current_issue_id = None
+
+            issue_item_details_dict = {
+                "company_id": company_id,
+                "inventory_item_id": ObjectId(inventory_item_id),
+                "quantity": quantity,
+                "price": price,
+                "createdAt": security.now_utc(),
+                "updatedAt": security.now_utc(),
+                "issue_id": ObjectId(current_issue_id)
+            }
+            if issue_item_details_dict:
+                await issuing_items_details_collection.insert_one(issue_item_details_dict)
+                print(i)
+            progress = int((i / total_rows) * 100)
+            await manager.send_progress(progress)
+        await manager.broadcast({"type": "done"})
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+async def dealing_with_issuing_header(file, data, delete_every_thing):
+    try:
+        company_id = ObjectId(data.get('company_id'))
+        if delete_every_thing:
+            await issuing_collection.delete_many({'company_id': company_id})
+            await issuing_items_details_collection.delete_many({'company_id': company_id})
+            await issuing_converters_details_collection.delete_many({'company_id': company_id})
+
+        contents = await file.read()
+        df = pd.read_excel(BytesIO(contents))
+        df = df.fillna("")
+        total_rows = len(df)
+        df['HD_DATE'] = pd.to_datetime(df['HD_DATE'], errors='coerce')
+        dubai_branch_id = ObjectId("6985ce2cb11b34fc2024f5fa")
+        existing_job_cards = {b.get("job_id", None): ObjectId(b["_id"]) for b in
+                              await job_cards_collection.find({"company_id": company_id}).to_list()}
+        print("got existing_job_cards")
+
+        existing_converters = {b.get("converter_id", None): ObjectId(b["_id"]) for b in
+                               await converters_collection.find({"company_id": company_id}).to_list()}
+        print("got existing_converters")
+
+        issue_type_list = await list_collection.find_one({"code": 'ISSUE_TYPES'}, {"_id": 1})
+        issue_type_list_id = issue_type_list['_id']
+        existing_issue_types_values = {b.get("name", None).capitalize(): ObjectId(b['_id']) for b in
+                                       await value_collection.find({"list_id": ObjectId(issue_type_list_id)}).to_list(
+                                           None)}
+        print("got existing_issue_types_values")
+        issue_to_list = await list_collection.find_one({"code": 'ISSUE_RECEIVE_PEOPLE'}, {"_id": 1})
+        issue_to_list_id = issue_to_list['_id']
+        existing_issue_to_values = {b.get("name", None).capitalize(): ObjectId(b['_id']) for b in
+                                    await value_collection.find({"list_id": ObjectId(issue_to_list_id)}).to_list(
+                                        None)}
+
+        await manager.broadcast({"type": "start", "total": total_rows})
+        for i, row in enumerate(df.itertuples(index=False), start=1):
+            issue_id = int(row[0])
+            date = to_mongo_datetime(row[1])
+            issue_type = row[2].capitalize()
+            job_converter_id = int(row[3])
+            # branch = row[4]
+            issue_to = row[5].capitalize()
+            notes = row[6]
+            status = row[7].capitalize()
+
+            if issue_type:
+                issue_type_id = existing_issue_types_values.get(str(issue_type))
+            else:
+                issue_type_id = None
+
+            if issue_to:
+                issue_to_id = existing_issue_to_values.get(str(issue_to))
+            else:
+                issue_to_id = None
+
+            job_id = None
+            converter_id = None
+            if job_converter_id:
+                if issue_type.lower() == 'job card':
+                    job_id = existing_job_cards.get(job_converter_id, None)
+                else:
+                    converter_id = existing_converters.get(str(job_converter_id), None)
+            else:
+                job_id = None
+                converter_id = None
+
+            issuing_dict = {
+                'company_id': company_id,
+                "issue_id": issue_id,
+                "date": date,
+                "branch": dubai_branch_id,
+                "issue_type": issue_type_id,
+                "job_card_id": job_id,
+                "converter_id": converter_id,
+                "note": notes,
+                "received_by": issue_to_id,
+                "status": status,
+                "createdAt": security.now_utc(),
+                "updatedAt": security.now_utc(),
+                "issuing_number": issue_id
+            }
+            if issuing_dict:
+                await issuing_collection.insert_one(issuing_dict)
+                print(i)
+            progress = int((i / total_rows) * 100)
+            await manager.send_progress(progress)
+        await manager.broadcast({"type": "done"})
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# =========================== Converters Section ===========================
+async def dealing_with_converters(file, data, delete_every_thing):
+    try:
+        company_id = ObjectId(data.get('company_id'))
+        if delete_every_thing:
+            await converters_collection.delete_many({'company_id': company_id})
+        contents = await file.read()
+        df = pd.read_excel(BytesIO(contents))
+        df = df.fillna("")
+        total_rows = len(df)
+        df['HD_DATE'] = pd.to_datetime(df['HD_DATE'], errors='coerce')
+
+        await manager.broadcast({"type": "start", "total": total_rows})
+        for i, row in enumerate(df.itertuples(index=False), start=1):
+            converter_id = int(row[0])
+            date = to_mongo_datetime(row[1])
+            converter_number = row[2]
+            converter_name = row[3]
+            note = row[4]
+            status = row[5].capitalize()
+
+            converter_dict = {
+                "converter_id": converter_id,
+                'company_id': company_id,
+                "date": date,
+                "status": status,
+                "description": note,
+                "converter_number": str(converter_number),
+                "name": converter_name,
+                "createdAt": security.now_utc(),
+                "updatedAt": security.now_utc(),
+            }
+            await converters_collection.insert_one(converter_dict)
+            print(i)
+            progress = int((i / total_rows) * 100)
+            await manager.send_progress(progress)
+        await manager.broadcast({"type": "done"})
+
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# =========================== Time Sheets Section ===========================
+async def dealing_with_time_sheets(file, data, delete_every_thing):
+    try:
+        company_id = ObjectId(data.get('company_id'))
+        if delete_every_thing:
+            await time_sheets_collection.delete_many({'company_id': company_id})
+            await job_tasks_collection.delete_many({'company_id': company_id})
+
+        contents = await file.read()
+        df = pd.read_excel(BytesIO(contents))
+        df = df.fillna("")
+        total_rows = len(df)
+        df['START_DATE'] = pd.to_datetime(df['START_DATE'], errors='coerce')
+        df['END_DATE'] = pd.to_datetime(df['END_DATE'], errors='coerce')
+
+        existing_job_cards = {b.get("job_id", None): ObjectId(b["_id"]) for b in
+                              await job_cards_collection.find({"company_id": company_id}).to_list()}
+        print("got existing_job_cards")
+        existing_job_tasks = {b.get("name_en", None): ObjectId(b["_id"]) for b in
+                              await job_tasks_collection.find({"company_id": company_id}).to_list()}
+        print("got existing_job_tasks")
+        existing_values = {b["name"].strip(): ObjectId(b["_id"]) for b in
+                           await value_collection.find({}).to_list(length=None)}
+        print("got existing_values")
+
+        await manager.broadcast({"type": "start", "total": total_rows})
+        for i, row in enumerate(df.itertuples(index=False), start=1):
+            job_id = row[0]
+            employee = row[1]
+            start_date = to_mongo_datetime(row[2]) if row[2] else None
+            end_date = to_mongo_datetime(row[3]) if row[3] else None
+            task_en = str(row[4]).strip()
+            task_ar = str(row[5]).strip()
+            category = str(row[6]).strip()
+            points = float(row[7]) if row[7] != "" else 0
+
+            if employee:
+                employee_id = existing_values.get(employee.strip())
+            else:
+                employee_id = None
+
+            try:
+                if task_en:
+                    task_en_id = existing_job_tasks.get(str(task_en))
+                    if not task_en_id:
+                        task_model = JobTaskModel(
+                            name_en=task_en,
+                            name_ar=task_ar,
+                            category=str(category),
+                            points=float(points),
+                        )
+                        new_task_en = await add_new_job_task(task=task_model, data=data)
+                        task_en_id = ObjectId(new_task_en['task']['_id'])
+                        existing_job_tasks[task_en] = task_en_id
+                        print("added new job task")
+                else:
+                    task_en_id = None
+            except Exception as row_err:
+                # This will show exactly which row failed
+                print(f"Error job tasks processing row {i}: {row_err}")
+                raise
+
+            if job_id:
+                job_card_id = existing_job_cards.get(int(job_id), None)
+            else:
+                job_card_id = None
+
+            if job_card_id:
+                time_sheets_dict = {
+                    "company_id": company_id,
+                    "createdAt": security.now_utc(),
+                    "updatedAt": security.now_utc(),
+                    "job_id": job_card_id,
+                    "task_id": task_en_id,
+                    "employee_id": employee_id,
+                    "start_date": start_date,
+                    "end_date": end_date,
+                    "active_periods": [
+                        {
+                            "from": start_date,
+                            "to": end_date,
+                        }
+                    ]
+                }
+                await time_sheets_collection.insert_one(time_sheets_dict)
+                print(i)
+            progress = int((i / total_rows) * 100)
+            await manager.send_progress(progress)
+        await manager.broadcast({"type": "done"})
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -188,7 +556,7 @@ async def dealing_with_receiving_items(file, data, delete_every_thing: bool):
             inventory_item_id = None
             if receiving_id:
                 matched_receiving_id = existing_receiving.get(int(receiving_id), None)
-                if matched_receiving_id:
+                if not matched_receiving_id:
 
                     if inventory_item_name:
                         inventory_item_id = existing_inventory_items.get(str(inventory_item_name.upper().strip()))

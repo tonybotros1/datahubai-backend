@@ -68,6 +68,8 @@ async def add_new_job_task(task: JobTaskModel, data: dict = Depends(security.get
             "data": serialized
         })
 
+        return {"task" : serialized}
+
     except HTTPException:
         raise
     except Exception as e:
