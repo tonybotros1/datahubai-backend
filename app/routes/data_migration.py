@@ -354,7 +354,7 @@ async def dealing_with_issuing_header(file, data, delete_every_thing):
                 if issue_type.lower() == 'job card':
                     job_id = existing_job_cards.get(job_converter_id, None)
                 else:
-                    converter_id = existing_converters.get(str(job_converter_id), None)
+                    converter_id = existing_converters.get(job_converter_id, None)
             else:
                 job_id = None
                 converter_id = None
@@ -372,7 +372,7 @@ async def dealing_with_issuing_header(file, data, delete_every_thing):
                 "status": status,
                 "createdAt": security.now_utc(),
                 "updatedAt": security.now_utc(),
-                "issuing_number": issue_id
+                "issuing_number": str(issue_id)
             }
             if issuing_dict:
                 await issuing_collection.insert_one(issuing_dict)
