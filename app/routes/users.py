@@ -59,12 +59,10 @@ async def get_all_users(data: dict = Depends(security.get_current_user)):
             "branches": 1,
             "primary_branch": 1,
             "status": 1,
-            "is_admin":1,
+            "is_admin": 1,
             "expiry_date": 1,
             "createdAt": 1,
             "updatedAt": 1}).to_list(None)
-
-        print(all_users)
 
         return {"users": [serializer(u) for u in all_users]}
 
@@ -307,3 +305,18 @@ async def get_company_admin_roles(data: dict = Depends(security.get_current_user
     except Exception as e:
         print(e)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/get_all_users_for_lov")
+async def get_all_users_for_lov(data: dict = Depends(security.get_current_user)):
+    try:
+        all_users = await users_collection.find({"company_id": ObjectId(data.get("company_id"))}, {
+            "_id": 1,
+            "user_name": 1}).to_list(None)
+
+        print(all_users)
+
+        return {"users": [serializer(u) for u in all_users]}
+
+    except Exception as e:
+        return {"message": str(e)}

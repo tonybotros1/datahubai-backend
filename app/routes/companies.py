@@ -520,7 +520,8 @@ async def get_current_company_details(data: dict = Depends(security.get_current_
                             '$project': {
                                 '_id': 1,
                                 'is_admin': 1,
-                                'branch_details': 1
+                                'branch_details': 1,
+                                'user_name': 1
                             }
                         }
                     ],
@@ -536,6 +537,16 @@ async def get_current_company_details(data: dict = Depends(security.get_current_
                     'current_user_branch_name': {
                         '$ifNull': [
                             '$current_user_details.branch_details.name', None
+                        ]
+                    },
+                    'current_user_name': {
+                        '$ifNull': [
+                            '$current_user_details.user_name', None
+                        ]
+                    },
+                    'current_user_id': {
+                        '$ifNull': [
+                            '$current_user_details._id', None
                         ]
                     },
                     'current_user_branch_id': {
