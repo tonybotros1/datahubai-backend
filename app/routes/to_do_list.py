@@ -1,9 +1,13 @@
 import copy
 from typing import Optional, Any
 from bson import ObjectId
+from bson.errors import InvalidId
 from fastapi import APIRouter, HTTPException, Depends
 from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel
+from pymongo import ReturnDocument
+from pymongo.errors import PyMongoError
+
 from app import database
 from app.core import security
 from app.database import get_collection
@@ -16,6 +20,7 @@ from app.websocket_config import manager
 router = APIRouter()
 to_do_list_collection = get_collection("to_do_list")
 to_do_list_description_collection = get_collection("to_do_list_description")
+users_collection = get_collection("sys-users")
 
 
 class ToDoListModel(BaseModel):
@@ -38,103 +43,153 @@ class TaskModel(BaseModel):
     to_date: Optional[datetime] = None
 
 
+class UpdateTaskModel(BaseModel):
+    status: Optional[str] = None
+
+
 class DescriptionNoteModel(BaseModel):
     to_do_list_id: Optional[str] = None
     type: Optional[str] = None
     description: Optional[str] = None
 
 
-task_details_pipeline = [
-    {
-        '$lookup': {
-            'from': 'sys-users',
-            'let': {
-                'createdBy': '$created_by',
-                'assignedTo': '$assigned_to'
-            },
-            'pipeline': [
-                {
-                    '$match': {
-                        '$expr': {
-                            '$in': [
-                                '$_id', [
-                                    '$$createdBy', '$$assignedTo'
+def task_details_pipeline(user_id: ObjectId)-> list:
+    return [
+        {
+            '$lookup': {
+                'from': 'sys-users',
+                'let': {
+                    'createdBy': '$created_by',
+                    'assignedTo': '$assigned_to'
+                },
+                'pipeline': [
+                    {
+                        '$match': {
+                            '$expr': {
+                                '$in': [
+                                    '$_id', [
+                                        '$$createdBy', '$$assignedTo'
+                                    ]
                                 ]
-                            ]
+                            }
+                        }
+                    }, {
+                        '$project': {
+                            '_id': 1,
+                            'user_name': 1
                         }
                     }
-                }, {
-                    '$project': {
-                        '_id': 1,
-                        'user_name': 1
+                ],
+                'as': '_users'
+            }
+        },
+        {
+            '$lookup': {
+                'from': 'to_do_list_description',
+                'let': {
+                    'taskId': '$_id'
+                },
+                'pipeline': [
+                    {
+                        '$match': {
+                            '$expr': {
+                                '$and': [
+                                    {
+                                        '$eq': [
+                                            '$to_do_list_id', '$$taskId'
+                                        ]
+                                    }, {
+                                        '$eq': [
+                                            '$read', False
+                                        ]
+                                    }, {
+                                        '$eq': ["$receiver_id", user_id]
+                                    }
+                                ]
+                            }
+                        }
+                    }, {
+                        '$count': 'unread_count'
                     }
+                ],
+                'as': 'unread_notes'
+            }
+        }, {
+            '$addFields': {
+                'unread_notes_count': {
+                    '$ifNull': [
+                        {
+                            '$first': '$unread_notes.unread_count'
+                        }, 0
+                    ]
                 }
-            ],
-            'as': '_users'
-        }
-    }, {
-        '$set': {
-            'created_by_details': {
-                '$first': {
-                    '$filter': {
-                        'input': '$_users',
-                        'as': 'u',
-                        'cond': {
-                            '$eq': [
-                                '$$u._id', '$created_by'
-                            ]
+            }
+        }, {
+            '$unset': 'unread_notes'
+        },
+        {
+            '$set': {
+                'created_by_details': {
+                    '$first': {
+                        '$filter': {
+                            'input': '$_users',
+                            'as': 'u',
+                            'cond': {
+                                '$eq': [
+                                    '$$u._id', '$created_by'
+                                ]
+                            }
                         }
                     }
-                }
-            },
-            'assigned_to_details': {
-                '$first': {
-                    '$filter': {
-                        'input': '$_users',
-                        'as': 'u',
-                        'cond': {
-                            '$eq': [
-                                '$$u._id', '$assigned_to'
-                            ]
+                },
+                'assigned_to_details': {
+                    '$first': {
+                        '$filter': {
+                            'input': '$_users',
+                            'as': 'u',
+                            'cond': {
+                                '$eq': [
+                                    '$$u._id', '$assigned_to'
+                                ]
+                            }
                         }
                     }
                 }
             }
-        }
-    }, {
-        '$unset': '_users'
-    }, {
-        '$addFields': {
-            'created_by_name': {
-                '$ifNull': [
-                    '$created_by_details.user_name', ''
-                ]
-            },
-            'assigned_to_name': {
-                '$ifNull': [
-                    '$assigned_to_details.user_name', ''
-                ]
-            },
-            '_id': {
-                '$toString': '$_id'
-            },
-            'created_by': {
-                '$toString': '$created_by'
-            },
-            'assigned_to': {
-                '$toString': '$assigned_to'
-            },
-            'company_id': {
-                '$toString': '$company_id'
+        }, {
+            '$unset': '_users'
+        }, {
+            '$addFields': {
+                'created_by_name': {
+                    '$ifNull': [
+                        '$created_by_details.user_name', ''
+                    ]
+                },
+                'assigned_to_name': {
+                    '$ifNull': [
+                        '$assigned_to_details.user_name', ''
+                    ]
+                },
+                '_id': {
+                    '$toString': '$_id'
+                },
+                'created_by': {
+                    '$toString': '$created_by'
+                },
+                'assigned_to': {
+                    '$toString': '$assigned_to'
+                },
+                'company_id': {
+                    '$toString': '$company_id'
+                }
+            }
+        }, {
+            '$project': {
+                'created_by_details': 0,
+                'assigned_to_details': 0
             }
         }
-    }, {
-        '$project': {
-            'created_by_details': 0,
-            'assigned_to_details': 0
-        }
-    }
-]
+    ]
 
 
 def task_description_pipeline(task_id: ObjectId, user_id: ObjectId):
@@ -189,7 +244,13 @@ def task_description_pipeline(task_id: ObjectId, user_id: ObjectId):
                             },
                             'company_id': {
                                 '$toString': '$company_id'
+                            }, 'sender_id': {
+                                '$toString': '$sender_id'
+                            },
+                            'receiver_id': {
+                                '$toString': '$receiver_id'
                             }
+
                         }
                     }, {
                         '$unset': 'user_details'
@@ -205,29 +266,132 @@ def task_description_pipeline(task_id: ObjectId, user_id: ObjectId):
     ]
 
 
+# @router.post("/add_new_task")
+# async def add_new_task(to_do_list: ToDoListModel, data: dict = Depends(security.get_current_user)):
+#     async with database.client.start_session() as session:
+#         try:
+#             await session.start_transaction()
+#             company_id = ObjectId(data.get('company_id'))
+#             user_id = ObjectId(data.get('sub'))
+#             new_task_counter = await create_custom_counter("TDN", "T", data=data, description='To-Do Number',
+#                                                            session=session)
+#
+#             to_do_list = to_do_list.model_dump(exclude_unset=True)
+#             description = to_do_list.pop("description", None)
+#             to_do_list.update({
+#                 "number": new_task_counter['final_counter'] if new_task_counter['success'] else None,
+#                 "status": "Open",
+#                 "company_id": company_id,
+#                 "createdAt": security.now_utc(),
+#                 "updatedAt": security.now_utc(),
+#                 "created_by": ObjectId(to_do_list["created_by"]) if to_do_list["created_by"] else None,
+#                 "assigned_to": ObjectId(to_do_list["assigned_to"]) if to_do_list["assigned_to"] else None,
+#             })
+#             result = await to_do_list_collection.insert_one(to_do_list, session=session)
+#             to_do_list_id = result.inserted_id
+#
+#             await to_do_list_description_collection.insert_one({
+#                 "to_do_list_id": to_do_list_id,
+#                 "user_id": user_id,
+#                 "type": "text",
+#                 "description": description,
+#                 "company_id": company_id,
+#                 "createdAt": security.now_utc(),
+#                 "updatedAt": security.now_utc(),
+#                 "sender_id": ObjectId(to_do_list["created_by"]) if to_do_list["created_by"] else None,
+#                 "receiver_id": ObjectId(to_do_list["assigned_to"]) if to_do_list["assigned_to"] else None,
+#                 "read": False,
+#                 "read_at": None
+#             }, session=session)
+#             await session.commit_transaction()
+#
+#             to_do_list.update({
+#                 "_id": str(to_do_list_id),
+#                 "created_by": str(to_do_list["created_by"]) if to_do_list["created_by"] else None,
+#                 "assigned_to": str(to_do_list["assigned_to"]) if to_do_list["assigned_to"] else None,
+#             })
+#             #
+#             sender_id = ObjectId(to_do_list["created_by"]) if to_do_list["created_by"] else None
+#             receiver_id = ObjectId(to_do_list["assigned_to"]) if to_do_list["assigned_to"] else None
+#             # 3) chat message للطرفين
+#
+#             chat_event = {
+#                 "type": "new_task_created",
+#                 "data": jsonable_encoder(to_do_list),
+#             }
+#             #
+#             await manager.send_to_user(str(sender_id), chat_event)
+#             # if receiver_id and receiver_id != sender_id:
+#             #     await manager.send_to_user(str(receiver_id), chat_event)
+#             #
+#             #     # badge للمستلم فقط
+#             #     unread_total = await to_do_list_description_collection.count_documents({
+#             #         "company_id": company_id,
+#             #         "receiver_id": receiver_id,
+#             #         "read": False
+#             #     })
+#             #
+#             #     await manager.send_to_user(str(receiver_id), {
+#             #         "type": "chat_unread",
+#             #         "task_id": str(to_do_list_id),
+#             #         "preview": (description or "")[:60],
+#             #         "unread_total": unread_total
+#             #     })
+#
+#         except Exception as e:
+#             await session.abort_transaction()
+#             print(e)
+#             raise HTTPException(status_code=500, detail=str(e))
+
+
+async def get_task_details(task_id: ObjectId,user_id:ObjectId):
+    base_search_pipeline = task_details_pipeline(user_id)
+    base_search_pipeline.insert(0, {
+        '$match': {"_id": task_id}
+    })
+    cursor = await to_do_list_collection.aggregate(base_search_pipeline)
+    results = await cursor.next()
+    return results
+
+
 @router.post("/add_new_task")
-async def add_new_task(to_do_list: ToDoListModel, data: dict = Depends(security.get_current_user)):
+async def add_new_task(
+        to_do_list: ToDoListModel,
+        data: dict = Depends(security.get_current_user)
+):
     async with database.client.start_session() as session:
         try:
             await session.start_transaction()
-            company_id = ObjectId(data.get('company_id'))
-            user_id = ObjectId(data.get('sub'))
-            new_task_counter = await create_custom_counter("TDN", "T", data=data, description='To-Do Number',
-                                                           session=session)
+            company_id = ObjectId(data.get("company_id"))
+            user_id = ObjectId(data.get("sub"))
 
-            to_do_list = to_do_list.model_dump(exclude_unset=True)
-            description = to_do_list.pop("description", None)
-            to_do_list.update({
-                "number": new_task_counter['final_counter'] if new_task_counter['success'] else None,
+            new_task_counter = await create_custom_counter(
+                "TDN",
+                "T",
+                data=data,
+                description="To-Do Number",
+                session=session
+            )
+
+            task_data = to_do_list.model_dump(exclude_unset=True)
+            description = task_data.pop("description", None)
+
+            created_by = ObjectId(task_data["created_by"]) if task_data.get("created_by") else None
+            assigned_to = ObjectId(task_data["assigned_to"]) if task_data.get("assigned_to") else None
+
+            task_data.update({
+                "number": new_task_counter["final_counter"] if new_task_counter["success"] else None,
                 "status": "Open",
                 "company_id": company_id,
                 "createdAt": security.now_utc(),
                 "updatedAt": security.now_utc(),
-                "created_by": ObjectId(to_do_list["created_by"]) if to_do_list["created_by"] else None,
-                "assigned_to": ObjectId(to_do_list["assigned_to"]) if to_do_list["assigned_to"] else None,
+                "created_by": created_by,
+                "assigned_to": assigned_to,
             })
-            result = await to_do_list_collection.insert_one(to_do_list, session=session)
+
+            result = await to_do_list_collection.insert_one(task_data, session=session)
             to_do_list_id = result.inserted_id
+
             await to_do_list_description_collection.insert_one({
                 "to_do_list_id": to_do_list_id,
                 "user_id": user_id,
@@ -236,16 +400,68 @@ async def add_new_task(to_do_list: ToDoListModel, data: dict = Depends(security.
                 "company_id": company_id,
                 "createdAt": security.now_utc(),
                 "updatedAt": security.now_utc(),
+                "sender_id": created_by,
+                "receiver_id": assigned_to,
+                "read": False,
+                "read_at": None
             }, session=session)
+
+            # ✅ Transaction committed successfully here
             await session.commit_transaction()
-            await manager.broadcast({
-                "type": "new_task_added",
-                "data": ""
-            })
-        except Exception as e:
+
+        except PyMongoError as e:
+            # 🔴 Database / transaction errors
             await session.abort_transaction()
-            print(e)
-            raise HTTPException(status_code=500, detail=str(e))
+            print("Transaction Error:", e)
+            raise HTTPException(status_code=500, detail="Database transaction failed")
+
+        except Exception as e:
+            # 🔴 Any other unexpected errors
+            print("Unexpected Error:", e)
+            raise HTTPException(status_code=500, detail="Unexpected server error")
+
+    # =========================================================
+    # AFTER successful transaction → prepare frontend response
+    # =========================================================
+
+    # Convert ALL ObjectIds to string
+    # response_data = {
+    #     **task_data,
+    #     "_id": str(to_do_list_id),
+    #     "company_id": str(company_id),
+    #     "created_by": str(created_by) if created_by else None,
+    #     "assigned_to": str(assigned_to) if assigned_to else None,
+    # }
+
+    response_data = await get_task_details(to_do_list_id,user_id)
+
+    chat_event = {
+        "type": "new_task_created",
+        "data": jsonable_encoder(response_data),
+    }
+
+    sender_id = created_by
+    receiver_id = assigned_to
+
+    await manager.send_to_user(str(user_id), chat_event)
+
+    if receiver_id and receiver_id != sender_id:
+        await manager.send_to_user(str(receiver_id), chat_event)
+
+        unread_total = await to_do_list_description_collection.count_documents({
+            "company_id": company_id,
+            "receiver_id": receiver_id,
+            "read": False
+        })
+
+        await manager.send_to_user(str(receiver_id), {
+            "type": "chat_unread",
+            "task_id": str(to_do_list_id),
+            "preview": (description or "")[:60],
+            "unread_total": unread_total
+        })
+
+    return response_data
 
 
 @router.get("/get_task_descriptions/{task_id}")
@@ -320,6 +536,12 @@ async def get_description_note_data(note_id: ObjectId, user_id: ObjectId):
                     },
                     'company_id': {
                         '$toString': '$company_id'
+                    },
+                    'sender_id': {
+                        '$toString': '$sender_id'
+                    },
+                    'receiver_id': {
+                        '$toString': '$receiver_id'
                     }
                 }
             }, {
@@ -337,30 +559,157 @@ async def get_description_note_data(note_id: ObjectId, user_id: ObjectId):
 
 
 @router.post("/add_new_task_description_note")
-async def add_new_task_description_note(note: DescriptionNoteModel, data: dict = Depends(security.get_current_user)):
+async def add_new_task_description_note(
+        note: DescriptionNoteModel,
+        data: dict = Depends(security.get_current_user)
+):
     try:
-        company_id = ObjectId(data.get('company_id'))
-        user_id = ObjectId(data.get('sub'))
-        note = note.model_dump(exclude_unset=True)
+        company_id = ObjectId(data.get("company_id"))
+        sender_id = ObjectId(data.get("sub"))
+
+        note_data = note.model_dump(exclude_unset=True)
+        task_id = ObjectId(note_data.get("to_do_list_id"))
+
+        # 1) جيب المهمة لتحدد الطرف الثاني
+        task = await to_do_list_collection.find_one(
+            {"_id": task_id, "company_id": company_id},
+            {"created_by": 1, "assigned_to": 1}
+        )
+        if not task:
+            raise HTTPException(status_code=404, detail="Task not found")
+
+        created_by = task.get("created_by")
+        assigned_to = task.get("assigned_to")
+
+        if sender_id == created_by:
+            receiver_id = assigned_to
+        elif sender_id == assigned_to:
+            receiver_id = created_by
+        else:
+            raise HTTPException(status_code=403, detail="User not part of this task")
+
+        # 2) احفظ الرسالة مع sender/receiver
         note_dict = {
-            "description": note.get("description"),
-            "user_id": user_id,
+            "description": note_data.get("description"),
+            "user_id": sender_id,  # إذا بدك تحافظ عليه
+            "sender_id": sender_id,
+            "receiver_id": receiver_id,
             "createdAt": security.now_utc(),
             "updatedAt": security.now_utc(),
             "company_id": company_id,
-            "to_do_list_id": ObjectId(note.get("to_do_list_id")),
-            "type": note.get("type"),
+            "to_do_list_id": task_id,
+            "type": note_data.get("type"),
+            "read": False,  # غير مقروءة عند المستلم
+            "read_at": None
         }
+
         result = await to_do_list_description_collection.insert_one(note_dict)
+        added_note = await get_description_note_data(result.inserted_id, sender_id)
 
-        added_note = await get_description_note_data(result.inserted_id, user_id)
-        print(added_note)
-        # encoded_data = jsonable_encoder(purchase_agreement_item_dict)
+        # 3) chat message للطرفين
+        chat_event = {
+            "type": "chat_message",
+            "task_id": str(task_id),
+            "data": jsonable_encoder(added_note),
+            "from_user_id": str(sender_id)
+        }
 
-        await manager.broadcast({
-            "type": "new_task_description_note_added",
-            "data": jsonable_encoder(added_note)
+        await manager.send_to_user(str(sender_id), chat_event)
+        if receiver_id and receiver_id != sender_id:
+            await manager.send_to_user(str(receiver_id), chat_event)
+
+            # badge للمستلم فقط
+            unread_total = await to_do_list_description_collection.count_documents({
+                "company_id": company_id,
+                "receiver_id": receiver_id,
+                "read": False
+            })
+
+            await manager.send_to_user(str(receiver_id), {
+                "type": "chat_unread",
+                "task_id": str(task_id),
+                "preview": (note_data.get("description") or "")[:60],
+                "unread_total": unread_total
+            })
+
+        return {"ok": True, "data": jsonable_encoder(added_note)}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/tasks/{task_id}/read")
+async def mark_task_chat_as_read(
+        task_id: str,
+        data: dict = Depends(security.get_current_user)
+):
+    """
+    عند فتح التاسك: علّم رسائل هذا التاسك كمقروءة للمستخدم الحالي
+    ثم أرسل unread_total الجديد لنفس المستخدم عبر websocket.
+    """
+    try:
+        user_id = ObjectId(data.get("sub"))
+        company_id = ObjectId(data.get("company_id"))
+        now = security.now_utc()
+
+        # علّم الرسائل الموجّهة لهذا المستخدم فقط كمقروءة
+        await to_do_list_description_collection.update_many(
+            {
+                "company_id": company_id,
+                "to_do_list_id": ObjectId(task_id),
+                "receiver_id": user_id,
+                "read": False
+            },
+            {
+                "$set": {
+                    "read": True,
+                    "read_at": now,
+                    "updatedAt": now
+                }
+            }
+        )
+
+        # احسب إجمالي unread بعد التحديث
+        unread_total = await to_do_list_description_collection.count_documents({
+            "company_id": company_id,
+            "receiver_id": user_id,
+            "read": False
         })
+
+        # ابعث الحدث لنفس المستخدم (كل أجهزته/تبويباته)
+        await manager.send_to_user(str(user_id), {
+            "type": "chat_unread",
+            "unread_total": unread_total
+        })
+
+        return {"ok": True, "unread_total": unread_total}
+
+    except Exception as e:
+        print(e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/chat/unread_count")
+async def get_chat_unread_count(
+        data: dict = Depends(security.get_current_user)
+):
+    """
+    أول ما يفتح التطبيق: رجّع عدد الرسائل غير المقروءة للمستخدم الحالي.
+    """
+    try:
+        user_id = ObjectId(data.get("sub"))
+        company_id = ObjectId(data.get("company_id"))
+
+        unread_total = await to_do_list_description_collection.count_documents({
+            "company_id": company_id,
+            "receiver_id": user_id,
+            "read": False
+        })
+
+        return {"unread_total": unread_total}
 
     except Exception as e:
         print(e)
@@ -372,10 +721,26 @@ async def search_engine_for_to_do_list(filter_tasks: TaskModel,
                                        data: dict = Depends(security.get_current_user)):
     try:
         company_id = ObjectId(data.get("company_id"))
-        base_search_pipeline: list[dict] = copy.deepcopy(task_details_pipeline)
+        user_id = ObjectId(data.get("sub"))
+        admins_ids = await get_admin_id(company_id)
+        admins_ids.append(user_id)
+        base_search_pipeline: list[dict] = task_details_pipeline(user_id)
         match_stage = {}
         if company_id:
             match_stage["company_id"] = company_id
+        if admins_ids:
+            match_stage["$or"] = [
+                {
+                    "created_by": {
+                        "$in": admins_ids
+                    }
+                },
+                {
+                    "assigned_to": {
+                        "$in": admins_ids
+                    }
+                }
+            ]
         if filter_tasks.number:
             match_stage["number"] = filter_tasks.number
         if filter_tasks.created_by:
@@ -388,6 +753,12 @@ async def search_engine_for_to_do_list(filter_tasks: TaskModel,
             match_stage["due_date"] = filter_tasks.due_date
         if filter_tasks.status:
             match_stage["status"] = filter_tasks.status
+        if filter_tasks.from_date or filter_tasks.to_date:
+            match_stage['date_field_to_filter'] = {}
+            if filter_tasks.from_date:
+                match_stage['date_field_to_filter']["$gte"] = filter_tasks.from_date
+            if filter_tasks.to_date:
+                match_stage['date_field_to_filter']["$lte"] = filter_tasks.to_date
 
         base_search_pipeline.insert(0, {"$match": match_stage})
         base_search_pipeline.insert(1, {"$sort": {"due_date": 1}})
@@ -398,3 +769,41 @@ async def search_engine_for_to_do_list(filter_tasks: TaskModel,
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+async def get_admin_id(company_id: ObjectId) -> list:
+    try:
+        list_od_admin_users_id = await users_collection.find({"company_id": company_id, "is_admin": True},
+                                                             {"_id": 1}).to_list(None)
+        return list_od_admin_users_id
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.patch("/update_task_status/{task_id}")
+async def update_task_status(
+        task_id: str,
+        task: UpdateTaskModel,
+        _: dict = Depends(security.get_current_user),
+):
+    try:
+        oid = ObjectId(task_id)
+    except InvalidId:
+        raise HTTPException(status_code=400, detail="Invalid task_id")
+
+    updated_task = await to_do_list_collection.find_one_and_update(
+        {"_id": oid},
+        {"$set": {"status": task.status}},
+        return_document=ReturnDocument.AFTER,
+    )
+
+    if not updated_task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    await manager.broadcast({
+        "type": "task_status_updated",
+        "data": {"status": task.status, "_id": str(oid)},
+    })
+
+    return {"_id": str(oid), "status": task.status}

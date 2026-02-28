@@ -314,8 +314,6 @@ async def get_all_users_for_lov(data: dict = Depends(security.get_current_user))
             "_id": 1,
             "user_name": 1}).to_list(None)
 
-        print(all_users)
-
         return {"users": [serializer(u) for u in all_users]}
 
     except Exception as e:

@@ -898,7 +898,6 @@ async def copy_job_card(job_id: str, data: dict = Depends(security.get_current_u
             original_job = await job_cards_collection.find_one({"_id": job_id}, session=session)
             if not original_job:
                 raise HTTPException(status_code=404, detail="Job card not found")
-            print(original_job['job_status_1'])
             if original_job['job_status_1'] not in ["Posted", "Cancelled"]:
                 raise HTTPException(status_code=403, detail="Only Posted / Cancelled Job Cards allowed")
             original_job.pop("_id", None)

@@ -92,20 +92,21 @@ app.include_router(data_migration.router, prefix="/data_migration", tags=["Data 
 app.include_router(job_cards_dashboard.router, prefix="/job_cards_dashboard", tags=["Job Card Dashboard"])
 app.include_router(to_do_list.router, prefix="/to_do_list", tags=["To-Do List"])
 
+
 # app.include_router(test.router, prefix="/test", tags=["Test"])
 
 
 # نقطة نهاية WebSocket العامة
-@app.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket):
-    await manager.connect(websocket)
+@app.websocket("/ws/{user_id}")
+async def websocket_endpoint(websocket: WebSocket, user_id: str):
+    await manager.connect(websocket, user_id=user_id if user_id is not "" else None)
     try:
         while True:
             # يمكنك معالجة الرسائل الواردة من العميل إذا لزم الأمر
             data = await websocket.receive_text()
             await manager.broadcast({"echo": data})
     except WebSocketDisconnect:
-        manager.disconnect(websocket)
+        manager.disconnect(websocket, user_id=user_id)
 
 
 @app.get("/")
