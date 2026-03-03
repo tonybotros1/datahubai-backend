@@ -1,5 +1,6 @@
+import copy
 import traceback
-from typing import Optional, List
+from typing import Optional, List, Any
 from bson import ObjectId
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
@@ -23,6 +24,7 @@ all_trades_purchase_agreement_items_collection = get_collection("all_trades_purc
 all_capitals_collection = get_collection("all_capitals")
 all_outstanding_collection = get_collection("all_outstanding")
 all_general_expenses_collection = get_collection("all_general_expenses")
+all_trades_transfers_collection = get_collection("all_trades_transfers")
 
 
 class CapitalModel(BaseModel):
@@ -160,6 +162,14 @@ class PurchaseAgreementModel(BaseModel):
     agreement_down_payment: Optional[float] = None
 
 
+class TransferModel(BaseModel):
+    date: Optional[datetime] = None
+    from_account: Optional[str] = None
+    to_account: Optional[str] = None
+    amount: Optional[float] = None
+    comment: Optional[str] = None
+
+
 def bson_serializer(obj):
     if isinstance(obj, datetime):
         return obj.isoformat()
@@ -207,6 +217,203 @@ def general_expenses_serialize(document: dict) -> dict:
     return document
 
 
+# =========================================== Start of Transfers Section ===========================================
+transfer_pipeline = [
+    {
+        '$lookup': {
+            'from': 'all_lists_values',
+            'let': {
+                'fromAcc': '$from_account',
+                'toAcc': '$to_account'
+            },
+            'pipeline': [
+                {
+                    '$match': {
+                        '$expr': {
+                            '$in': [
+                                '$_id', [
+                                    '$$fromAcc', '$$toAcc'
+                                ]
+                            ]
+                        }
+                    }
+                }, {
+                    '$project': {
+                        'name': 1
+                    }
+                }
+            ],
+            'as': 'accounts'
+        }
+    }, {
+        '$addFields': {
+            'from_account_name': {
+                '$let': {
+                    'vars': {
+                        'match': {
+                            '$first': {
+                                '$filter': {
+                                    'input': '$accounts',
+                                    'cond': {
+                                        '$eq': [
+                                            '$$this._id', '$from_account'
+                                        ]
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    'in': '$$match.name'
+                }
+            },
+            'to_account_name': {
+                '$let': {
+                    'vars': {
+                        'match': {
+                            '$first': {
+                                '$filter': {
+                                    'input': '$accounts',
+                                    'cond': {
+                                        '$eq': [
+                                            '$$this._id', '$to_account'
+                                        ]
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    'in': '$$match.name'
+                }
+            },
+            '_id': {
+                '$toString': '$_id'
+            },
+            'from_account': {
+                '$toString': '$from_account'
+            },
+            'to_account': {
+                '$toString': '$to_account'
+            },
+            'company_id': {
+                '$toString': '$company_id'
+            }
+        }
+    }, {
+        '$project': {
+            'accounts': 0
+        }
+    }
+]
+
+
+@router.get("/get_all_transfers")
+async def get_all_transfers(data: dict = Depends(security.get_current_user)):
+    try:
+        company_id = ObjectId(data.get("company_id"))
+        all_data: Any = copy.deepcopy(transfer_pipeline)
+        all_data.insert(0, {"$match": {"company_id": company_id}})
+        cursor = await all_trades_transfers_collection.aggregate(all_data)
+        results = await cursor.to_list(None)
+        return {"transfers": results}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+async def get_transfer_details(transfer_id: ObjectId):
+    try:
+        details_pipeline: Any = copy.deepcopy(transfer_pipeline)
+        details_pipeline.insert(0, {"$match": {"_id": transfer_id}})
+
+        cursor = await all_trades_transfers_collection.aggregate(details_pipeline)
+        results = await cursor.to_list(length=1)
+
+        return results[0] if results else None
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/add_new_transfer")
+async def add_new_transfer(transfer_data: TransferModel, data: dict = Depends(security.get_current_user)):
+    try:
+        company_id = ObjectId(data.get("company_id"))
+        transfer_data = transfer_data.model_dump(exclude_unset=True)
+
+        transfer_data.update({
+            "company_id": company_id,
+            "from_account": ObjectId(transfer_data["from_account"]) if transfer_data["from_account"] else None,
+            "to_account": ObjectId(transfer_data["to_account"]) if transfer_data["to_account"] else None,
+            "createdAt": security.now_utc(),
+            "updatedAt": security.now_utc(),
+        })
+
+        result = await all_trades_transfers_collection.insert_one(transfer_data)
+        if not result.inserted_id:
+            raise HTTPException(status_code=500, detail="Failed to insert transfer item")
+
+        added_transfer = await get_transfer_details(result.inserted_id)
+
+        encoded_data = jsonable_encoder(added_transfer)
+        await manager.broadcast({
+            "type": "transfer_created",
+            "data": encoded_data
+        })
+
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.patch("/update_new_transfer/{transfer_id}")
+async def update_new_transfer(transfer_id: str, transfer_data: TransferModel,
+                              data: dict = Depends(security.get_current_user)):
+    try:
+        company_id = ObjectId(data.get("company_id"))
+        transfer_id = ObjectId(transfer_id)
+        transfer_data = transfer_data.model_dump(exclude_unset=True)
+
+        transfer_data.update({
+            "company_id": company_id,
+            "from_account": ObjectId(transfer_data["from_account"]) if transfer_data["from_account"] else None,
+            "to_account": ObjectId(transfer_data["to_account"]) if transfer_data["to_account"] else None,
+            "createdAt": security.now_utc(),
+            "updatedAt": security.now_utc(),
+        })
+
+        await all_trades_transfers_collection.update_one({"_id": transfer_id}, {"$set": transfer_data})
+
+        added_transfer = await get_transfer_details(transfer_id)
+
+        encoded_data = jsonable_encoder(added_transfer)
+        await manager.broadcast({
+            "type": "transfer_updated",
+            "data": encoded_data
+        })
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/delete_transfer/{transfer_id}")
+async def delete_transfer(transfer_id: str, _: dict = Depends(security.get_current_user)):
+    try:
+        transfer_id = ObjectId(transfer_id)
+        result = await all_trades_transfers_collection.delete_one({"_id": transfer_id})
+        if result.deleted_count == 0:
+            raise HTTPException(status_code=404, detail="Transfer not found")
+
+        await manager.broadcast({
+            "type": "transfer_deleted",
+            "data": {"_id": str(transfer_id)}
+        })
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# =========================================== End of Transfers Section ===========================================
+
 @router.get("/get_purchase_agreement_for_current_trade/{trade_id}")
 async def get_purchase_agreement_for_current_trade(trade_id: str,
                                                    _: dict = Depends(security.get_current_user)):
@@ -240,7 +447,6 @@ async def get_purchase_agreement_for_current_trade(trade_id: str,
         return {'purchase_agreement_items': results if results else []}
 
     except Exception as e:
-        print(e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -268,7 +474,7 @@ async def add_purchase_agreement_item(purchase_agreement_item: PurchaseAgreement
 
         result = await all_trades_purchase_agreement_items_collection.insert_one(purchase_agreement_item_dict)
         if not result.inserted_id:
-            raise HTTPException(status_code=500, detail="Failed to insert purchase agreement item")
+            raise HTTPException(status_code=500, detail="Failed to insert sales agreement item")
 
         purchase_agreement_item_dict.update({
             "_id": str(result.inserted_id),
@@ -284,7 +490,6 @@ async def add_purchase_agreement_item(purchase_agreement_item: PurchaseAgreement
 
 
     except Exception as e:
-        print(e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -293,7 +498,6 @@ async def update_purchase_agreement_item(purchase_item_id: str, purchase_agreeme
                                          _: dict = Depends(security.get_current_user)):
     try:
         purchase_item_id = ObjectId(purchase_item_id)
-        print(purchase_item_id)
         purchase_agreement_item_details_pipeline = [
             {
                 '$match': {
@@ -326,7 +530,8 @@ async def update_purchase_agreement_item(purchase_item_id: str, purchase_agreeme
         if result.modified_count == 0:
             raise HTTPException(status_code=404, detail="Purchase Agreement Item not found")
 
-        cursor = await all_trades_purchase_agreement_items_collection.aggregate(purchase_agreement_item_details_pipeline)
+        cursor = await all_trades_purchase_agreement_items_collection.aggregate(
+            purchase_agreement_item_details_pipeline)
         result = await cursor.next()
 
         encoded_data = jsonable_encoder(result)
@@ -337,7 +542,6 @@ async def update_purchase_agreement_item(purchase_item_id: str, purchase_agreeme
 
 
     except Exception as e:
-        print(e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -356,6 +560,7 @@ async def delete_purchase_agreement_item(purchase_id: str, _: dict = Depends(sec
 
     except Exception as error:
         return {"message": str(error)}
+
 
 # =========================================== Capitals and Outstanding Section ===========================================
 
@@ -629,13 +834,13 @@ async def update_capital_or_outstanding(type_name: str, type_id: str, capital: C
         update_data = capital.model_dump(exclude_unset=True)
         company_id = ObjectId(data.get("company_id"))
 
-        if "name" in update_data and update_data["name"] is not None and update_data["name"] is not '':
+        if "name" in update_data and update_data["name"] is not None and update_data["name"] != '':
             try:
                 update_data["name"] = ObjectId(update_data["name"])
             except Exception:
                 raise HTTPException(status_code=400, detail="Invalid name id, must be a valid ObjectId")
         if "account_name" in update_data and update_data["account_name"] is not None and update_data[
-            "account_name"] is not '':
+            "account_name"] != '':
             try:
                 update_data["account_name"] = ObjectId(update_data["account_name"])
             except Exception:
@@ -871,7 +1076,6 @@ async def get_general_expenses_summary(filter_expenses: ExpensesSearchModel,
     if filter_expenses.today:
         start = datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
         end = start + timedelta(days=1)
-        print(start, end)
         date_filter[date_field] = {"$gte": start, "$lt": end}
 
     elif filter_expenses.this_month:
@@ -887,12 +1091,9 @@ async def get_general_expenses_summary(filter_expenses: ExpensesSearchModel,
     elif filter_expenses.from_date or filter_expenses.to_date:
         date_filter[date_field] = {}
         if filter_expenses.from_date:
-            print("from date")
             date_filter[date_field]["$gte"] = filter_expenses.from_date
         if filter_expenses.to_date:
-            print("to date")
             date_filter[date_field]["$lte"] = filter_expenses.to_date
-        print(date_filter)
 
     if date_filter:
         expenses_search_pipeline.append({"$match": date_filter})
@@ -1198,13 +1399,13 @@ async def update_generale_expenses(type_id: str, general: GeneralExpensesModel,
         update_data = general.model_dump(exclude_unset=True)
         company_id = ObjectId(data.get("company_id"))
 
-        if "item" in update_data and update_data["item"] is not None and update_data["item"] is not '':
+        if "item" in update_data and update_data["item"] is not None and update_data["item"] != '':
             try:
                 update_data["item"] = ObjectId(update_data["item"])
             except Exception:
                 raise HTTPException(status_code=400, detail="Invalid item id, must be a valid ObjectId")
         if "account_name" in update_data and update_data["account_name"] is not None and update_data[
-            "account_name"] is not '':
+            "account_name"] != '':
             try:
                 update_data["account_name"] = ObjectId(update_data["account_name"])
             except Exception:
@@ -1320,7 +1521,6 @@ async def add_new_trade(trade: CarTradingModel, data: dict = Depends(security.ge
 
                 for i, inserted_id in enumerate(items_result.inserted_ids):
                     uuid_val = getattr(trade.items[i], "uuid", None)
-                    print(uuid_val)
                     if uuid_val:
                         uuid_map.append({"uuid": uuid_val, "db_id": str(inserted_id)})
 
@@ -1635,7 +1835,6 @@ async def search_engine_for_car_trading(
         if filter_trades.today:
             start = datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
             end = start + timedelta(days=1)
-            print(start, end)
             date_filter[date_field] = {"$gte": start, "$lt": end}
 
         elif filter_trades.this_month:
@@ -1651,12 +1850,9 @@ async def search_engine_for_car_trading(
         elif filter_trades.from_date or filter_trades.to_date:
             date_filter[date_field] = {}
             if filter_trades.from_date:
-                print("from date")
                 date_filter[date_field]["$gte"] = filter_trades.from_date
             if filter_trades.to_date:
-                print("to date")
                 date_filter[date_field]["$lte"] = filter_trades.to_date
-            print(date_filter)
 
         if date_filter:
             pipeline.append({"$match": date_filter})
@@ -1745,7 +1941,6 @@ async def search_engine_for_car_trading(
             return [{"trades": [], "grand_total_pay": 0, "grand_total_receive": 0, "grand_net": 0}]
 
     except Exception as e:
-        print(e)
         raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
 
 
@@ -1775,78 +1970,313 @@ async def delete_trade(trade_id: str, _: dict = Depends(security.get_current_use
         return {"message": "Trade and its items deleted successfully"}
 
     except PyMongoError as e:
-        print(e)
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
     except Exception as e:
-        print(e)
         raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
 
 
-@router.get("/get_cash_on_hand_or_bank_balance/{account_name}")
-async def get_cash_on_hand(account_name: str, data: dict = Depends(security.get_current_user)):
+@router.get("/get_cash_on_hand_or_bank_balance")
+async def get_cash_on_hand_or_bank_balance(data: dict = Depends(security.get_current_user)):
     try:
         company_id = ObjectId(data.get("company_id"))
-        account_name = account_name.upper()
         cash_on_hand_pipeline = [
             {
                 '$match': {
-                    'company_id': company_id,
+                    'company_id': company_id
                 }
             }, {
                 '$lookup': {
                     'from': 'all_trades_items',
-                    'let': {
-                        'trade_id': '$_id'
+                    'localField': '_id',
+                    'foreignField': 'trade_id',
+                    'as': 'item'
+                }
+            }, {
+                '$unwind': '$item'
+            }, {
+                '$project': {
+                    'account_id': '$item.account_name',
+                    'cars_pay': {
+                        '$ifNull': [
+                            '$item.pay', 0
+                        ]
                     },
+                    'cars_receive': {
+                        '$ifNull': [
+                            '$item.receive', 0
+                        ]
+                    },
+                    'capitals_pay': {
+                        '$literal': 0
+                    },
+                    'capitals_receive': {
+                        '$literal': 0
+                    },
+                    'outstanding_pay': {
+                        '$literal': 0
+                    },
+                    'outstanding_receive': {
+                        '$literal': 0
+                    },
+                    'expenses_pay': {
+                        '$literal': 0
+                    },
+                    'expenses_receive': {
+                        '$literal': 0
+                    }
+                }
+            }, {
+                '$unionWith': {
+                    'coll': 'all_capitals',
                     'pipeline': [
                         {
                             '$match': {
-                                '$expr': {
-                                    '$eq': [
-                                        '$trade_id', '$$trade_id'
-                                    ]
-                                }
+                                'company_id': company_id
                             }
                         }, {
-                            '$lookup': {
-                                'from': 'all_lists_values',
-                                'localField': 'account_name',
-                                'foreignField': '_id',
-                                'as': 'account_details'
-                            }
-                        }, {
-                            '$addFields': {
-                                'account_name': {
+                            '$project': {
+                                'account_id': '$account_name',
+                                'cars_pay': {
+                                    '$literal': 0
+                                },
+                                'cars_receive': {
+                                    '$literal': 0
+                                },
+                                'capitals_pay': {
                                     '$ifNull': [
-                                        {
-                                            '$arrayElemAt': [
-                                                '$account_details.name', 0
-                                            ]
-                                        }, None
+                                        '$pay', 0
                                     ]
+                                },
+                                'capitals_receive': {
+                                    '$ifNull': [
+                                        '$receive', 0
+                                    ]
+                                },
+                                'outstanding_pay': {
+                                    '$literal': 0
+                                },
+                                'outstanding_receive': {
+                                    '$literal': 0
+                                },
+                                'expenses_pay': {
+                                    '$literal': 0
+                                },
+                                'expenses_receive': {
+                                    '$literal': 0
                                 }
-                            }
-                        }, {
-                            '$match': {
-                                'account_name': account_name
                             }
                         }
-                    ],
-                    'as': 'trade_items'
+                    ]
                 }
             }, {
-                '$addFields': {
-                    'total_pay': {
-                        '$sum': {
-                            '$ifNull': [
-                                '$trade_items.pay', 0
-                            ]
+                '$unionWith': {
+                    'coll': 'all_outstanding',
+                    'pipeline': [
+                        {
+                            '$match': {
+                                'company_id': company_id
+                            }
+                        }, {
+                            '$project': {
+                                'account_id': '$account_name',
+                                'cars_pay': {
+                                    '$literal': 0
+                                },
+                                'cars_receive': {
+                                    '$literal': 0
+                                },
+                                'capitals_pay': {
+                                    '$literal': 0
+                                },
+                                'capitals_receive': {
+                                    '$literal': 0
+                                },
+                                'outstanding_pay': {
+                                    '$ifNull': [
+                                        '$pay', 0
+                                    ]
+                                },
+                                'outstanding_receive': {
+                                    '$ifNull': [
+                                        '$receive', 0
+                                    ]
+                                },
+                                'expenses_pay': {
+                                    '$literal': 0
+                                },
+                                'expenses_receive': {
+                                    '$literal': 0
+                                }
+                            }
                         }
+                    ]
+                }
+            }, {
+                '$unionWith': {
+                    'coll': 'all_general_expenses',
+                    'pipeline': [
+                        {
+                            '$match': {
+                                'company_id': company_id
+                            }
+                        }, {
+                            '$project': {
+                                'account_id': '$account_name',
+                                'cars_pay': {
+                                    '$literal': 0
+                                },
+                                'cars_receive': {
+                                    '$literal': 0
+                                },
+                                'capitals_pay': {
+                                    '$literal': 0
+                                },
+                                'capitals_receive': {
+                                    '$literal': 0
+                                },
+                                'outstanding_pay': {
+                                    '$literal': 0
+                                },
+                                'outstanding_receive': {
+                                    '$literal': 0
+                                },
+                                'expenses_pay': {
+                                    '$ifNull': [
+                                        '$pay', 0
+                                    ]
+                                },
+                                'expenses_receive': {
+                                    '$ifNull': [
+                                        '$receive', 0
+                                    ]
+                                }
+                            }
+                        }
+                    ]
+                }
+            }, {
+                '$unionWith': {
+                    'coll': 'all_trades_transfers',
+                    'pipeline': [
+                        {
+                            '$match': {
+                                'company_id': ObjectId('68bbfc4b56c35562f967422d')
+                            }
+                        }, {
+                            '$project': {
+                                'account_id': '$from_account',
+                                'cars_pay': {
+                                    '$literal': 0
+                                },
+                                'cars_receive': {
+                                    '$literal': 0
+                                },
+                                'capitals_pay': {
+                                    '$literal': 0
+                                },
+                                'capitals_receive': {
+                                    '$literal': 0
+                                },
+                                'outstanding_pay': {
+                                    '$literal': 0
+                                },
+                                'outstanding_receive': {
+                                    '$literal': 0
+                                },
+                                'expenses_pay': {
+                                    '$literal': 0
+                                },
+                                'expenses_receive': {
+                                    '$literal': 0
+                                },
+                                'transfers_net': {
+                                    '$multiply': [
+                                        {
+                                            '$ifNull': [
+                                                '$amount', 0
+                                            ]
+                                        }, -1
+                                    ]
+                                }
+                            }
+                        }
+                    ]
+                }
+            }, {
+                '$unionWith': {
+                    'coll': 'all_trades_transfers',
+                    'pipeline': [
+                        {
+                            '$match': {
+                                'company_id': ObjectId('68bbfc4b56c35562f967422d')
+                            }
+                        }, {
+                            '$project': {
+                                'account_id': '$to_account',
+                                'cars_pay': {
+                                    '$literal': 0
+                                },
+                                'cars_receive': {
+                                    '$literal': 0
+                                },
+                                'capitals_pay': {
+                                    '$literal': 0
+                                },
+                                'capitals_receive': {
+                                    '$literal': 0
+                                },
+                                'outstanding_pay': {
+                                    '$literal': 0
+                                },
+                                'outstanding_receive': {
+                                    '$literal': 0
+                                },
+                                'expenses_pay': {
+                                    '$literal': 0
+                                },
+                                'expenses_receive': {
+                                    '$literal': 0
+                                },
+                                'transfers_net': {
+                                    '$ifNull': [
+                                        '$amount', 0
+                                    ]
+                                }
+                            }
+                        }
+                    ]
+                }
+            }, {
+                '$group': {
+                    '_id': '$account_id',
+                    'cars_pay': {
+                        '$sum': '$cars_pay'
                     },
-                    'total_receive': {
+                    'cars_receive': {
+                        '$sum': '$cars_receive'
+                    },
+                    'capitals_pay': {
+                        '$sum': '$capitals_pay'
+                    },
+                    'capitals_receive': {
+                        '$sum': '$capitals_receive'
+                    },
+                    'outstanding_pay': {
+                        '$sum': '$outstanding_pay'
+                    },
+                    'outstanding_receive': {
+                        '$sum': '$outstanding_receive'
+                    },
+                    'expenses_pay': {
+                        '$sum': '$expenses_pay'
+                    },
+                    'expenses_receive': {
+                        '$sum': '$expenses_receive'
+                    },
+                    'transfers_net': {
                         '$sum': {
                             '$ifNull': [
-                                '$trade_items.receive', 0
+                                '$transfers_net', 0
                             ]
                         }
                     }
@@ -1855,236 +2285,22 @@ async def get_cash_on_hand(account_name: str, data: dict = Depends(security.get_
                 '$addFields': {
                     'total_cars_net': {
                         '$subtract': [
-                            '$total_receive', '$total_pay'
+                            '$cars_receive', '$cars_pay'
                         ]
-                    }
-                }
-            }, {
-                '$group': {
-                    '_id': None,
-                    'total_cars_net': {
-                        '$sum': '$total_cars_net'
-                    }
-                }
-            }, {
-                '$lookup': {
-                    'from': 'all_capitals',
-                    'let': {
-                        'companyId': company_id
                     },
-                    'pipeline': [
-                        {
-                            '$match': {
-                                '$expr': {
-                                    '$eq': [
-                                        '$company_id', '$$companyId'
-                                    ]
-                                }
-                            }
-                        }, {
-                            '$lookup': {
-                                'from': 'all_lists_values',
-                                'localField': 'account_name',
-                                'foreignField': '_id',
-                                'as': 'account_details'
-                            }
-                        }, {
-                            '$addFields': {
-                                'account_name': {
-                                    '$ifNull': [
-                                        {
-                                            '$arrayElemAt': [
-                                                '$account_details.name', 0
-                                            ]
-                                        }, None
-                                    ]
-                                }
-                            }
-                        }, {
-                            '$match': {
-                                'account_name': account_name
-                            }
-                        }, {
-                            '$group': {
-                                '_id': None,
-                                'total_capitals_pay': {
-                                    '$sum': '$pay'
-                                },
-                                'total_capitals_receive': {
-                                    '$sum': '$receive'
-                                }
-                            }
-                        }, {
-                            '$addFields': {
-                                'total_capitals_net': {
-                                    '$subtract': [
-                                        '$total_capitals_receive', '$total_capitals_pay'
-                                    ]
-                                }
-                            }
-                        }
-                    ],
-                    'as': 'capitals'
-                }
-            }, {
-                '$addFields': {
                     'total_capitals_net': {
-                        '$ifNull': [
-                            {
-                                '$arrayElemAt': [
-                                    '$capitals.total_capitals_net', 0
-                                ]
-                            }, 0
-                        ]
-                    }
-                }
-            }, {
-                '$lookup': {
-                    'from': 'all_outstanding',
-                    'let': {
-                        'companyId': company_id
-                    },
-                    'pipeline': [
-                        {
-                            '$match': {
-                                '$expr': {
-                                    '$eq': [
-                                        '$company_id', '$$companyId'
-                                    ]
-                                }
-                            }
-                        }, {
-                            '$lookup': {
-                                'from': 'all_lists_values',
-                                'localField': 'account_name',
-                                'foreignField': '_id',
-                                'as': 'account_details'
-                            }
-                        }, {
-                            '$addFields': {
-                                'account_name': {
-                                    '$ifNull': [
-                                        {
-                                            '$arrayElemAt': [
-                                                '$account_details.name', 0
-                                            ]
-                                        }, None
-                                    ]
-                                }
-                            }
-                        }, {
-                            '$match': {
-                                'account_name': account_name
-                            }
-                        }, {
-                            '$group': {
-                                '_id': None,
-                                'total_outstanding_pay': {
-                                    '$sum': '$pay'
-                                },
-                                'total_outstanding_receive': {
-                                    '$sum': '$receive'
-                                }
-                            }
-                        }, {
-                            '$addFields': {
-                                'total_outstanding_net': {
-                                    '$subtract': [
-                                        '$total_outstanding_receive', '$total_outstanding_pay'
-                                    ]
-                                }
-                            }
-                        }
-                    ],
-                    'as': 'outstanding'
-                }
-            }, {
-                '$lookup': {
-                    'from': 'all_general_expenses',
-                    'let': {
-                        'companyId': company_id
-                    },
-                    'pipeline': [
-                        {
-                            '$match': {
-                                '$expr': {
-                                    '$eq': [
-                                        '$company_id', '$$companyId'
-                                    ]
-                                }
-                            }
-                        }, {
-                            '$lookup': {
-                                'from': 'all_lists_values',
-                                'localField': 'account_name',
-                                'foreignField': '_id',
-                                'as': 'account_details'
-                            }
-                        }, {
-                            '$addFields': {
-                                'account_name': {
-                                    '$ifNull': [
-                                        {
-                                            '$arrayElemAt': [
-                                                '$account_details.name', 0
-                                            ]
-                                        }, None
-                                    ]
-                                }
-                            }
-                        }, {
-                            '$match': {
-                                'account_name': account_name
-                            }
-                        }, {
-                            '$group': {
-                                '_id': None,
-                                'total_expenses_pay': {
-                                    '$sum': '$pay'
-                                },
-                                'total_expenses_receive': {
-                                    '$sum': '$receive'
-                                }
-                            }
-                        }, {
-                            '$addFields': {
-                                'total_expenses_net': {
-                                    '$subtract': [
-                                        '$total_expenses_receive', '$total_expenses_pay'
-                                    ]
-                                }
-                            }
-                        }
-                    ],
-                    'as': 'expenses'
-                }
-            }, {
-                '$addFields': {
-                    'total_capitals_net': {
-                        '$ifNull': [
-                            {
-                                '$arrayElemAt': [
-                                    '$capitals.total_capitals_net', 0
-                                ]
-                            }, 0
+                        '$subtract': [
+                            '$capitals_receive', '$capitals_pay'
                         ]
                     },
                     'total_outstanding_net': {
-                        '$ifNull': [
-                            {
-                                '$arrayElemAt': [
-                                    '$outstanding.total_outstanding_net', 0
-                                ]
-                            }, 0
+                        '$subtract': [
+                            '$outstanding_receive', '$outstanding_pay'
                         ]
                     },
                     'total_expenses_net': {
-                        '$ifNull': [
-                            {
-                                '$arrayElemAt': [
-                                    '$expenses.total_expenses_net', 0
-                                ]
-                            }, 0
+                        '$subtract': [
+                            '$expenses_receive', '$expenses_pay'
                         ]
                     }
                 }
@@ -2092,18 +2308,112 @@ async def get_cash_on_hand(account_name: str, data: dict = Depends(security.get_
                 '$addFields': {
                     'final_net': {
                         '$add': [
-                            '$total_cars_net', '$total_capitals_net', '$total_outstanding_net', '$total_expenses_net'
+                            '$total_cars_net', '$total_capitals_net', '$total_outstanding_net', '$total_expenses_net',
+                            "$transfers_net"
+                        ]
+                    }
+                }
+            }, {
+                '$lookup': {
+                    'from': 'all_lists_values',
+                    'localField': '_id',
+                    'foreignField': '_id',
+                    'as': 'account'
+                }
+            }, {
+                '$addFields': {
+                    'account_name': {
+                        '$ifNull': [
+                            {
+                                '$arrayElemAt': [
+                                    '$account.name', 0
+                                ]
+                            }, 'Unknown'
                         ]
                     }
                 }
             }, {
                 '$project': {
                     '_id': 0,
+                    'account_id': {
+                        '$toString': '$_id'
+                    },
+                    'account_name': 1,
                     'total_cars_net': 1,
                     'total_capitals_net': 1,
                     'total_outstanding_net': 1,
                     'total_expenses_net': 1,
                     'final_net': 1
+                }
+            }, {
+                '$sort': {
+                    'account_name': 1
+                }
+            }, {
+                '$addFields': {
+                    'account_display': {
+                        '$concat': [
+                            {
+                                '$switch': {
+                                    'branches': [
+                                        {
+                                            'case': {
+                                                '$regexMatch': {
+                                                    'input': '$account_name',
+                                                    'regex': 'cash',
+                                                    'options': 'i'
+                                                }
+                                            },
+                                            'then': '💵 '
+                                        },
+                                        {
+                                            'case': {
+                                                '$regexMatch': {
+                                                    'input': '$account_name',
+                                                    'regex': 'bank',
+                                                    'options': 'i'
+                                                }
+                                            },
+                                            'then': '🏦 '
+                                        },
+                                        {
+                                            'case': {
+                                                '$regexMatch': {
+                                                    'input': '$account_name',
+                                                    'regex': 'expense',
+                                                    'options': 'i'
+                                                }
+                                            },
+                                            'then': '🧾 '
+                                        }
+                                    ],
+                                    'default': '📁 '
+                                }
+                            },
+                            '$account_name'
+                        ]
+                    }
+                }
+            }
+            , {
+                '$group': {
+                    '_id': None,
+                    'all_accounts': {
+                        '$push': {
+                            'account_name': '$account_name',
+                            'account_display': '$account_display',
+                            'final_net': '$final_net'
+                        }
+                    },
+                    'total_final_net': {
+                        '$sum': '$final_net'
+                    }
+                }
+            }, {
+                '$project': {
+                    '_id': 0,
+                    'all_accounts': 1,
+                    'total_final_net': 1
                 }
             }
         ]
@@ -2112,10 +2422,8 @@ async def get_cash_on_hand(account_name: str, data: dict = Depends(security.get_
         return {"totals": result}
 
     except PyMongoError as e:
-        print(e)
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
     except Exception as e:
-        print(e)
         raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
 
 
@@ -2132,8 +2440,6 @@ async def get_last_changes(data_filter: LastChangesFilter, data: dict = Depends(
             from_date = data_filter.from_date
         if data_filter.to_date:
             to_date = data_filter.to_date
-        print(from_date)
-        print(to_date)
         amount_filter = {}
         if data_filter.min_amount is not None:
             amount_filter['$gte'] = data_filter.min_amount
@@ -2388,5 +2694,4 @@ async def get_last_changes(data_filter: LastChangesFilter, data: dict = Depends(
         return {"last_changes": results}
 
     except Exception as e:
-        print(e)
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")

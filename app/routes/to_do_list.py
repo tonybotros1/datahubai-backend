@@ -591,7 +591,7 @@ async def add_new_task_description_note(
         # 2) احفظ الرسالة مع sender/receiver
         note_dict = {
             "description": note_data.get("description"),
-            "user_id": sender_id,  # إذا بدك تحافظ عليه
+            "user_id": sender_id,
             "sender_id": sender_id,
             "receiver_id": receiver_id,
             "createdAt": security.now_utc(),
@@ -599,7 +599,7 @@ async def add_new_task_description_note(
             "company_id": company_id,
             "to_do_list_id": task_id,
             "type": note_data.get("type"),
-            "read": False,  # غير مقروءة عند المستلم
+            "read": False,
             "read_at": None
         }
 
@@ -696,9 +696,7 @@ async def mark_task_chat_as_read(
 async def get_chat_unread_count(
         data: dict = Depends(security.get_current_user)
 ):
-    """
-    أول ما يفتح التطبيق: رجّع عدد الرسائل غير المقروءة للمستخدم الحالي.
-    """
+
     try:
         user_id = ObjectId(data.get("sub"))
         company_id = ObjectId(data.get("company_id"))
