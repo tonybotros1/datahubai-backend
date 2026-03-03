@@ -103,3 +103,16 @@ async def delete_variable(variable_id: str, _: dict = Depends(security.get_curre
 
     except Exception as e:
         raise e
+
+@router.get("/get_variable_values/{code}")
+async def get_variable_values(code: str, _: dict = Depends(security.get_current_user)):
+    try:
+        results = await sys_variables_collection.find(
+            {"code": code},
+            {"_id": 0, "value": 1}
+        ).to_list(length=None)
+
+        return {"values": [item.get("value","").lower() for item in results]}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

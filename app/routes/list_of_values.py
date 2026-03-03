@@ -214,14 +214,15 @@ async def get_value_details(value_id: ObjectId):
 
 @router.get("/get_list_values/{list_id}")
 async def get_list_values(list_id: str, mastered_by_list_id: Optional[str] = Query(None),
-                          _: dict = Depends(security.get_current_user)):
+                          data: dict = Depends(security.get_current_user)):
     try:
+        company_id = ObjectId(data.get("company_id"))
         if mastered_by_list_id:
             mastered_by_list_id = ObjectId(mastered_by_list_id)
 
         # Pipeline لإحضار قيم القائمة نفسها
         pipeline_values = [
-            {"$match": {"list_id": ObjectId(list_id)}},
+            {"$match": {"list_id": ObjectId(list_id), "company_id": company_id}},
             {
                 "$lookup": {
                     "from": "all_lists_values",
@@ -250,7 +251,7 @@ async def get_list_values(list_id: str, mastered_by_list_id: Optional[str] = Que
         master_list_values = []
         if mastered_by_list_id:
             pipeline_master = [
-                {"$match": {"list_id": mastered_by_list_id}},
+                {"$match": {"list_id": mastered_by_list_id, "company_id": company_id, }},
                 {"$project": {"_id": 1, "name": 1}},
             ]
             agg_master = await value_collection.aggregate(pipeline_master)
@@ -269,13 +270,15 @@ async def get_list_values(list_id: str, mastered_by_list_id: Optional[str] = Que
 async def add_new_value(list_id: str = Path(...),
                         name: str = Body(None),
                         mastered_by_id: Optional[str] = Body(None),
-                        _: dict = Depends(security.get_current_user)
+                        data: dict = Depends(security.get_current_user)
                         ):
     try:
+        company_id = ObjectId(data.get("company_id"))
         mastered_by_id = ObjectId(mastered_by_id) if mastered_by_id else ''
         list_id = ObjectId(list_id) if list_id else ''
         value_dict = {
             "name": name,
+            "company_id": company_id,
             "mastered_by": mastered_by_id,
             "list_id": list_id,
             "status": True,
@@ -344,8 +347,9 @@ async def update_value(value_id: str, name: str = Body(None),
 
 
 @router.get("/get_list_values_by_code")
-async def get_list_values_by_code(code: str, _: dict = Depends(security.get_current_user)):
+async def get_list_values_by_code(code: str, data: dict = Depends(security.get_current_user)):
     try:
+        company_id = ObjectId(data.get("company_id"))
         pipeline = [
             {
                 "$match": {"code": code.upper(), "status": True},
@@ -359,7 +363,8 @@ async def get_list_values_by_code(code: str, _: dict = Depends(security.get_curr
                             "$expr": {
                                 "$and": [
                                     {"$eq": ["$list_id", "$$listId"]},
-                                    {"$eq": ["$status", True]}
+                                    {"$eq": ["$status", True]},
+                                    {"$eq": ["$company_id", company_id]}
                                 ]
                             }
                         }
@@ -385,7 +390,7 @@ async def get_list_values_by_code(code: str, _: dict = Depends(security.get_curr
             },
             {
                 "$sort": {
-                    "name": -1
+                    "name": 1
                 }
             }
         ]
@@ -402,9 +407,9 @@ async def get_list_values_by_code(code: str, _: dict = Depends(security.get_curr
 
 
 @router.get("/get_list_details_by_code")
-async def get_list_values_by_code(code: str, _: dict = Depends(security.get_current_user)):
+async def get_list_details_by_code(code: str, data: dict = Depends(security.get_current_user)):
     try:
-
+        company_id = ObjectId(data.get("company_id"))
         result = await list_collection.find_one({"code": code.upper()})
         if not result:
             raise HTTPException(status_code=404, detail="List not found")
