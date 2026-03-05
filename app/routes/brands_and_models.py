@@ -284,7 +284,7 @@ async def get_models_by_status(brand_id: str, data: dict = Depends(security.get_
     try:
         company_id = ObjectId(data.get("company_id"))
         models = await models_collection.find(
-            {"brand_id": ObjectId(brand_id), "status": True, "company_id": company_id},
+            {"brand_id": ObjectId(brand_id), "status": True,},
             {"name": 1, "_id": {"$toString": "$_id"}}).sort("name",
                                                             1).to_list()
         return {"models": models}
