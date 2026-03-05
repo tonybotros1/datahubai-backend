@@ -34,8 +34,10 @@ def model_serializer(model) -> dict:
 
 
 @router.get("/get_all_brands")
-async def get_brands(_: dict = Depends(security.get_current_user)):
-    brands = await brands_collection.find({}).sort("name", 1).to_list(length=None)
+async def get_brands(data: dict = Depends(security.get_current_user)):
+    company_id = ObjectId(data.get("company_id"))
+    brands = await brands_collection.find({"company_id": company_id}, {"company_id": 0}).sort("name", 1).to_list(
+        length=None)
     return {"brands": [brand_serializer(b) for b in brands]}
 
 
@@ -47,12 +49,14 @@ from datetime import datetime, timezone
 async def create_brand(
         name: str = Form(None),
         logo: Optional[UploadFile] = File(None),
-        _: dict = Depends(security.get_current_user)
+        data: dict = Depends(security.get_current_user)
 ):
     try:
+        company_id = ObjectId(data.get("company_id"))
         brand_dict = {
             "name": name,
             "logo": None,
+            "company_id": company_id,
             "logo_public_id": None,
             "status": True,
             "createdAt": datetime.now(timezone.utc),
@@ -179,18 +183,20 @@ async def edit_brand_status(brand_id: str, status: bool = Body(..., embed=True),
 
 @router.get("/get_models/{brand_id}")
 async def get_models(brand_id: str, _: dict = Depends(security.get_current_user)):
-    models = await models_collection.find({"brand_id": ObjectId(brand_id)}).sort("name", 1).to_list()
+    models = await models_collection.find({"brand_id": ObjectId(brand_id)}, {"company_id": 0}).sort("name", 1).to_list()
     return {"models": [model_serializer(m) for m in models]}
 
 
 @router.post("/add_new_model/{brand_id}")
 async def add_new_model(brand_id: str, name: str = Body(..., embed=True),
-                        _: dict = Depends(security.get_current_user)
+                        data: dict = Depends(security.get_current_user)
                         ):
+    company_id = ObjectId(data.get("Company_id"))
     try:
         model_dict = {
             "name": name,
             "status": True,
+            "company_id": company_id,
             "brand_id": ObjectId(brand_id),
             "createdAt": datetime.now(timezone.utc),
             "updatedAt": datetime.now(timezone.utc),
@@ -264,16 +270,23 @@ async def edit_model(model_id: str, name: str = Body(..., embed=True), _: dict =
 
 
 @router.get("/get_all_brands_by_status")
-async def get_brands_by_status(_: dict = Depends(security.get_current_user)):
-    brands = await brands_collection.find({"status": True}).sort("name", 1).to_list(length=None)
-    return {"brands": [brand_serializer(b) for b in brands]}
+async def get_brands_by_status(data: dict = Depends(security.get_current_user)):
+    company_id = ObjectId(data.get("company_id"))
+    brands = await brands_collection.find({"status": True, "company_id": company_id},
+                                          {"name": 1, "logo": 1, "_id": {"$toString": "$_id"}}).sort(
+        "name", 1).to_list(
+        length=None)
+    return {"brands": brands}
 
 
 @router.get("/get_models_by_status/{brand_id}")
-async def get_models_by_status(brand_id: str, _: dict = Depends(security.get_current_user)):
+async def get_models_by_status(brand_id: str, data: dict = Depends(security.get_current_user)):
     try:
-        models = await models_collection.find({"brand_id": ObjectId(brand_id), "status": True}).sort("name",
-                                                                                                     1).to_list()
-        return {"models": [model_serializer(m) for m in models]}
+        company_id = ObjectId(data.get("company_id"))
+        models = await models_collection.find(
+            {"brand_id": ObjectId(brand_id), "status": True, "company_id": company_id},
+            {"name": 1, "_id": {"$toString": "$_id"}}).sort("name",
+                                                            1).to_list()
+        return {"models": models}
     except Exception as e:
         return {"error": str(e)}
