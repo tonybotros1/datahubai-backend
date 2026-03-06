@@ -48,6 +48,12 @@ class UserUpdate(BaseModel):
     expiry_date: Optional[datetime] = None
 
 
+class ChangePasswordModel(BaseModel):
+    old_pass: Optional[str] = None
+    new_pass: Optional[str] = None
+    confirm_pass: Optional[str] = None
+
+
 @router.get("/get_all_users")
 async def get_all_users(data: dict = Depends(security.get_current_user)):
     try:
@@ -318,3 +324,44 @@ async def get_all_users_for_lov(data: dict = Depends(security.get_current_user))
 
     except Exception as e:
         return {"message": str(e)}
+
+
+@router.patch("/change_user_password")
+async def change_user_password(
+        pass_model: ChangePasswordModel,
+        data: dict = Depends(security.get_current_user)):
+    try:
+        user_id = ObjectId(data.get("sub"))
+        pass_model = pass_model.model_dump(exclude_unset=True)
+
+        user = await users_collection.find_one({"_id": user_id})
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        if not security.verify_password(pass_model['old_pass'], user["password_hash"]):
+            raise HTTPException(status_code=401, detail="Invalid password")
+
+        if pass_model['new_pass'] != pass_model['confirm_pass']:
+            raise HTTPException(status_code=400, detail="Passwords do not match")
+
+        if security.verify_password(pass_model['new_pass'], user["password_hash"]):
+            raise HTTPException(status_code=400, detail="New password cannot be the same as old password")
+
+        hashed = security.pwd_ctx.hash(pass_model['new_pass'])
+
+        await users_collection.update_one(
+            {"_id": user_id},
+            {
+                "$set": {
+                    "password_hash": hashed,
+                    "updatedAt": security.now_utc()
+                }
+            }
+        )
+
+        return {"message": "Password changed successfully"}
+
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=500, detail="Internal server error")
