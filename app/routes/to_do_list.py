@@ -53,7 +53,7 @@ class DescriptionNoteModel(BaseModel):
     description: Optional[str] = None
 
 
-def task_details_pipeline(user_id: ObjectId)-> list:
+def task_details_pipeline(user_id: ObjectId) -> list:
     return [
         {
             '$lookup': {
@@ -344,14 +344,18 @@ def task_description_pipeline(task_id: ObjectId, user_id: ObjectId):
 #             raise HTTPException(status_code=500, detail=str(e))
 
 
-async def get_task_details(task_id: ObjectId,user_id:ObjectId):
-    base_search_pipeline = task_details_pipeline(user_id)
-    base_search_pipeline.insert(0, {
-        '$match': {"_id": task_id}
-    })
-    cursor = await to_do_list_collection.aggregate(base_search_pipeline)
-    results = await cursor.next()
-    return results
+async def get_task_details(task_id: ObjectId, user_id: ObjectId):
+    try:
+        base_search_pipeline = task_details_pipeline(user_id)
+        base_search_pipeline.insert(0, {
+            '$match': {"_id": task_id}
+        })
+        cursor = await to_do_list_collection.aggregate(base_search_pipeline)
+        results = await cursor.to_list(None)
+        return results[0]
+    except Exception as e:
+        print(e)
+        raise HTTPException(status_code=404, detail="Task not found")
 
 
 @router.post("/add_new_task")
@@ -432,36 +436,42 @@ async def add_new_task(
     #     "created_by": str(created_by) if created_by else None,
     #     "assigned_to": str(assigned_to) if assigned_to else None,
     # }
+    try:
+        response_data = await get_task_details(to_do_list_id, user_id)
+        print(response_data)
 
-    response_data = await get_task_details(to_do_list_id,user_id)
+        chat_event = {
+            "type": "new_task_created",
+            "data": jsonable_encoder(response_data),
+        }
 
-    chat_event = {
-        "type": "new_task_created",
-        "data": jsonable_encoder(response_data),
-    }
+        sender_id = created_by
+        receiver_id = assigned_to
 
-    sender_id = created_by
-    receiver_id = assigned_to
+        await manager.send_to_user(str(user_id), chat_event)
+        print(chat_event)
 
-    await manager.send_to_user(str(user_id), chat_event)
+        if receiver_id and receiver_id != sender_id:
+            await manager.send_to_user(str(receiver_id), chat_event)
 
-    if receiver_id and receiver_id != sender_id:
-        await manager.send_to_user(str(receiver_id), chat_event)
+            unread_total = await to_do_list_description_collection.count_documents({
+                "company_id": company_id,
+                "receiver_id": receiver_id,
+                "read": False
+            })
 
-        unread_total = await to_do_list_description_collection.count_documents({
-            "company_id": company_id,
-            "receiver_id": receiver_id,
-            "read": False
-        })
+            await manager.send_to_user(str(receiver_id), {
+                "type": "chat_unread",
+                "task_id": str(to_do_list_id),
+                "preview": (description or "")[:60],
+                "unread_total": unread_total
+            })
 
-        await manager.send_to_user(str(receiver_id), {
-            "type": "chat_unread",
-            "task_id": str(to_do_list_id),
-            "preview": (description or "")[:60],
-            "unread_total": unread_total
-        })
+        return response_data
 
-    return response_data
+    except Exception as e:
+        print(e)
+        raise HTTPException(status_code=500, detail="failed")
 
 
 @router.get("/get_task_descriptions/{task_id}")
@@ -696,7 +706,6 @@ async def mark_task_chat_as_read(
 async def get_chat_unread_count(
         data: dict = Depends(security.get_current_user)
 ):
-
     try:
         user_id = ObjectId(data.get("sub"))
         company_id = ObjectId(data.get("company_id"))
