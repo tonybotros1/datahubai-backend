@@ -1,8 +1,7 @@
-import copy
 from typing import Optional, Any
 from bson import ObjectId
 from bson.errors import InvalidId
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Form, File, UploadFile
 from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel
 from pymongo import ReturnDocument
@@ -16,6 +15,8 @@ from datetime import datetime
 from app.routes.car_trading import PyObjectId
 from app.routes.counters import create_custom_counter
 from app.websocket_config import manager
+from app.widgets.upload_files import upload_file
+from app.widgets.upload_images import upload_image
 
 router = APIRouter()
 to_do_list_collection = get_collection("to_do_list")
@@ -47,10 +48,10 @@ class UpdateTaskModel(BaseModel):
     status: Optional[str] = None
 
 
-class DescriptionNoteModel(BaseModel):
-    to_do_list_id: Optional[str] = None
-    type: Optional[str] = None
-    description: Optional[str] = None
+# class DescriptionNoteModel(BaseModel):
+#     to_do_list_id: Optional[str] = None
+#     type: Optional[str] = None
+#     description: Optional[str] = None
 
 
 def task_details_pipeline(user_id: ObjectId) -> list:
@@ -568,21 +569,35 @@ async def get_description_note_data(note_id: ObjectId, user_id: ObjectId):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/add_new_task_description_note")
+@router.post("/add_new_task_description_note/{to_do_list_id}")
 async def add_new_task_description_note(
-        note: DescriptionNoteModel,
+        to_do_list_id: str,
+        note_type: str = Form(None), note: str = Form(None),
+        media_note: UploadFile = File(None), file_name: str = Form(None),
         data: dict = Depends(security.get_current_user)
 ):
     try:
+        note_public_id = None
+
         company_id = ObjectId(data.get("company_id"))
         sender_id = ObjectId(data.get("sub"))
+        if note_type and note_type.lower() != 'text' and media_note is not None:
+            if note_type.lower() != 'image':
+                result = await upload_file(media_note, folder="to do list descriptions")
+                file_name = result["file_name"]
+                note = result["url"] if "url" in result else None
+                note_public_id = result['public_id'] if "public_id" in result else None
+            else:
+                result = await upload_image(media_note, folder="to do list descriptions")
+                file_name = result["file_name"]
+                note = result["url"] if "url" in result else None
+                note_public_id = result['public_id'] if "public_id" in result else None
 
-        note_data = note.model_dump(exclude_unset=True)
-        task_id = ObjectId(note_data.get("to_do_list_id"))
+        to_do_list_id = ObjectId(to_do_list_id)
 
         # 1) جيب المهمة لتحدد الطرف الثاني
         task = await to_do_list_collection.find_one(
-            {"_id": task_id, "company_id": company_id},
+            {"_id": to_do_list_id, "company_id": company_id},
             {"created_by": 1, "assigned_to": 1}
         )
         if not task:
@@ -600,17 +615,19 @@ async def add_new_task_description_note(
 
         # 2) احفظ الرسالة مع sender/receiver
         note_dict = {
-            "description": note_data.get("description"),
+            "description": note,
             "user_id": sender_id,
             "sender_id": sender_id,
             "receiver_id": receiver_id,
             "createdAt": security.now_utc(),
             "updatedAt": security.now_utc(),
             "company_id": company_id,
-            "to_do_list_id": task_id,
-            "type": note_data.get("type"),
+            "to_do_list_id": to_do_list_id,
+            "file_name": file_name,
+            "type": note_type,
             "read": False,
-            "read_at": None
+            "read_at": None,
+            "note_public_id": note_public_id,
         }
 
         result = await to_do_list_description_collection.insert_one(note_dict)
@@ -619,7 +636,7 @@ async def add_new_task_description_note(
         # 3) chat message للطرفين
         chat_event = {
             "type": "chat_message",
-            "task_id": str(task_id),
+            "task_id": str(to_do_list_id),
             "data": jsonable_encoder(added_note),
             "from_user_id": str(sender_id)
         }
@@ -637,8 +654,8 @@ async def add_new_task_description_note(
 
             await manager.send_to_user(str(receiver_id), {
                 "type": "chat_unread",
-                "task_id": str(task_id),
-                "preview": (note_data.get("description") or "")[:60],
+                "task_id": str(to_do_list_id),
+                # "preview": (note_data.get("description") or "")[:60],
                 "unread_total": unread_total
             })
 
