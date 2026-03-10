@@ -620,7 +620,7 @@ async def dealing_with_receiving_header(file, data, delete_every_thing: bool):
         print("number of rows: ", len(df_2025))
 
         existing_branches = {b['name']: ObjectId(b['_id']) for b in
-                             await branches_collection.find({}).to_list(length=None)}
+                             await branches_collection.find({"company_id": company_id}).to_list(length=None)}
         existing_vendors = {b['entity_name'].capitalize().strip(): b for b in
                             await entity_information_collection.find(
                                 {"entity_code": "Vendor", "company_id": company_id}).to_list(length=None)}
@@ -1039,11 +1039,11 @@ async def dealing_with_ar_receipts(file: UploadFile, data: dict, delete_every_th
         account_types_bank_doc = await value_collection.find_one({"name": "Bank"})
         account_types_list_id = str(account_types_bank_doc["_id"])
         existing_customers = {b['entity_name'].strip(): b for b in
-                              await entity_information_collection.find({}).to_list(length=None)}
+                              await entity_information_collection.find({"company_id": company_id}).to_list(length=None)}
         existing_values = {b["name"].strip(): ObjectId(b["_id"]) for b in
-                           await value_collection.find({}).to_list(length=None)}
+                           await value_collection.find({"company_id": company_id}).to_list(length=None)}
         existing_banks = {b["account_number"].strip(): ObjectId(b["_id"]) for b in
-                          await banks_collection.find({}).to_list(length=None)}
+                          await banks_collection.find({"company_id": company_id}).to_list(length=None)}
         uae_country_doc = await countries_collection.find_one({"code": "UAE"})
         uae_country_id = str(uae_country_doc["_id"])
         uae_currency_doc = await currencies_collection.find_one({"country_id": ObjectId(uae_country_id)})
@@ -1081,7 +1081,7 @@ async def dealing_with_ar_receipts(file: UploadFile, data: dict, delete_every_th
                     bank_name_id = existing_values.get(str(bank_name).strip())
                     if not bank_name_id:
                         new_bank_name = await add_new_value(list_id=bank_name_list_id, name=str(bank_name),
-                                                            mastered_by_id=None)
+                                                            mastered_by_id=None, data=data)
                         bank_name_id = ObjectId(new_bank_name['list']['_id'])
                         existing_values[str(bank_name).strip()] = bank_name_id
                 else:
@@ -1302,6 +1302,7 @@ async def dealing_with_job_cards(file: UploadFile, data: dict, delete_every_thin
 
         contents = await file.read()
         df = pd.read_excel(BytesIO(contents))
+        df = df.fillna("")
         total_rows = len(df)
         df.columns = df.columns.str.strip().str.lower()
         date_cols = ["job_date", "invoice_date", "cancellation_date", "approval_date",
@@ -1347,18 +1348,19 @@ async def dealing_with_job_cards(file: UploadFile, data: dict, delete_every_thin
         website_www_id = str(website_www_doc["_id"])
 
         existing_brands = {b["name"].upper(): {"_id": ObjectId(b["_id"]), "logo": b.get("logo")} for b in
-                           await brands_collection.find({}).to_list(length=None)}
+                           await brands_collection.find({"company_id": company_id}).to_list(length=None)}
         existing_models = {b["name"].upper(): ObjectId(b["_id"]) for b in
-                           await models_collection.find({}).to_list(length=None)}
+                           await models_collection.find({"company_id": company_id}).to_list(length=None)}
         existing_values = {b["name"].upper(): ObjectId(b["_id"]) for b in
-                           await value_collection.find({}).to_list(length=None)}
-        existing_cities = {b['name']: ObjectId(b['_id']) for b in await cities_collection.find({}).to_list(length=None)}
+                           await value_collection.find({"company_id": company_id}).to_list(length=None)}
+        existing_cities = {b['name']: ObjectId(b['_id']) for b in
+                           await cities_collection.find({"company_id": company_id}).to_list(length=None)}
         existing_salesman = {b['name']: ObjectId(b['_id']) for b in
-                             await salesman_collection.find({}).to_list(length=None)}
+                             await salesman_collection.find({"company_id": company_id}).to_list(length=None)}
         existing_branches = {b['name']: ObjectId(b['_id']) for b in
-                             await branches_collection.find({}).to_list(length=None)}
+                             await branches_collection.find({"company_id": company_id}).to_list(length=None)}
         existing_customers = {b['entity_name'].strip(): b for b in
-                              await entity_information_collection.find({}).to_list(length=None)}
+                              await entity_information_collection.find({"company_id": company_id}).to_list(length=None)}
 
         await manager.broadcast({"type": "start", "total": total_rows})
         for i, row in enumerate(df.itertuples(index=False), start=1):
@@ -1425,7 +1427,7 @@ async def dealing_with_job_cards(file: UploadFile, data: dict, delete_every_thin
                         brand_id = None
                         brand_logo = None
                     if not brand_id:
-                        new_brand = await create_brand(name=str(brand).upper(), logo=None)
+                        new_brand = await create_brand(name=str(brand).upper(), logo=None, data=data)
                         print("added new brand")
                         brand_id: Any = ObjectId(new_brand['brand']['_id'])
                         existing_brands[str(brand).upper()] = {"_id": brand_id, "logo": brand_logo}
@@ -1443,7 +1445,7 @@ async def dealing_with_job_cards(file: UploadFile, data: dict, delete_every_thin
                 if model and brand:
                     model_id = existing_models.get(str(model).upper())
                     if not model_id:
-                        new_model = await add_new_model(brand_id=str(brand_id), name=str(model).upper())
+                        new_model = await add_new_model(brand_id=str(brand_id), name=str(model).upper(), data=data)
                         print("added new model")
                         model_id = ObjectId(new_model['model']['_id'])
                         existing_models[str(model).upper()] = model_id
@@ -1452,7 +1454,7 @@ async def dealing_with_job_cards(file: UploadFile, data: dict, delete_every_thin
                     model_id = None
             except Exception as row_err:
                 # This will show exactly which row failed
-                print(f"Error Model processing row {i}: {row_err}")
+                print(f"Error Model processing row {i}: {row_err}, Job Number: {job_number}")
                 raise
 
                 # color section
@@ -1741,6 +1743,7 @@ async def dealing_with_job_cards_items(file: UploadFile, data: dict, delete_ever
 
         contents = await file.read()
         df = pd.read_excel(BytesIO(contents))
+        df = df.fillna("")
         df.columns = df.columns.str.strip().str.lower()
         df["new"] = df["item_code"] + "-" + df["item_name"]
         print(df.head())

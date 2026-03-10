@@ -18,6 +18,8 @@ models_collection = get_collection("all_brand_models")
 
 def brand_serializer(brand: dict) -> dict:
     brand["_id"] = str(brand["_id"])
+    if brand.get("company_id"):
+        brand["company_id"] = str(brand.get("company_id"))
     for key, value in brand.items():
         if isinstance(value, datetime):
             brand[key] = value.isoformat()
@@ -27,6 +29,7 @@ def brand_serializer(brand: dict) -> dict:
 def model_serializer(model) -> dict:
     model["_id"] = str(model["_id"])
     model["brand_id"] = str(model["brand_id"])
+    model["company_id"] = str(model.get("company_id"))
     for key, value in model.items():
         if isinstance(value, datetime):
             model[key] = value.isoformat()
@@ -189,10 +192,9 @@ async def get_models(brand_id: str, _: dict = Depends(security.get_current_user)
 
 @router.post("/add_new_model/{brand_id}")
 async def add_new_model(brand_id: str, name: str = Body(..., embed=True),
-                        data: dict = Depends(security.get_current_user)
-                        ):
-    company_id = ObjectId(data.get("Company_id"))
+                        data: dict = Depends(security.get_current_user)):
     try:
+        company_id = ObjectId(data.get("company_id"))
         model_dict = {
             "name": name,
             "status": True,
@@ -214,6 +216,7 @@ async def add_new_model(brand_id: str, name: str = Body(..., embed=True),
         return {"message": "Model created successfully!", "model": serialized}
 
     except Exception as e:
+        print(e)
         return {"error": str(e)}
 
 
@@ -284,7 +287,7 @@ async def get_models_by_status(brand_id: str, data: dict = Depends(security.get_
     try:
         company_id = ObjectId(data.get("company_id"))
         models = await models_collection.find(
-            {"brand_id": ObjectId(brand_id), "status": True,},
+            {"brand_id": ObjectId(brand_id), "status": True, },
             {"name": 1, "_id": {"$toString": "$_id"}}).sort("name",
                                                             1).to_list()
         return {"models": models}

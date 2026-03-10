@@ -496,9 +496,13 @@ async def get_new_job_cards_daily_summary(data: dict = Depends(security.get_curr
                                     '$sum': {
                                         '$cond': [
                                             {
-                                                '$eq': [
-                                                    '$label', 'Returned'
-                                                ]
+                                                '$and': [{'$eq': [
+                                                    '$label', 'Returned',
+
+                                                ]}, {'$eq': [
+                                                    '$job_status_1', 'New',
+
+                                                ]}]
                                             }, 1, 0
                                         ]
                                     }
@@ -1057,4 +1061,474 @@ async def get_salesman_summary(time_filter: TimeFilter, data: dict = Depends(sec
         return {"salesman_summary": results}
 
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/get_customer_aging_summary")
+async def get_customer_aging_summary(data: dict = Depends(security.get_current_user)):
+    try:
+        company_id = ObjectId(data.get('company_id'))
+        customers_aging_pipeline = [
+            {
+                '$match': {
+                    'company_id': ObjectId('68bbfc4b56c35562f967422d'),
+                    'job_status_1': 'Posted'
+                }
+            }, {
+                '$project': {
+                    'customer': 1,
+                    'invoice_date': 1,
+                    'company_id': 1
+                }
+            }, {
+                '$lookup': {
+                    'from': 'job_cards_invoice_items',
+                    'let': {
+                        'job_id': '$_id'
+                    },
+                    'pipeline': [
+                        {
+                            '$match': {
+                                '$expr': {
+                                    '$eq': [
+                                        '$job_card_id', '$$job_id'
+                                    ]
+                                }
+                            }
+                        }, {
+                            '$group': {
+                                '_id': None,
+                                'total_net': {
+                                    '$sum': '$net'
+                                }
+                            }
+                        }
+                    ],
+                    'as': 'invoice_sum'
+                }
+            }, {
+                '$set': {
+                    'net_amount': {
+                        '$ifNull': [
+                            {
+                                '$first': '$invoice_sum.total_net'
+                            }, 0
+                        ]
+                    }
+                }
+            }, {
+                '$lookup': {
+                    'from': 'all_receipts_invoices',
+                    'let': {
+                        'job_id': '$_id'
+                    },
+                    'pipeline': [
+                        {
+                            '$match': {
+                                '$expr': {
+                                    '$eq': [
+                                        '$job_id', '$$job_id'
+                                    ]
+                                }
+                            }
+                        }, {
+                            '$group': {
+                                '_id': None,
+                                'total_received': {
+                                    '$sum': '$amount'
+                                }
+                            }
+                        }
+                    ],
+                    'as': 'receipt_sum'
+                }
+            }, {
+                '$set': {
+                    'received': {
+                        '$ifNull': [
+                            {
+                                '$first': '$receipt_sum.total_received'
+                            }, 0
+                        ]
+                    }
+                }
+            }, {
+                '$set': {
+                    'outstanding': {
+                        '$round': [
+                            {
+                                '$subtract': [
+                                    '$net_amount', '$received'
+                                ]
+                            }, 2
+                        ]
+                    }
+                }
+            }, {
+                '$match': {
+                    'outstanding': {
+                        '$gt': 0.01
+                    }
+                }
+            }, {
+                '$set': {
+                    'age_days': {
+                        '$dateDiff': {
+                            'startDate': '$invoice_date',
+                            'endDate': '$$NOW',
+                            'unit': 'day'
+                        }
+                    }
+                }
+            }, {
+                '$set': {
+                    'bucket_0_30': {
+                        '$cond': [
+                            {
+                                '$lte': [
+                                    '$age_days', 30
+                                ]
+                            }, '$outstanding', 0
+                        ]
+                    },
+                    'bucket_31_60': {
+                        '$cond': [
+                            {
+                                '$and': [
+                                    {
+                                        '$gt': [
+                                            '$age_days', 30
+                                        ]
+                                    }, {
+                                        '$lte': [
+                                            '$age_days', 60
+                                        ]
+                                    }
+                                ]
+                            }, '$outstanding', 0
+                        ]
+                    },
+                    'bucket_61_90': {
+                        '$cond': [
+                            {
+                                '$and': [
+                                    {
+                                        '$gt': [
+                                            '$age_days', 60
+                                        ]
+                                    }, {
+                                        '$lte': [
+                                            '$age_days', 90
+                                        ]
+                                    }
+                                ]
+                            }, '$outstanding', 0
+                        ]
+                    },
+                    'bucket_0_90': {
+                        '$cond': [
+                            {
+                                '$lte': [
+                                    '$age_days', 90
+                                ]
+                            }, '$outstanding', 0
+                        ]
+                    },
+                    'bucket_91_120': {
+                        '$cond': [
+                            {
+                                '$and': [
+                                    {
+                                        '$gt': [
+                                            '$age_days', 90
+                                        ]
+                                    }, {
+                                        '$lte': [
+                                            '$age_days', 120
+                                        ]
+                                    }
+                                ]
+                            }, '$outstanding', 0
+                        ]
+                    },
+                    'bucket_121_150': {
+                        '$cond': [
+                            {
+                                '$and': [
+                                    {
+                                        '$gt': [
+                                            '$age_days', 120
+                                        ]
+                                    }, {
+                                        '$lte': [
+                                            '$age_days', 150
+                                        ]
+                                    }
+                                ]
+                            }, '$outstanding', 0
+                        ]
+                    },
+                    'bucket_151_180': {
+                        '$cond': [
+                            {
+                                '$and': [
+                                    {
+                                        '$gt': [
+                                            '$age_days', 150
+                                        ]
+                                    }, {
+                                        '$lte': [
+                                            '$age_days', 180
+                                        ]
+                                    }
+                                ]
+                            }, '$outstanding', 0
+                        ]
+                    },
+                    'bucket_91_180': {
+                        '$cond': [
+                            {
+                                '$and': [
+                                    {
+                                        '$gt': [
+                                            '$age_days', 91
+                                        ]
+                                    }, {
+                                        '$lte': [
+                                            '$age_days', 180
+                                        ]
+                                    }
+                                ]
+                            }, '$outstanding', 0
+                        ]
+                    },
+                    'bucket_181_360': {
+                        '$cond': [
+                            {
+                                '$and': [
+                                    {
+                                        '$gt': [
+                                            '$age_days', 180
+                                        ]
+                                    }, {
+                                        '$lte': [
+                                            '$age_days', 360
+                                        ]
+                                    }
+                                ]
+                            }, '$outstanding', 0
+                        ]
+                    },
+                    'bucket_360_plus': {
+                        '$cond': [
+                            {
+                                '$gt': [
+                                    '$age_days', 360
+                                ]
+                            }, '$outstanding', 0
+                        ]
+                    }
+                }
+            }, {
+                '$group': {
+                    '_id': '$customer',
+                    'total_outstanding': {
+                        '$sum': '$outstanding'
+                    },
+                    'bucket_0_30': {
+                        '$sum': '$bucket_0_30'
+                    },
+                    'bucket_31_60': {
+                        '$sum': '$bucket_31_60'
+                    },
+                    'bucket_61_90': {
+                        '$sum': '$bucket_61_90'
+                    },
+                    'bucket_0_90': {
+                        '$sum': '$bucket_0_90'
+                    },
+                    'bucket_91_120': {
+                        '$sum': '$bucket_91_120'
+                    },
+                    'bucket_121_150': {
+                        '$sum': '$bucket_121_150'
+                    },
+                    'bucket_151_180': {
+                        '$sum': '$bucket_151_180'
+                    },
+                    'bucket_91_180': {
+                        '$sum': '$bucket_91_180'
+                    },
+                    'bucket_181_360': {
+                        '$sum': '$bucket_181_360'
+                    },
+                    'bucket_360_plus': {
+                        '$sum': '$bucket_360_plus'
+                    }
+                }
+            }, {
+                '$lookup': {
+                    'from': 'entity_information',
+                    'localField': '_id',
+                    'foreignField': '_id',
+                    'as': 'entity'
+                }
+            }, {
+                '$unwind': '$entity'
+            }, {
+                '$set': {
+                    'group_key': {
+                        '$cond': {
+                            'if': {
+                                '$or': [
+                                    {
+                                        '$eq': [
+                                            '$entity.group_name', None
+                                        ]
+                                    }, {
+                                        '$eq': [
+                                            '$entity.group_name', ''
+                                        ]
+                                    }
+                                ]
+                            },
+                            'then': '$entity.entity_name',
+                            'else': '$entity.group_name'
+                        }
+                    }
+                }
+            }, {
+                '$group': {
+                    '_id': '$group_key',
+                    'customer_ids': {
+                        '$addToSet': '$_id'
+                    },
+                    'total_outstanding': {
+                        '$sum': '$total_outstanding'
+                    },
+                    'bucket_0_30': {
+                        '$sum': '$bucket_0_30'
+                    },
+                    'bucket_31_60': {
+                        '$sum': '$bucket_31_60'
+                    },
+                    'bucket_61_90': {
+                        '$sum': '$bucket_61_90'
+                    },
+                    'bucket_0_90': {
+                        '$sum': '$bucket_0_90'
+                    },
+                    'bucket_91_120': {
+                        '$sum': '$bucket_91_120'
+                    },
+                    'bucket_121_150': {
+                        '$sum': '$bucket_121_150'
+                    },
+                    'bucket_151_180': {
+                        '$sum': '$bucket_151_180'
+                    },
+                    'bucket_91_180': {
+                        '$sum': '$bucket_91_180'
+                    },
+                    'bucket_181_360': {
+                        '$sum': '$bucket_181_360'
+                    },
+                    'bucket_360_plus': {
+                        '$sum': '$bucket_360_plus'
+                    }
+                }
+            }, {
+                '$lookup': {
+                    'from': 'all_receipts',
+                    'let': {
+                        'customer_ids': '$customer_ids'
+                    },
+                    'pipeline': [
+                        {
+                            '$match': {
+                                '$expr': {
+                                    '$and': [
+                                        {
+                                            '$in': [
+                                                '$customer', '$$customer_ids'
+                                            ]
+                                        }, {
+                                            '$eq': [
+                                                '$company_id', ObjectId('68bbfc4b56c35562f967422d')
+                                            ]
+                                        }, {
+                                            '$eq': [
+                                                '$status', 'Posted'
+                                            ]
+                                        }
+                                    ]
+                                }
+                            }
+                        }, {
+                            '$group': {
+                                '_id': None,
+                                'last_payment_date': {
+                                    '$max': '$receipt_date'
+                                }
+                            }
+                        }
+                    ],
+                    'as': 'receipt_last'
+                }
+            }, {
+                '$set': {
+                    'last_payment_date': {
+                        '$ifNull': [
+                            {
+                                '$first': '$receipt_last.last_payment_date'
+                            }, None
+                        ]
+                    },
+                    'total_outstanding': {
+                        '$round': [
+                            '$total_outstanding', 2
+                        ]
+                    }
+                }
+            }, {
+                '$match': {
+                    'total_outstanding': {
+                        '$gt': 0.01
+                    }
+                }
+            }, {
+                '$sort': {
+                    'total_outstanding': -1
+                }
+            }, {
+                '$limit': 2000
+            }, {
+                '$project': {
+                    '_id': 0,
+                    'group_name': '$_id',
+                    'last_payment_date': 1,
+                    'total_outstanding': 1,
+                    '0_to_30_days': '$bucket_0_30',
+                    '31_to_60_days': '$bucket_31_60',
+                    '61_to_90_days': '$bucket_61_90',
+                    '0_to_90_days': '$bucket_0_90',
+                    '91_to_120_days': '$bucket_91_120',
+                    '121_to_150_days': '$bucket_121_150',
+                    '151_to_180_days': '$bucket_151_180',
+                    '91_to_180_days': '$bucket_91_180',
+                    '181_to_360_days': '$bucket_181_360',
+                    'more_than_360_days': '$bucket_360_plus'
+                }
+            }
+        ]
+        print("Aging loading...")
+
+        cursor = await job_cards_collection.aggregate(customers_aging_pipeline)
+        results = await cursor.to_list(None)
+        print("Aging done")
+
+        return {"customers_aging": results}
+
+    except Exception as e:
+        print(e)
         raise HTTPException(status_code=500, detail=str(e))

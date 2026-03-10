@@ -2740,3 +2740,7 @@ async def get_last_changes(data_filter: LastChangesFilter, data: dict = Depends(
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+
+
+
+
