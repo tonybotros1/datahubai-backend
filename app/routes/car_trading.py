@@ -136,6 +136,7 @@ class LastChangesFilter(BaseModel):
     account_name: Optional[PyObjectId] = None
     from_date: Optional[datetime] = None
     to_date: Optional[datetime] = None
+    account: Optional[str] = None
 
 
 class PurchaseAgreementModel(BaseModel):
@@ -2480,6 +2481,9 @@ async def get_last_changes(data_filter: LastChangesFilter, data: dict = Depends(
 
         from_date = datetime.strptime('2000-01-01 00:00:00', '%Y-%m-%d %H:%M:%S')
         to_date = datetime.strptime('2100-12-31 00:00:00', '%Y-%m-%d %H:%M:%S')
+        account = None
+        if data_filter.account is not None:
+            account = data_filter.account
 
         if data_filter.from_date:
             from_date = data_filter.from_date
@@ -2724,15 +2728,17 @@ async def get_last_changes(data_filter: LastChangesFilter, data: dict = Depends(
                 }
             }
         ]
+        match_map = {}
         if amount_filter:
-            last_changes_pipeline.append({
-                '$match': {
-                    '$or': [
-                        {'pay': amount_filter},
-                        {'receive': amount_filter}
-                    ]
-                }
-            })
+            match_map['$or'] = [
+                {'pay': amount_filter},
+                {'receive': amount_filter}
+            ],
+        if account:
+            match_map['account_name'] = account
+
+        if match_map:
+            last_changes_pipeline.append({"$match": match_map})
 
         cursor = await all_trades_collection.aggregate(last_changes_pipeline)
         results = await cursor.to_list(None)
@@ -2740,7 +2746,3 @@ async def get_last_changes(data_filter: LastChangesFilter, data: dict = Depends(
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
-
-
-
-
