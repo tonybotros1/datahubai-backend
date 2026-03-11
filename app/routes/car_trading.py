@@ -2578,7 +2578,7 @@ async def get_last_changes(data_filter: LastChangesFilter, data: dict = Depends(
                 '$match': {
                     'updatedAt': {
                         '$gte': from_date,
-                        '$lte': to_date + timedelta(days=1)
+                        '$lte': to_date
                     }
                 }
             }, {
@@ -2669,10 +2669,10 @@ async def get_last_changes(data_filter: LastChangesFilter, data: dict = Depends(
                     'pipeline': [
                         {
                             '$match': {
-                                'company_id': company_id,
+                                'company_id':company_id,
                                 'updatedAt': {
                                     '$gte': from_date,
-                                    '$lte': to_date + timedelta(days=1)
+                                    '$lte': to_date
                                 }
                             }
                         }, {
@@ -2718,6 +2718,191 @@ async def get_last_changes(data_filter: LastChangesFilter, data: dict = Depends(
                                         '$account_name_details.name', 0
                                     ]
                                 }
+                            }
+                        }
+                    ]
+                }
+            }, {
+                '$unionWith': {
+                    'coll': 'all_outstanding',
+                    'pipeline': [
+                        {
+                            '$match': {
+                                'company_id': company_id,
+                                'updatedAt': {
+                                    '$gte': from_date,
+                                    '$lte': to_date
+                                }
+                            }
+                        }, {
+                            '$lookup': {
+                                'from': 'all_lists_values',
+                                'localField': 'name',
+                                'foreignField': '_id',
+                                'as': 'item_details'
+                            }
+                        }, {
+                            '$lookup': {
+                                'from': 'all_lists_values',
+                                'localField': 'account_name',
+                                'foreignField': '_id',
+                                'as': 'account_name_details'
+                            }
+                        }, {
+                            '$project': {
+                                '_id': 0,
+                                'type': {
+                                    '$literal': 'outstanding'
+                                },
+                                'brand_name': {
+                                    '$literal': '-'
+                                },
+                                'model_name': {
+                                    '$literal': '-'
+                                },
+                                'year': {
+                                    '$literal': '-'
+                                },
+                                'description': '$comment',
+                                'pay': '$pay',
+                                'receive': '$receive',
+                                'updatedAt': 1,
+                                'item_name': {
+                                    '$arrayElemAt': [
+                                        '$item_details.name', 0
+                                    ]
+                                },
+                                'account_name': {
+                                    '$arrayElemAt': [
+                                        '$account_name_details.name', 0
+                                    ]
+                                }
+                            }
+                        }
+                    ]
+                }
+            }, {
+                '$unionWith': {
+                    'coll': 'all_capitals',
+                    'pipeline': [
+                        {
+                            '$match': {
+                                'company_id': company_id,
+                                'updatedAt': {
+                                    '$gte': from_date,
+                                    '$lte': to_date
+                                }
+                            }
+                        }, {
+                            '$lookup': {
+                                'from': 'all_lists_values',
+                                'localField': 'name',
+                                'foreignField': '_id',
+                                'as': 'item_details'
+                            }
+                        }, {
+                            '$lookup': {
+                                'from': 'all_lists_values',
+                                'localField': 'account_name',
+                                'foreignField': '_id',
+                                'as': 'account_name_details'
+                            }
+                        }, {
+                            '$project': {
+                                '_id': 0,
+                                'type': {
+                                    '$literal': 'capital'
+                                },
+                                'brand_name': {
+                                    '$literal': '-'
+                                },
+                                'model_name': {
+                                    '$literal': '-'
+                                },
+                                'year': {
+                                    '$literal': '-'
+                                },
+                                'description': '$comment',
+                                'pay': '$pay',
+                                'receive': '$receive',
+                                'updatedAt': 1,
+                                'item_name': {
+                                    '$arrayElemAt': [
+                                        '$item_details.name', 0
+                                    ]
+                                },
+                                'account_name': {
+                                    '$arrayElemAt': [
+                                        '$account_name_details.name', 0
+                                    ]
+                                }
+                            }
+                        }
+                    ]
+                }
+            }, {
+                '$unionWith': {
+                    'coll': 'all_trades_transfers',
+                    'pipeline': [
+                        {
+                            '$match': {
+                                'company_id': company_id,
+                                'updatedAt': {
+                                    '$gte': from_date,
+                                    '$lte': to_date
+                                }
+                            }
+                        }, {
+                            '$lookup': {
+                                'from': 'all_lists_values',
+                                'localField': 'from_account',
+                                'foreignField': '_id',
+                                'as': 'from_details'
+                            }
+                        }, {
+                            '$lookup': {
+                                'from': 'all_lists_values',
+                                'localField': 'to_account',
+                                'foreignField': '_id',
+                                'as': 'to_details'
+                            }
+                        }, {
+                            '$project': {
+                                'entries': [
+                                    {
+                                        'type': 'transfer',
+                                        'brand_name': '-',
+                                        'model_name': '-',
+                                        'year': '-',
+                                        'description': '$comment',
+                                        'pay': '$amount',
+                                        'receive': 0,
+                                        'updatedAt': 1,
+                                        'item_name': '-',
+                                        'account_name': {
+                                            '$first': '$from_details.name'
+                                        }
+                                    }, {
+                                        'type': 'transfer',
+                                        'brand_name': '-',
+                                        'model_name': '-',
+                                        'year': '-',
+                                        'description': '$comment',
+                                        'pay': 0,
+                                        'receive': '$amount',
+                                        'updatedAt': 1,
+                                        'item_name': '-',
+                                        'account_name': {
+                                            '$first': '$to_details.name'
+                                        }
+                                    }
+                                ]
+                            }
+                        }, {
+                            '$unwind': '$entries'
+                        }, {
+                            '$replaceRoot': {
+                                'newRoot': '$entries'
                             }
                         }
                     ]
