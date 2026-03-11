@@ -2669,7 +2669,7 @@ async def get_last_changes(data_filter: LastChangesFilter, data: dict = Depends(
                     'pipeline': [
                         {
                             '$match': {
-                                'company_id':company_id,
+                                'company_id': company_id,
                                 'updatedAt': {
                                     '$gte': from_date,
                                     '$lte': to_date
@@ -2877,7 +2877,7 @@ async def get_last_changes(data_filter: LastChangesFilter, data: dict = Depends(
                                         'description': '$comment',
                                         'pay': '$amount',
                                         'receive': 0,
-                                        'updatedAt': 1,
+                                        'updatedAt': "$updatedAt",
                                         'item_name': '-',
                                         'account_name': {
                                             '$first': '$from_details.name'
@@ -2890,7 +2890,7 @@ async def get_last_changes(data_filter: LastChangesFilter, data: dict = Depends(
                                         'description': '$comment',
                                         'pay': 0,
                                         'receive': '$amount',
-                                        'updatedAt': 1,
+                                        'updatedAt': "$updatedAt",
                                         'item_name': '-',
                                         'account_name': {
                                             '$first': '$to_details.name'
