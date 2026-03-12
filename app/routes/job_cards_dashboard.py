@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Optional
 
 from bson import ObjectId
-from fastapi import APIRouter, HTTPException, Depends, UploadFile, Form, File
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 
 from app.core import security
@@ -364,8 +364,6 @@ async def get_job_cards_daily_summary(time_filter: TimeFilter, data: dict = Depe
 @router.get("/get_new_job_cards_daily_summary")
 async def get_new_job_cards_daily_summary(data: dict = Depends(security.get_current_user)):
     try:
-        # from_date = time_filter.from_date
-        # to_date = time_filter.to_date
         company_id = ObjectId(data.get('company_id'))
         daily_summary_pipeline = [
             {
@@ -374,157 +372,142 @@ async def get_new_job_cards_daily_summary(data: dict = Depends(security.get_curr
                 }
             }, {
                 '$lookup': {
-                    'from': 'job_cards',
+                    'from': 'branches',
                     'let': {
-                        'branch_id': '$_id'
+                        'branch_id': '$branch'
                     },
                     'pipeline': [
                         {
                             '$match': {
                                 '$expr': {
                                     '$eq': [
-                                        '$branch', '$$branch_id'
+                                        '$_id', '$$branch_id'
                                     ]
                                 }
                             }
                         }, {
-                            '$addFields': {
-                                'date_field_to_filter': {
-                                    '$switch': {
-                                        'branches': [
-                                            {
-                                                'case': {
-                                                    '$eq': [
-                                                        {
-                                                            '$toLower': '$job_status_1'
-                                                        }, 'new'
-                                                    ]
-                                                },
-                                                'then': '$job_date'
-                                            }, {
-                                                'case': {
-                                                    '$eq': [
-                                                        {
-                                                            '$toLower': '$job_status_1'
-                                                        }, 'cancelled'
-                                                    ]
-                                                },
-                                                'then': '$job_cancellation_date'
-                                            }, {
-                                                'case': {
-                                                    '$eq': [
-                                                        {
-                                                            '$toLower': '$job_status_1'
-                                                        }, 'posted'
-                                                    ]
-                                                },
-                                                'then': '$invoice_date'
-                                            }
-                                        ],
-                                        'default': '$job_date'
-                                    }
-                                }
+                            '$match': {
+                                'company_id': company_id
                             }
-                        },
-                        # {
-                        #     '$match': {
-                        #         '$expr': {
-                        #             '$and': [
-                        #                 {
-                        #                     '$gte': [
-                        #                         '$date_field_to_filter',
-                        #                         from_date
-                        #                     ]
-                        #                 }, {
-                        #                     '$lt': [
-                        #                         '$date_field_to_filter',
-                        #                         to_date
-                        #                     ]
-                        #                 }
-                        #             ]
-                        #         }
-                        #     }
-                        # },
-                        {
-                            '$group': {
-                                '_id': None,
-                                'totalNew': {
-                                    '$sum': {
-                                        '$cond': [
-                                            {
-                                                '$eq': [
-                                                    '$job_status_1', 'New'
-                                                ]
-                                            }, 1, 0
-                                        ]
-                                    }
-                                },
-                                'totalNotApproved': {
-                                    '$sum': {
-                                        '$cond': [
-                                            {
-                                                '$eq': [
-                                                    '$job_status_2', 'New'
-                                                ]
-                                            }, 1, 0
-                                        ]
-                                    }
-                                },
-                                'totalApproved': {
-                                    '$sum': {
-                                        '$cond': [
-                                            {
-                                                '$eq': [
-                                                    '$job_status_2', 'Approved'
-                                                ]
-                                            }, 1, 0
-                                        ]
-                                    }
-                                },
-                                'totalReady': {
-                                    '$sum': {
-                                        '$cond': [
-                                            {
-                                                '$eq': [
-                                                    '$job_status_2', 'Ready'
-                                                ]
-                                            }, 1, 0
-                                        ]
-                                    }
-                                },
-                                'totalReturned': {
-                                    '$sum': {
-                                        '$cond': [
-                                            {
-                                                '$and': [{'$eq': [
-                                                    '$label', 'Returned',
-
-                                                ]}, {'$eq': [
-                                                    '$job_status_1', 'New',
-
-                                                ]}]
-                                            }, 1, 0
-                                        ]
-                                    }
-                                }
+                        }, {
+                            '$project': {
+                                '_id': 1,
+                                'name': 1
                             }
                         }
                     ],
-                    'as': 'job_details'
+                    'as': 'branch'
                 }
             }, {
-                '$match': {
-                    'job_details.0': {
-                        '$exists': True
+                '$unwind': '$branch'
+            }, {
+                '$addFields': {
+                    'date_field_to_filter': {
+                        '$switch': {
+                            'branches': [
+                                {
+                                    'case': {
+                                        '$eq': [
+                                            {
+                                                '$toLower': '$job_status_1'
+                                            }, 'new'
+                                        ]
+                                    },
+                                    'then': '$job_date'
+                                }, {
+                                    'case': {
+                                        '$eq': [
+                                            {
+                                                '$toLower': '$job_status_1'
+                                            }, 'cancelled'
+                                        ]
+                                    },
+                                    'then': '$job_cancellation_date'
+                                }, {
+                                    'case': {
+                                        '$eq': [
+                                            {
+                                                '$toLower': '$job_status_1'
+                                            }, 'posted'
+                                        ]
+                                    },
+                                    'then': '$invoice_date'
+                                }
+                            ],
+                            'default': '$job_date'
+                        }
                     }
                 }
             }, {
-                '$project': {
-                    'name': 1,
-                    'job_details': 1
+                '$group': {
+                    '_id': '$branch._id',
+                    'name': {
+                        '$first': '$branch.name'
+                    },
+                    'totalNew': {
+                        '$sum': {
+                            '$cond': [
+                                {
+                                    '$eq': [
+                                        '$job_status_1', 'New'
+                                    ]
+                                }, 1, 0
+                            ]
+                        }
+                    },
+                    'totalNotApproved': {
+                        '$sum': {
+                            '$cond': [
+                                {
+                                    '$eq': [
+                                        '$job_status_2', 'New'
+                                    ]
+                                }, 1, 0
+                            ]
+                        }
+                    },
+                    'totalApproved': {
+                        '$sum': {
+                            '$cond': [
+                                {
+                                    '$eq': [
+                                        '$job_status_2', 'Approved'
+                                    ]
+                                }, 1, 0
+                            ]
+                        }
+                    },
+                    'totalReady': {
+                        '$sum': {
+                            '$cond': [
+                                {
+                                    '$eq': [
+                                        '$job_status_2', 'Ready'
+                                    ]
+                                }, 1, 0
+                            ]
+                        }
+                    },
+                    'totalReturned': {
+                        '$sum': {
+                            '$cond': [
+                                {
+                                    '$and': [
+                                        {
+                                            '$eq': [
+                                                '$label', 'Returned'
+                                            ]
+                                        }, {
+                                            '$eq': [
+                                                '$job_status_1', 'New'
+                                            ]
+                                        }
+                                    ]
+                                }, 1, 0
+                            ]
+                        }
+                    }
                 }
-            }, {
-                '$unwind': '$job_details'
             }, {
                 '$facet': {
                     'branches': [
@@ -533,7 +516,14 @@ async def get_new_job_cards_daily_summary(data: dict = Depends(security.get_curr
                                 '_id': 1,
                                 'name': 1,
                                 'job_details': [
-                                    '$job_details'
+                                    {
+                                        '_id': None,
+                                        'totalNew': '$totalNew',
+                                        'totalNotApproved': '$totalNotApproved',
+                                        'totalApproved': '$totalApproved',
+                                        'totalReady': '$totalReady',
+                                        'totalReturned': '$totalReturned'
+                                    }
                                 ]
                             }
                         }
@@ -543,19 +533,19 @@ async def get_new_job_cards_daily_summary(data: dict = Depends(security.get_curr
                             '$group': {
                                 '_id': None,
                                 'totalNew': {
-                                    '$sum': '$job_details.totalNew'
+                                    '$sum': '$totalNew'
                                 },
                                 'totalNotApproved': {
-                                    '$sum': '$job_details.totalNotApproved'
+                                    '$sum': '$totalNotApproved'
                                 },
                                 'totalApproved': {
-                                    '$sum': '$job_details.totalApproved'
+                                    '$sum': '$totalApproved'
                                 },
                                 'totalReady': {
-                                    '$sum': '$job_details.totalReady'
+                                    '$sum': '$totalReady'
                                 },
                                 'totalReturned': {
-                                    '$sum': '$job_details.totalReturned'
+                                    '$sum': '$totalReturned'
                                 }
                             }
                         }, {
@@ -622,12 +612,38 @@ async def get_new_job_cards_daily_summary(data: dict = Depends(security.get_curr
                     }
                 }
             }, {
+                '$match': {
+                    '$or': [
+                        {
+                            'total_new': {
+                                '$gt': 0
+                            }
+                        }, {
+                            'total_not_approved': {
+                                '$gt': 0
+                            }
+                        }, {
+                            'total_approved': {
+                                '$gt': 0
+                            }
+                        }, {
+                            'total_ready': {
+                                '$gt': 0
+                            }
+                        }, {
+                            'total_returned': {
+                                '$gt': 0
+                            }
+                        }
+                    ]
+                }
+            }, {
                 '$project': {
                     'job_details': 0
                 }
             }
         ]
-        cursor = await branches_collection.aggregate(daily_summary_pipeline)
+        cursor = await job_cards_collection.aggregate(daily_summary_pipeline)
         results = await cursor.to_list(None)
         return {"new_daily_summary": results}
 
@@ -1071,7 +1087,7 @@ async def get_customer_aging_summary(data: dict = Depends(security.get_current_u
         customers_aging_pipeline = [
             {
                 '$match': {
-                    'company_id': ObjectId('68bbfc4b56c35562f967422d'),
+                    'company_id': company_id,
                     'job_status_1': 'Posted'
                 }
             }, {
@@ -1454,7 +1470,7 @@ async def get_customer_aging_summary(data: dict = Depends(security.get_current_u
                                             ]
                                         }, {
                                             '$eq': [
-                                                '$company_id', ObjectId('68bbfc4b56c35562f967422d')
+                                                '$company_id', company_id
                                             ]
                                         }, {
                                             '$eq': [
@@ -1498,7 +1514,10 @@ async def get_customer_aging_summary(data: dict = Depends(security.get_current_u
                 }
             }, {
                 '$sort': {
-                    'total_outstanding': -1
+                    'bucket_360_plus': -1,
+                    'bucket_181_360': -1,
+                    'bucket_91_180': -1,
+                    'bucket_0_90': -1
                 }
             }, {
                 '$limit': 2000
