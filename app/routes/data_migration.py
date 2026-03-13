@@ -824,8 +824,8 @@ async def dealing_with_ap_invoices(file, data, delete_every_thing: bool):
                               await job_cards_collection.find({"company_id": company_id}).to_list()}
         print("got existing_job_cards")
 
-        existing_banks = {b["account_number"]: ObjectId(b["_id"]) for b in
-                          await banks_collection.find({}).to_list(length=None)}
+        existing_banks = {b["account_number"].strip(): ObjectId(b["_id"]) for b in
+                          await banks_collection.find({"company_id": company_id}).to_list(length=None)}
         print("got existing_banks")
 
         account_types_bank_doc = await value_collection.find_one({"name": "Bank"})
@@ -958,7 +958,7 @@ async def dealing_with_ap_invoices(file, data, delete_every_thing: bool):
                         )
                         new_account = await add_new_bank(bank=account_model, data=data)
                         account_id = ObjectId(new_account['account']['_id'])
-                        existing_banks[str(new_account).strip()] = account_id
+                        existing_banks[str(account).strip()] = account_id
                 else:
                     account_id = None
             except Exception as e:
@@ -1103,7 +1103,7 @@ async def dealing_with_ar_receipts(file: UploadFile, data: dict, delete_every_th
                         )
                         new_account = await add_new_bank(bank=account_model, data=data)
                         account_id = ObjectId(new_account['account']['_id'])
-                        existing_banks[str(new_account['account']['account_number']).strip()] = account_id
+                        existing_banks[str(account_number).strip()] = account_id
                 else:
                     account_id = None
             except Exception as e:

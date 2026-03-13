@@ -12,6 +12,7 @@ router = APIRouter()
 job_cards_collection = get_collection("job_cards")
 branches_collection = get_collection("branches")
 salesman_collection = get_collection("sales_man")
+receipts_collection = get_collection("all_receipts")
 
 
 class TimeFilter(BaseModel):
@@ -1550,4 +1551,233 @@ async def get_customer_aging_summary(data: dict = Depends(security.get_current_u
 
     except Exception as e:
         print(e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/get_account_transfers")
+async def get_account_transfers(data: dict = Depends(security.get_current_user)):
+    try:
+        company_id = ObjectId(data.get('company_id'))
+        account_summary_pipeline = [
+            {
+                '$match': {
+                    'company_id': company_id
+                }
+            }, {
+                '$project': {
+                    'account': 1,
+                    'rate': 1
+                }
+            }, {
+                '$lookup': {
+                    'from': 'all_banks',
+                    'localField': 'account',
+                    'foreignField': '_id',
+                    'as': 'account_details'
+                }
+            }, {
+                '$addFields': {
+                    'account_number': {
+                        '$ifNull': [
+                            {
+                                '$arrayElemAt': [
+                                    '$account_details.account_number', 0
+                                ]
+                            }, None
+                        ]
+                    }
+                }
+            }, {
+                '$lookup': {
+                    'from': 'all_receipts_invoices',
+                    'localField': '_id',
+                    'foreignField': 'receipt_id',
+                    'as': 'receipts_invoices_details'
+                }
+            }, {
+                '$addFields': {
+                    'invoices_total': {
+                        '$sum': '$receipts_invoices_details.amount'
+                    },
+                    'total_with_rate': {
+                        '$multiply': [
+                            {
+                                '$sum': '$receipts_invoices_details.amount'
+                            }, '$rate'
+                        ]
+                    }
+                }
+            }, {
+                '$project': {
+                    'account_details': 0,
+                    'receipts_invoices_details': 0
+                }
+            }, {
+                '$unionWith': {
+                    'coll': 'all_payments',
+                    'pipeline': [
+                        {
+                            '$match': {
+                                'company_id': company_id
+                            }
+                        }, {
+                            '$project': {
+                                'account': 1,
+                                'rate': 1
+                            }
+                        }, {
+                            '$lookup': {
+                                'from': 'all_banks',
+                                'localField': 'account',
+                                'foreignField': '_id',
+                                'as': 'account_details'
+                            }
+                        }, {
+                            '$addFields': {
+                                'account_number': {
+                                    '$ifNull': [
+                                        {
+                                            '$arrayElemAt': [
+                                                '$account_details.account_number', 0
+                                            ]
+                                        }, None
+                                    ]
+                                }
+                            }
+                        }, {
+                            '$lookup': {
+                                'from': 'all_payments_invoices',
+                                'localField': '_id',
+                                'foreignField': 'receipt_id',
+                                'as': 'payments_invoices_details'
+                            }
+                        }, {
+                            '$addFields': {
+                                'invoices_total': {
+                                    '$sum': '$payments_invoices_details.amount'
+                                },
+                                'total_with_rate': {
+                                    '$multiply': [
+                                        {
+                                            '$sum': '$payments_invoices_details.amount'
+                                        }, '$rate'
+                                    ]
+                                }
+                            }
+                        }, {
+                            '$project': {
+                                'account_details': 0,
+                                'payments_invoices_details': 0
+                            }
+                        }
+                    ]
+                }
+            }, {
+                '$unionWith': {
+                    'coll': 'account_transfers',
+                    'pipeline': [
+                        {
+                            '$match': {
+                                'company_id': company_id
+                            }
+                        }, {
+                            '$project': {
+                                'from_account': 1,
+                                'amount': 1
+                            }
+                        }, {
+                            '$lookup': {
+                                'from': 'all_banks',
+                                'localField': 'from_account',
+                                'foreignField': '_id',
+                                'as': 'account_details'
+                            }
+                        }, {
+                            '$addFields': {
+                                'account_number': {
+                                    '$ifNull': [
+                                        {
+                                            '$arrayElemAt': [
+                                                '$account_details.account_number', 0
+                                            ]
+                                        }, None
+                                    ]
+                                }
+                            }
+                        }, {
+                            '$addFields': {
+                                'total_with_rate': {
+                                    '$multiply': [
+                                        '$amount', -1
+                                    ]
+                                }
+                            }
+                        }, {
+                            '$project': {
+                                'account_details': 0,
+                                'amount': 0
+                            }
+                        }
+                    ]
+                }
+            }, {
+                '$unionWith': {
+                    'coll': 'account_transfers',
+                    'pipeline': [
+                        {
+                            '$match': {
+                                'company_id': company_id
+                            }
+                        }, {
+                            '$project': {
+                                'from_account': 1,
+                                'amount': 1
+                            }
+                        }, {
+                            '$lookup': {
+                                'from': 'all_banks',
+                                'localField': 'to_account',
+                                'foreignField': '_id',
+                                'as': 'account_details'
+                            }
+                        }, {
+                            '$addFields': {
+                                'account_number': {
+                                    '$ifNull': [
+                                        {
+                                            '$arrayElemAt': [
+                                                '$account_details.account_number', 0
+                                            ]
+                                        }, None
+                                    ]
+                                },
+                                'type': 'to_transfers'
+                            }
+                        }, {
+                            '$addFields': {
+                                'total_with_rate': '$amount'
+                            }
+                        }, {
+                            '$project': {
+                                'account_details': 0,
+                                'amount': 0
+                            }
+                        }
+                    ]
+                }
+            }, {
+                '$group': {
+                    '_id': '$account_number',
+                    'amount': {
+                        '$sum': '$total_with_rate'
+                    }
+                }
+            }
+        ]
+
+        cursor = await receipts_collection.aggregate(account_summary_pipeline)
+        results = await cursor.to_list(None)
+        return {"accounts_summary": results}
+
+    except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
