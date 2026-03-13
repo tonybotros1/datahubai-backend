@@ -5,7 +5,6 @@ from pydantic import BaseModel
 from app.core import security
 from app.database import get_collection
 from datetime import datetime
-from app.routes.branches import serializer
 from app.websocket_config import manager
 
 router = APIRouter()
@@ -140,6 +139,21 @@ pipeline: list[Dict[str, Any]] = [
             }
         }
     }, {
+        '$set': {
+            '_id': {
+                '$toString': '$_id'
+            },
+            'account_type_id': {
+                '$toString': '$account_type_id'
+            },
+            'currency_id': {
+                '$toString': '$currency_id'
+            },
+            'country_id': {
+                '$toString': '$country_id'
+            }
+        }
+    }, {
         '$project': {
             'country_details': 0,
             'account_type_details': 0,
@@ -192,7 +206,7 @@ async def get_all_banks(data: dict = Depends(security.get_current_user)):
         })
         cursor = await all_banks_collection.aggregate(new_pipeline)
         result = await cursor.to_list()
-        return {"banks": [serializer_doc(r) for r in result]}
+        return {"banks": result}
 
     except Exception as e:
         raise e
