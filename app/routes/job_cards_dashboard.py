@@ -1730,7 +1730,7 @@ async def get_account_transfers(data: dict = Depends(security.get_current_user))
                             }
                         }, {
                             '$project': {
-                                'from_account': 1,
+                                'to_account': 1,
                                 'amount': 1
                             }
                         }, {
@@ -1750,8 +1750,7 @@ async def get_account_transfers(data: dict = Depends(security.get_current_user))
                                             ]
                                         }, None
                                     ]
-                                },
-                                'type': 'to_transfers'
+                                }
                             }
                         }, {
                             '$addFields': {
@@ -1759,7 +1758,6 @@ async def get_account_transfers(data: dict = Depends(security.get_current_user))
                             }
                         }, {
                             '$project': {
-                                'account_details': 0,
                                 'amount': 0
                             }
                         }
@@ -1771,6 +1769,10 @@ async def get_account_transfers(data: dict = Depends(security.get_current_user))
                     'amount': {
                         '$sum': '$total_with_rate'
                     }
+                }
+            }, {
+                '$sort': {
+                    'amount': -1
                 }
             }
         ]
