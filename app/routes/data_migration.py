@@ -60,6 +60,7 @@ converters_collection = get_collection("converters")
 issuing_collection = get_collection("issuing")
 issuing_items_details_collection = get_collection("issuing_items_details")
 issuing_converters_details_collection = get_collection("issuing_converters_details")
+account_transfers_collection = get_collection("account_transfers")
 
 
 def normalize_number_to_string(value):
@@ -167,7 +168,101 @@ async def get_file(file: UploadFile = File(...), screen_name: str = Form(...),
             await dealing_with_issuing_items_details(file, data, delete_every_thing)
         elif screen_name.lower() == 'issuing converters details':
             await dealing_with_issuing_converters_details(file, data, delete_every_thing)
+        elif screen_name.lower() == 'account transfers':
+            await dealing_with_account_transfers(file, data, delete_every_thing)
 
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# =========================== Transfers Section ===========================
+async def dealing_with_account_transfers(file, data, delete_every_thing):
+    try:
+        company_id = ObjectId(data.get('company_id'))
+        if delete_every_thing:
+            await account_transfers_collection.delete_many({'company_id': company_id})
+        contents = await file.read()
+        df = pd.read_excel(BytesIO(contents))
+        df = df.fillna("")
+        total_rows = len(df)
+
+        existing_banks = {b["account_number"].strip(): ObjectId(b["_id"]) for b in
+                          await banks_collection.find({"company_id": company_id}).to_list(length=None)}
+        print("got existing_banks")
+        uae_country_doc = await countries_collection.find_one({"code": "UAE"})
+        uae_country_id = str(uae_country_doc["_id"])
+        uae_currency_doc = await currencies_collection.find_one({"country_id": ObjectId(uae_country_id)})
+        uae_currency_id = str(uae_currency_doc["_id"])
+        account_types_bank_doc = await value_collection.find_one({"name": "Bank"})
+        account_types_list_id = str(account_types_bank_doc["_id"])
+
+        await manager.broadcast({"type": "start", "total": total_rows})
+        for i, row in enumerate(df.itertuples(index=False), start=1):
+            transfer_number = normalize_number_to_string(row[0])
+            status = "Posted" if row[1] == "P" else "New"
+            date = to_mongo_datetime(row[2]) if row[2] else None
+            from_account_number = row[3]
+            to_account_number = row[4]
+            amount = safe_float(row[5]) if row[5] else 0
+            comment = row[6] if row[6] else ""
+
+            try:
+                if from_account_number:
+                    from_account_number_id = existing_banks.get(str(from_account_number).strip())
+                    if not from_account_number_id:
+                        account_model = BanksModel(
+                            account_name=from_account_number,
+                            account_number=from_account_number,
+                            currency_id=uae_currency_id,
+                            account_type_id=account_types_list_id
+                        )
+                        new_account = await add_new_bank(bank=account_model, data=data)
+                        account_id = ObjectId(new_account['account']['_id'])
+                        existing_banks[str(from_account_number).strip()] = account_id
+                else:
+                    from_account_number_id = None
+            except Exception as e:
+                print(f"error in from account {e}")
+                raise
+
+            try:
+                if to_account_number:
+                    to_account_number_id = existing_banks.get(str(to_account_number).strip())
+                    if not to_account_number_id:
+                        account_model = BanksModel(
+                            account_name=to_account_number,
+                            account_number=to_account_number,
+                            currency_id=uae_currency_id,
+                            account_type_id=account_types_list_id
+                        )
+                        new_account = await add_new_bank(bank=account_model, data=data)
+                        account_id = ObjectId(new_account['account']['_id'])
+                        existing_banks[str(to_account_number).strip()] = account_id
+                else:
+                    to_account_number_id = None
+            except Exception as e:
+                print(f"error in from account {e}")
+                raise
+
+            transfer_doc = {
+                "transfer_number": transfer_number,
+                "date": date,
+                "from_account": from_account_number_id,
+                "to_account": to_account_number_id,
+                "amount": amount,
+                "comment": comment,
+                "status": status,
+                "company_id": company_id,
+                "createdAt": security.now_utc(),
+                "updatedAt": security.now_utc(),
+            }
+
+            await account_transfers_collection.insert_one(transfer_doc)
+            print(i)
+            progress = int((i / total_rows) * 100)
+            await manager.send_progress(progress)
+        await manager.broadcast({"type": "done"})
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -790,6 +885,7 @@ async def dealing_with_ap_invoices(file, data, delete_every_thing: bool):
             print("all deleted")
         contents = await file.read()
         df = pd.read_excel(BytesIO(contents))
+        df = df.fillna("")
         total_rows = len(df)
         df.columns = df.columns.str.strip().str.lower()
         date_cols = ["transaction_date", "invoice_date"]
@@ -838,6 +934,7 @@ async def dealing_with_ap_invoices(file, data, delete_every_thing: bool):
         print("starting the loop...")
         await manager.broadcast({"type": "start", "total": total_rows})
         for i, row in enumerate(df.itertuples(index=False), start=1):
+            # print(row)
             reference_number = normalize_number_to_string(row[0])
             status = clean_value(row[1])
             transaction_date = row[2]
@@ -849,9 +946,9 @@ async def dealing_with_ap_invoices(file, data, delete_every_thing: bool):
             payment_type = clean_value(row[8])
             account = clean_value(row[9])
             cheque_number = clean_value(row[10])
-            cheque_date = to_mongo_datetime(row[11]) if row[11] else None
+            cheque_date = to_mongo_datetime(row[11]) if pd.notna(row[11]) else None
+            payment_date = to_mongo_datetime(row[14]) if pd.notna(row[14]) else None
             rate = clean_value(row[13], number=True)
-            payment_date = to_mongo_datetime(row[14]) if row[14] else None
             payment_number = clean_value(row[15], number=True)
             payment_amount = clean_value(row[16], number=True)
             transaction_type = clean_value(row[17])
@@ -866,40 +963,44 @@ async def dealing_with_ap_invoices(file, data, delete_every_thing: bool):
             else:
                 invoice_type_id = None
 
-            if vendor:
-                vendor_data = existing_vendors.get(vendor.capitalize())
-                if vendor_data:
-                    vendor_id = vendor_data.get("_id")
+            try:
+                if vendor:
+                    vendor_data = existing_vendors.get(vendor.capitalize())
+                    if vendor_data:
+                        vendor_id = vendor_data.get("_id")
+                    else:
+                        vendor_details = await create_entity_service(entity_name=str(vendor.capitalize().strip()),
+                                                                     entity_code=['Vendor'],
+                                                                     credit_limit=0,
+                                                                     warranty_days=0,
+                                                                     salesman_id=None,
+                                                                     entity_status='Company',
+                                                                     group_name="",
+                                                                     industry_id=None, trn="",
+                                                                     entity_type_id=None,
+                                                                     entity_address=[],
+                                                                     entity_phone=[],
+                                                                     entity_social=[],
+                                                                     company_id=company_id,
+                                                                     lpo_required="N"
+                                                                     )
+                        print("added new Vendor")
+                        existing_vendors[str(vendor).capitalize().strip()] = vendor_details
+                        vendor_id = vendor_details['_id']
                 else:
-                    vendor_details = await create_entity_service(entity_name=str(vendor.capitalize().strip()),
-                                                                 entity_code=['Vendor'],
-                                                                 credit_limit=0,
-                                                                 warranty_days=0,
-                                                                 salesman_id=None,
-                                                                 entity_status='Company',
-                                                                 group_name="",
-                                                                 industry_id=None, trn="",
-                                                                 entity_type_id=None,
-                                                                 entity_address=[],
-                                                                 entity_phone=[],
-                                                                 entity_social=[],
-                                                                 company_id=company_id,
-                                                                 lpo_required="N"
-                                                                 )
-                    print("added new Vendor")
-                    existing_vendors[str(vendor).capitalize().strip()] = vendor_details
-                    vendor_id = vendor_details['_id']
-            else:
-                vendor_id = None
+                    vendor_id = None
+            except Exception as e:
+                print(f"error in vendors: {e}")
+                raise
 
             ap_invoice_dict = {
                 "company_id": company_id,
                 "reference_number": reference_number.strip(),
                 "status": status.capitalize().strip(),
-                "transaction_date": to_mongo_datetime(transaction_date) if transaction_date else None,
+                "transaction_date": to_mongo_datetime(transaction_date) if pd.notna(transaction_date) else None,
+                "invoice_date": to_mongo_datetime(invoice_date) if pd.notna(invoice_date) else None,
                 "invoice_type": ObjectId(invoice_type_id),
                 "invoice_number": invoice_number.strip(),
-                "invoice_date": to_mongo_datetime(invoice_date) if invoice_date else None,
                 "vendor": ObjectId(vendor_id) if vendor_id else None,
                 "description": description,
                 "createdAt": security.now_utc(),
@@ -909,15 +1010,19 @@ async def dealing_with_ap_invoices(file, data, delete_every_thing: bool):
             print(f"added new AP Invoice for row: {i}")
             ap_invoice_id = new_ap_invoice.inserted_id
 
-            if transaction_type:
-                transaction_type_id = existing_ap_payment_types.get(transaction_type.capitalize().strip())
-                if not transaction_type_id:
-                    ap_payment_type_model = APPaymentTypes(type=transaction_type.capitalize().strip())
-                    new_ap_payment_type = await add_new_ap_payment_type(types=ap_payment_type_model, data=data)
-                    transaction_type_id = new_ap_payment_type['type']['_id']
-                    existing_ap_payment_types[transaction_type.capitalize().strip()] = transaction_type_id
-            else:
-                transaction_type_id = None
+            try:
+                if transaction_type:
+                    transaction_type_id = existing_ap_payment_types.get(transaction_type.capitalize().strip())
+                    if not transaction_type_id:
+                        ap_payment_type_model = APPaymentTypes(type=transaction_type.capitalize().strip())
+                        new_ap_payment_type = await add_new_ap_payment_type(types=ap_payment_type_model, data=data)
+                        transaction_type_id = new_ap_payment_type['type']['_id']
+                        existing_ap_payment_types[transaction_type.capitalize().strip()] = transaction_type_id
+                else:
+                    transaction_type_id = None
+            except Exception as e:
+                print(f"error in transaction types: {e}")
+                raise
 
             if job_id:
                 job_card_id = existing_job_cards.get(int(job_id), None)

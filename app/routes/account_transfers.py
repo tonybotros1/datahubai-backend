@@ -8,6 +8,7 @@ from app.database import get_collection
 from datetime import datetime
 
 from app.routes.car_trading import PyObjectId
+from app.routes.counters import create_custom_counter
 from app.websocket_config import manager
 from fastapi.encoders import jsonable_encoder
 
@@ -16,6 +17,8 @@ account_transfers_collection = get_collection("account_transfers")
 
 
 class TransferModel(BaseModel):
+    status: Optional[str] = None
+    transfer_number: Optional[str] = None
     date: Optional[datetime] = None
     from_account: Optional[str] = None
     to_account: Optional[str] = None
@@ -26,6 +29,8 @@ class TransferModel(BaseModel):
 class TransfersSearchModel(BaseModel):
     from_account: Optional[PyObjectId] = None
     to_account: Optional[PyObjectId] = None
+    status: Optional[str] = None
+    transfer_number: Optional[str] = None
     comment: Optional[str] = None
     amount: Optional[float] = None
     from_date: Optional[datetime] = None
@@ -139,11 +144,14 @@ async def add_new_transfer(transfer_data: TransferModel, data: dict = Depends(se
     try:
         company_id = ObjectId(data.get("company_id"))
         transfer_data = transfer_data.model_dump(exclude_unset=True)
+        new_transfer_counter = await create_custom_counter("TN", "TN", data=data, description='Transfer Number', )
 
         transfer_data.update({
             "company_id": company_id,
+            "status": "New",
             "from_account": ObjectId(transfer_data["from_account"]) if transfer_data["from_account"] else None,
             "to_account": ObjectId(transfer_data["to_account"]) if transfer_data["to_account"] else None,
+            "transfer_number": new_transfer_counter['final_counter'] if new_transfer_counter['success'] else None,
             "createdAt": security.now_utc(),
             "updatedAt": security.now_utc(),
         })
@@ -172,6 +180,7 @@ async def update_new_transfer(transfer_id: str, transfer_data: TransferModel,
 
         transfer_data.update({
             "company_id": company_id,
+            "status": transfer_data["status"] if transfer_data["status"] else None,
             "from_account": ObjectId(transfer_data["from_account"]) if transfer_data["from_account"] else None,
             "to_account": ObjectId(transfer_data["to_account"]) if transfer_data["to_account"] else None,
             "createdAt": security.now_utc(),
@@ -210,6 +219,30 @@ async def delete_transfer(transfer_id: str, _: dict = Depends(security.get_curre
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/get_account_transfer_status/{transfer_id}")
+async def get_account_transfer_status(transfer_id: str, _: dict = Depends(security.get_current_user)):
+    try:
+        if not ObjectId.is_valid(transfer_id):
+            raise HTTPException(status_code=400, detail="Invalid transfer_id format")
+
+        transfer_id = ObjectId(transfer_id)
+
+        result = await account_transfers_collection.find_one(
+            {"_id": transfer_id},
+            {"_id": 0, "status": 1}
+        )
+
+        if not result:
+            raise HTTPException(status_code=404, detail="Transfer not found")
+
+        return {"status": "success", "data": result}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
+
+
 @router.post("/search_engine_for_account_transfers")
 async def search_engine_for_account_transfers(filter_transfers: TransfersSearchModel,
                                               data: dict = Depends(security.get_current_user)):
@@ -218,6 +251,10 @@ async def search_engine_for_account_transfers(filter_transfers: TransfersSearchM
         match_stage = {}
         if company_id:
             match_stage['company_id'] = company_id
+        if filter_transfers.status:
+            match_stage['status'] = filter_transfers.status
+        if filter_transfers.transfer_number:
+            match_stage['transfer_number'] = filter_transfers.transfer_number
         if filter_transfers.from_date or filter_transfers.to_date:
             match_stage['date'] = {}
             if filter_transfers.from_date:
