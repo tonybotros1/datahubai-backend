@@ -1730,3 +1730,362 @@ async def get_account_transfers(data: dict = Depends(security.get_current_user))
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/get_cashflow_dates")
+async def get_cashflow_dates(data: dict = Depends(security.get_current_user)):
+    try:
+        company_id = ObjectId(data.get('company_id'))
+        cashflow_pipeline = [
+            {
+                '$match': {
+                    'company_id': company_id,
+                    'status': 'Posted'
+                }
+            }, {
+                '$project': {
+                    '_id': 0,
+                    'date': '$receipt_date'
+                }
+            }, {
+                '$unionWith': {
+                    'coll': 'all_payments',
+                    'pipeline': [
+                        {
+                            '$match': {
+                                'company_id': company_id,
+                                'status': 'Posted'
+                            }
+                        }, {
+                            '$project': {
+                                '_id': 0,
+                                'date': '$payment_date'
+                            }
+                        }
+                    ]
+                }
+            }, {
+                '$unionWith': {
+                    'coll': 'account_transfers',
+                    'pipeline': [
+                        {
+                            '$match': {
+                                'company_id': company_id,
+                                'status': 'Posted'
+                            }
+                        }, {
+                            '$project': {
+                                '_id': 0,
+                                'date': 1
+                            }
+                        }
+                    ]
+                }
+            },
+
+            {
+                "$match": {
+                    "date": {"$ne": None}
+                }
+            },
+            {
+                '$project': {
+                    'dateObj': {
+                        '$dateTrunc': {
+                            'date': '$date',
+                            'unit': 'day'
+                        }
+                    }
+                }
+            }, {
+                '$group': {
+                    '_id': '$dateObj'
+                }
+            }, {
+                '$project': {
+                    'dateObj': '$_id',
+                    'date': {
+                        '$dateToString': {
+                            'format': '%d-%m-%Y',
+                            'date': '$_id'
+                        }
+                    }
+                }
+            }, {
+                '$sort': {
+                    'dateObj': -1
+                }
+            }, {
+                '$setWindowFields': {
+                    'sortBy': {
+                        'dateObj': -1
+                    },
+                    'output': {
+                        'idx': {
+                            '$documentNumber': {}
+                        }
+                    }
+                }
+            }, {
+                '$project': {
+                    'k': {
+                        '$toString': '$idx'
+                    },
+                    'v': {
+                        'date': '$date'
+                    }
+                }
+            }, {
+                '$group': {
+                    '_id': None,
+                    'items': {
+                        '$push': {
+                            'k': '$k',
+                            'v': '$v'
+                        }
+                    }
+                }
+            }, {
+                '$replaceRoot': {
+                    'newRoot': {
+                        '$arrayToObject': '$items'
+                    }
+                }
+            }
+        ]
+        cursor = await receipts_collection.aggregate(cashflow_pipeline)
+        results = await cursor.to_list(None)
+        return {"cashflow_dates": results[0] if results else []}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/get_cashflow_summary")
+async def get_cashflow_summary(time_filter: TimeFilter, data: dict = Depends(security.get_current_user)):
+    try:
+        company_id = ObjectId(data.get("company_id"))
+        from_date = time_filter.from_date
+        to_date = time_filter.to_date
+        print(from_date)
+        print(to_date)
+        cashflow_pipeline = [
+            {
+                '$match': {
+                    'company_id': company_id,
+                    'status': 'Posted',
+                    'receipt_date': {
+                        '$gte': from_date,
+                        '$lt': to_date
+                    }
+                }
+            }, {
+                '$project': {
+                    'account': 1,
+                    'rate': 1
+                }
+            }, {
+                '$lookup': {
+                    'from': 'all_receipts_invoices',
+                    'localField': '_id',
+                    'foreignField': 'receipt_id',
+                    'as': 'inv'
+                }
+            }, {
+                '$set': {
+                    'received': {
+                        '$multiply': [
+                            {
+                                '$ifNull': [
+                                    {
+                                        '$sum': '$inv.amount'
+                                    }, 0
+                                ]
+                            }, {
+                                '$ifNull': [
+                                    '$rate', 1
+                                ]
+                            }
+                        ]
+                    },
+                    'paid': 0,
+                    'trans_in': 0,
+                    'trans_out': 0
+                }
+            }, {
+                '$project': {
+                    'account': 1,
+                    'received': 1,
+                    'paid': 1,
+                    'trans_in': 1,
+                    'trans_out': 1
+                }
+            }, {
+                '$unionWith': {
+                    'coll': 'all_payments',
+                    'pipeline': [
+                        {
+                            '$match': {
+                                'company_id': company_id,
+                                'status': 'Posted',
+                                'payment_date': {
+                                    '$gte': from_date,
+                                    '$lt': to_date
+                                }
+                            }
+                        }, {
+                            '$project': {
+                                'account': 1,
+                                'rate': 1
+                            }
+                        }, {
+                            '$lookup': {
+                                'from': 'all_payments_invoices',
+                                'localField': '_id',
+                                'foreignField': 'payment_id',
+                                'as': 'inv'
+                            }
+                        }, {
+                            '$set': {
+                                'paid': {
+                                    '$multiply': [
+                                        {
+                                            '$ifNull': [
+                                                {
+                                                    '$sum': '$inv.amount'
+                                                }, 0
+                                            ]
+                                        }, {
+                                            '$ifNull': [
+                                                '$rate', 1
+                                            ]
+                                        }, -1
+                                    ]
+                                },
+                                'received': 0,
+                                'trans_in': 0,
+                                'trans_out': 0
+                            }
+                        }, {
+                            '$project': {
+                                'account': 1,
+                                'received': 1,
+                                'paid': 1,
+                                'trans_in': 1,
+                                'trans_out': 1
+                            }
+                        }
+                    ]
+                }
+            }, {
+                '$unionWith': {
+                    'coll': 'account_transfers',
+                    'pipeline': [
+                        {
+                            '$match': {
+                                'company_id': company_id,
+                                'status': 'Posted',
+                                'date': {
+                                    '$gte': from_date,
+                                    '$lt': to_date
+                                }
+                            }
+                        }, {
+                            '$project': {
+                                'entries': [
+                                    {
+                                        'account': '$from_account',
+                                        'trans_out': {
+                                            '$multiply': [
+                                                '$amount', -1
+                                            ]
+                                        },
+                                        'trans_in': 0,
+                                        'received': 0,
+                                        'paid': 0
+                                    }, {
+                                        'account': '$to_account',
+                                        'trans_in': '$amount',
+                                        'trans_out': 0,
+                                        'received': 0,
+                                        'paid': 0
+                                    }
+                                ]
+                            }
+                        }, {
+                            '$unwind': '$entries'
+                        }, {
+                            '$replaceRoot': {
+                                'newRoot': '$entries'
+                            }
+                        }, {
+                            '$match': {
+                                'account': {
+                                    '$ne': None
+                                }
+                            }
+                        }
+                    ]
+                }
+            }, {
+                '$group': {
+                    '_id': '$account',
+                    'total_received': {
+                        '$sum': '$received'
+                    },
+                    'total_paid': {
+                        '$sum': '$paid'
+                    },
+                    'total_trans_out': {
+                        '$sum': '$trans_out'
+                    },
+                    'total_trans_in': {
+                        '$sum': '$trans_in'
+                    }
+                }
+            }, {
+                '$set': {
+                    'net': {
+                        '$add': [
+                            '$total_received', '$total_paid', '$total_trans_out', '$total_trans_in'
+                        ]
+                    }
+                }
+            }, {
+                '$lookup': {
+                    'from': 'all_banks',
+                    'localField': '_id',
+                    'foreignField': '_id',
+                    'pipeline': [
+                        {
+                            '$project': {
+                                'account_number': 1
+                            }
+                        }
+                    ],
+                    'as': 'bank'
+                }
+            }, {
+                '$set': {
+                    'account_number': {
+                        '$first': '$bank.account_number'
+                    }
+                }
+            }, {
+                '$project': {
+                    '_id': 0,
+                    'bank': 0
+                }
+            }, {
+                '$sort': {
+                    'net': -1
+                }
+            }
+        ]
+        cursor = await receipts_collection.aggregate(cashflow_pipeline)
+        results = await cursor.to_list(None)
+        print(results)
+        return {"summary": results}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
