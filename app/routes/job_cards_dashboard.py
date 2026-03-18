@@ -13,6 +13,7 @@ job_cards_collection = get_collection("job_cards")
 branches_collection = get_collection("branches")
 salesman_collection = get_collection("sales_man")
 receipts_collection = get_collection("all_receipts")
+all_banks_collection = get_collection("all_banks")
 
 
 class TimeFilter(BaseModel):
@@ -2085,6 +2086,218 @@ async def get_cashflow_summary(time_filter: TimeFilter, data: dict = Depends(sec
         cursor = await receipts_collection.aggregate(cashflow_pipeline)
         results = await cursor.to_list(None)
         print(results)
+        return {"summary": results}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/get_post_dated_cheques")
+async def get_post_dated_cheques(data: dict = Depends(security.get_current_user)):
+    try:
+        company_id = ObjectId(data.get("company_id"))
+        post_dated_cheques_pipeline = [
+            {
+                '$match': {
+                    'company_id': company_id
+                }
+            }, {
+                '$lookup': {
+                    'from': 'all_lists_values',
+                    'localField': 'account_type_id',
+                    'foreignField': '_id',
+                    'as': 'type_details'
+                }
+            }, {
+                '$addFields': {
+                    'type': {
+                        '$ifNull': [
+                            {
+                                '$arrayElemAt': [
+                                    '$type_details.name', 0
+                                ]
+                            }, None
+                        ]
+                    }
+                }
+            }, {
+                '$match': {
+                    'type': {
+                        '$regex': '^cheque$',
+                        '$options': 'i'
+                    }
+                }
+            }, {
+                '$project': {
+                    '_id': 1,
+                    'account_number': 1
+                }
+            }, {
+                '$lookup': {
+                    'from': 'all_payments',
+                    'let': {
+                        'bankId': '$_id',
+                        'accNum': '$account_number'
+                    },
+                    'pipeline': [
+                        {
+                            '$match': {
+                                '$expr':
+                                    {
+                                        '$eq': [
+                                            '$account', '$$bankId'
+                                        ]
+                                    },
+
+                            }
+                        }, {
+                            '$lookup': {
+                                'from': 'all_payments_invoices',
+                                'localField': '_id',
+                                'foreignField': 'payment_id',
+                                'as': 'invoices'
+                            }
+                        }, {
+                            '$addFields': {
+                                'paid': {
+                                    '$sum': '$invoices.amount'
+                                }
+                            }
+                        }, {
+                            '$addFields': {
+                                'paid': {
+                                    '$multiply': [
+                                        '$paid', '$rate'
+                                    ]
+                                }
+                            }
+                        }, {
+                            '$project': {
+                                'source': {
+                                    '$literal': 'payment'
+                                },
+                                'counter': '$payment_number',
+                                'date': '$payment_date',
+                                'cheque_date': 1,
+                                'beneficiary': '$vendor',
+                                'bank_account': '$$accNum',
+                                'paid': 1,
+                                'received': {
+                                    '$literal': 0
+                                }
+                            }
+                        }
+                    ],
+                    'as': 'payments'
+                }
+            }, {
+                '$lookup': {
+                    'from': 'all_receipts',
+                    'let': {
+                        'bankId': '$_id',
+                        'accNum': '$account_number'
+                    },
+                    'pipeline': [
+                        {
+                            '$match': {
+                                '$expr': {
+                                    '$eq': [
+                                        '$account', '$$bankId'
+                                    ]
+                                }
+                            }
+                        }, {
+                            '$lookup': {
+                                'from': 'all_receipts_invoices',
+                                'localField': '_id',
+                                'foreignField': 'receipt_id',
+                                'as': 'invoices'
+                            }
+                        }, {
+                            '$addFields': {
+                                'received': {
+                                    '$sum': '$invoices.amount'
+                                }
+                            }
+                        }, {
+                            '$addFields': {
+                                'received': {
+                                    '$multiply': [
+                                        '$received', '$rate'
+                                    ]
+                                }
+                            }
+                        }, {
+                            '$project': {
+                                'source': {
+                                    '$literal': 'receipt'
+                                },
+                                'counter': '$receipt_number',
+                                'date': '$receipt_date',
+                                'cheque_date': 1,
+                                'beneficiary': '$customer',
+                                'bank_account': '$$accNum',
+                                'received': 1,
+                                'paid': {
+                                    '$literal': 0
+                                }
+                            }
+                        }
+                    ],
+                    'as': 'receipts'
+                }
+            }, {
+                '$project': {
+                    'data': {
+                        '$concatArrays': [
+                            '$payments', '$receipts'
+                        ]
+                    }
+                }
+            }, {
+                '$unwind': '$data'
+            }, {
+                '$replaceRoot': {
+                    'newRoot': '$data'
+                }
+            }, {
+                '$lookup': {
+                    'from': 'entity_information',
+                    'localField': 'beneficiary',
+                    'foreignField': '_id',
+                    'as': 'beneficiary_details'
+                }
+            }, {
+                '$unwind': {
+                    'path': '$beneficiary_details',
+                    'preserveNullAndEmptyArrays': True
+                }
+            }, {
+                '$addFields': {
+                    'beneficiary_name': '$beneficiary_details.entity_name'
+                }
+            }, {
+                '$project': {
+                    '_id': 0,
+                    'counter': 1,
+                    'source': 1,
+                    'date': 1,
+                    'cheque_date': 1,
+                    'bank_account': 1,
+                    'beneficiary_name': 1,
+                    'received': 1,
+                    'paid': 1
+                }
+            },
+            {
+                "$sort":{
+                    "cheque_date": 1
+                }
+            }
+        ]
+        cursor = await all_banks_collection.aggregate(post_dated_cheques_pipeline)
+        results = await cursor.to_list(None)
+        print(len(results))
         return {"summary": results}
 
     except Exception as e:
