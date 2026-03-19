@@ -777,7 +777,7 @@ async def get_received_number_list(data: dict = Depends(security.get_current_use
                             '$match': {
                                 '$expr': {
                                     '$eq': [
-                                        '$received_number', '$$rec_id'
+                                        '$received_number_id', '$$rec_id'
                                     ]
                                 }
                             }
