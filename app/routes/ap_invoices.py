@@ -211,11 +211,7 @@ pipeline: List[dict[str, Any]] = [
                 '$toString': '$vendor'
             }
         }
-    }, {
-        '$match': {
-            'invoice_number': '999888'
-        }
-    }
+    },
 ]
 
 total_summary_pipeline = [
@@ -605,6 +601,7 @@ async def search_engine(filtered_invoices: APInvoicesSearch, data: dict = Depend
         result = await cursor.to_list(None)
         cursor2 = await ap_invoices_collection.aggregate(search_total_pipeline)
         total_result = await cursor2.to_list(None)
+        print(len(result))
         return {
             "invoices": result if result else [],
             "grand_totals": total_result[0] if total_result else {"total_amount": 0, "total_vat": 0,
