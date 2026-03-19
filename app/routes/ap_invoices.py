@@ -13,6 +13,7 @@ from app.routes.counters import create_custom_counter
 router = APIRouter()
 ap_invoices_collection = get_collection("ap_invoices")
 ap_invoices_items_collection = get_collection("ap_invoices_items")
+receiving_collection = get_collection("receiving")
 
 
 class InvoiceItem(BaseModel):
@@ -24,6 +25,7 @@ class InvoiceItem(BaseModel):
     job_number: Optional[str] = None
     job_number_id: Optional[str] = None
     received_number: Optional[str] = None
+    received_number_id: Optional[str] = None
     note: Optional[str] = None
     is_added: Optional[bool] = None
     is_deleted: Optional[bool] = None
@@ -101,6 +103,13 @@ pipeline: List[dict[str, Any]] = [
                         'as': 'job_details'
                     }
                 }, {
+                    '$lookup': {
+                        'from': 'receiving',
+                        'localField': 'received_number_id',
+                        'foreignField': '_id',
+                        'as': 'receiving_details'
+                    }
+                }, {
                     '$addFields': {
                         'transaction_type_name': {
                             '$arrayElemAt': [
@@ -111,12 +120,18 @@ pipeline: List[dict[str, Any]] = [
                             '$arrayElemAt': [
                                 '$job_details.job_number', 0
                             ]
+                        },
+                        'received_number': {
+                            '$arrayElemAt': [
+                                '$receiving_details.receiving_number', 0
+                            ]
                         }
                     }
                 }, {
                     '$project': {
                         'transaction_type_details': 0,
-                        'job_details': 0
+                        'job_details': 0,
+                        'receiving_details': 0
                     }
                 }, {
                     '$addFields': {
@@ -137,6 +152,9 @@ pipeline: List[dict[str, Any]] = [
                         },
                         'job_number_id': {
                             '$toString': '$job_number_id'
+                        },
+                        'received_number_id': {
+                            '$toString': '$received_number_id'
                         }
                     }
                 }
@@ -192,6 +210,10 @@ pipeline: List[dict[str, Any]] = [
             'vendor': {
                 '$toString': '$vendor'
             }
+        }
+    }, {
+        '$match': {
+            'invoice_number': '999888'
         }
     }
 ]
@@ -311,6 +333,9 @@ async def add_new_ap_invoice(invoices: APInvoicesModel, data: dict = Depends(sec
                         inv['transaction_type'] = ObjectId(inv['transaction_type'])
                     if inv.get("job_number_id"):
                         inv['job_number_id'] = ObjectId(inv['job_number_id'])
+                    if inv.get("received_number_id"):
+                        print(inv.get("received_number_id"))
+                        inv['received_number_id'] = ObjectId(inv['received_number_id'])
                     inv.pop("id", None)
                     inv.pop("uuid", None)
                     inv.pop("is_added", None)
@@ -330,6 +355,7 @@ async def add_new_ap_invoice(invoices: APInvoicesModel, data: dict = Depends(sec
             return {"invoice": new_receipt}
 
         except Exception as e:
+            print(e)
             await session.abort_transaction()
             raise HTTPException(status_code=500, detail=str(e))
 
@@ -395,6 +421,7 @@ async def update_invoice_items(
                 item['ap_invoice_id'] = ObjectId(item['ap_invoice_id']) if item['ap_invoice_id'] else None
                 item['transaction_type'] = ObjectId(item['transaction_type']) if item['transaction_type'] else None
                 item['job_number_id'] = ObjectId(item['job_number_id']) if item['job_number_id'] else None
+                item['received_number_id'] = ObjectId(item['received_number_id']) if item['received_number_id'] else None
                 item['company_id'] = company_id
                 item["createdAt"] = security.now_utc()
                 item["updatedAt"] = security.now_utc()
@@ -417,6 +444,8 @@ async def update_invoice_items(
                     item['transaction_type'] = ObjectId(item['transaction_type']) if item['transaction_type'] else None
                 if "job_number_id" in item:
                     item['job_number_id'] = ObjectId(item['job_number_id']) if item['job_number_id'] else None
+                if "received_number_id" in item:
+                    item['received_number_id'] = ObjectId(item['received_number_id']) if item['received_number_id'] else None
                 item.pop("is_deleted", None)
                 item.pop("is_added", None)
                 item.pop("is_modified", None)
@@ -728,3 +757,347 @@ async def get_vendor_outstanding(vendor_id: str, data: dict = Depends(security.g
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
+
+
+@router.get("/get_received_number_list")
+async def get_received_number_list(data: dict = Depends(security.get_current_user)):
+    try:
+        company_id = ObjectId(data.get("company_id"))
+        received_number_pipeline = [
+            {
+                '$match': {
+                    'company_id': company_id,
+                    'status': 'Posted'
+                }
+            }, {
+                '$lookup': {
+                    'from': 'ap_invoices_items',
+                    'let': {
+                        'rec_id': '$_id'
+                    },
+                    'pipeline': [
+                        {
+                            '$match': {
+                                '$expr': {
+                                    '$eq': [
+                                        '$received_number', '$$rec_id'
+                                    ]
+                                }
+                            }
+                        }, {
+                            '$limit': 1
+                        }, {
+                            '$project': {
+                                '_id': 1
+                            }
+                        }
+                    ],
+                    'as': 'usage_check'
+                }
+            }, {
+                '$match': {
+                    'usage_check.0': {
+                        '$exists': False
+                    }
+                }
+            }, {
+                '$lookup': {
+                    'from': 'entity_information',
+                    'localField': 'vendor',
+                    'foreignField': '_id',
+                    'as': 'vendor_details'
+                }
+            }, {
+                '$lookup': {
+                    'from': 'branches',
+                    'localField': 'branch',
+                    'foreignField': '_id',
+                    'as': 'branch_details'
+                }
+            }, {
+                '$lookup': {
+                    'from': 'receiving_items',
+                    'localField': '_id',
+                    'foreignField': 'receiving_id',
+                    'as': 'items'
+                }
+            }, {
+                '$addFields': {
+                    'items_total': {
+                        '$sum': {
+                            '$map': {
+                                'input': '$items',
+                                'as': 'it',
+                                'in': {
+                                    '$multiply': [
+                                        {
+                                            '$subtract': [
+                                                {
+                                                    '$toDouble': {
+                                                        '$ifNull': [
+                                                            '$$it.original_price', 0
+                                                        ]
+                                                    }
+                                                }, {
+                                                    '$toDouble': {
+                                                        '$ifNull': [
+                                                            '$$it.discount', 0
+                                                        ]
+                                                    }
+                                                }
+                                            ]
+                                        }, {
+                                            '$toDouble': {
+                                                '$ifNull': [
+                                                    '$$it.quantity', 0
+                                                ]
+                                            }
+                                        }
+                                    ]
+                                }
+                            }
+                        }
+                    }
+                }
+            }, {
+                '$addFields': {
+                    'processed_items': {
+                        '$map': {
+                            'input': '$items',
+                            'as': 'item',
+                            'in': {
+                                '$let': {
+                                    'vars': {
+                                        'price': {
+                                            '$toDouble': {
+                                                '$ifNull': [
+                                                    '$$item.original_price', 0
+                                                ]
+                                            }
+                                        },
+                                        'discount': {
+                                            '$toDouble': {
+                                                '$ifNull': [
+                                                    '$$item.discount', 0
+                                                ]
+                                            }
+                                        },
+                                        'qty': {
+                                            '$toDouble': {
+                                                '$ifNull': [
+                                                    '$$item.quantity', 0
+                                                ]
+                                            }
+                                        },
+                                        'vat_val': {
+                                            '$toDouble': {
+                                                '$ifNull': [
+                                                    '$$item.vat', 0
+                                                ]
+                                            }
+                                        },
+                                        'conv_rate': {
+                                            '$toDouble': {
+                                                '$ifNull': [
+                                                    '$rate', 1
+                                                ]
+                                            }
+                                        },
+                                        'extra_costs': {
+                                            '$add': [
+                                                {
+                                                    '$ifNull': [
+                                                        '$handling', 0
+                                                    ]
+                                                }, {
+                                                    '$ifNull': [
+                                                        '$shipping', 0
+                                                    ]
+                                                }, {
+                                                    '$ifNull': [
+                                                        '$other', 0
+                                                    ]
+                                                }
+                                            ]
+                                        },
+                                        'total_disc_amt': {
+                                            '$ifNull': [
+                                                '$amount', 0
+                                            ]
+                                        }
+                                    },
+                                    'in': {
+                                        '$let': {
+                                            'vars': {
+                                                'baseTotal': {
+                                                    '$multiply': [
+                                                        {
+                                                            '$subtract': [
+                                                                '$$price', '$$discount'
+                                                            ]
+                                                        }, '$$qty'
+                                                    ]
+                                                },
+                                                'safeTotal': {
+                                                    '$cond': [
+                                                        {
+                                                            '$eq': [
+                                                                '$items_total', 0
+                                                            ]
+                                                        }, 1, '$items_total'
+                                                    ]
+                                                },
+                                                'safeQty': {
+                                                    '$cond': [
+                                                        {
+                                                            '$eq': [
+                                                                '$$qty', 0
+                                                            ]
+                                                        }, 1, '$$qty'
+                                                    ]
+                                                }
+                                            },
+                                            'in': {
+                                                '$let': {
+                                                    'vars': {
+                                                        'ratio': {
+                                                            '$divide': [
+                                                                '$$baseTotal', '$$safeTotal'
+                                                            ]
+                                                        }
+                                                    },
+                                                    'in': {
+                                                        '$let': {
+                                                            'vars': {
+                                                                'add_cost': {
+                                                                    '$divide': [
+                                                                        {
+                                                                            '$multiply': [
+                                                                                '$$ratio', '$$extra_costs'
+                                                                            ]
+                                                                        }, '$$safeQty'
+                                                                    ]
+                                                                },
+                                                                'add_disc': {
+                                                                    '$divide': [
+                                                                        {
+                                                                            '$multiply': [
+                                                                                '$$ratio', '$$total_disc_amt'
+                                                                            ]
+                                                                        }, '$$safeQty'
+                                                                    ]
+                                                                }
+                                                            },
+                                                            'in': {
+                                                                '$let': {
+                                                                    'vars': {
+                                                                        'local_p': {
+                                                                            '$multiply': [
+                                                                                {
+                                                                                    '$add': [
+                                                                                        {
+                                                                                            '$subtract': [
+                                                                                                '$$price', '$$discount'
+                                                                                            ]
+                                                                                        }, {
+                                                                                            '$subtract': [
+                                                                                                '$$add_cost',
+                                                                                                '$$add_disc'
+                                                                                            ]
+                                                                                        }
+                                                                                    ]
+                                                                                }, '$$conv_rate'
+                                                                            ]
+                                                                        }
+                                                                    },
+                                                                    'in': {
+                                                                        'item_total': {
+                                                                            '$multiply': [
+                                                                                '$$local_p', '$$qty'
+                                                                            ]
+                                                                        },
+                                                                        'item_net': {
+                                                                            '$add': [
+                                                                                {
+                                                                                    '$multiply': [
+                                                                                        '$$local_p', '$$qty'
+                                                                                    ]
+                                                                                }, '$$vat_val'
+                                                                            ]
+                                                                        },
+                                                                        'item_vat': '$$vat_val'
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }, {
+                '$project': {
+                    '_id': {
+                        '$toString': '$_id'
+                    },
+                    'receiving_number': 1,
+                    'date': {
+                        "$dateToString": {
+                            "date": "$date",
+                            "format": "%d-%m-%Y",
+                            "onNull": None
+
+                        }
+                    },
+                    'reference_number': 1,
+                    'vendor': {
+                        '$toString': '$vendor'
+                    },
+                    'branch': {
+                        '$toString': '$branch'
+                    },
+                    'note': 1,
+                    'vendor_name': {
+                        '$ifNull': [
+                            {
+                                '$arrayElemAt': [
+                                    '$vendor_details.entity_name', 0
+                                ]
+                            }, None
+                        ]
+                    },
+                    'branch_name': {
+                        '$ifNull': [
+                            {
+                                '$arrayElemAt': [
+                                    '$branch_details.name', 0
+                                ]
+                            }, None
+                        ]
+                    },
+                    'total': {
+                        '$sum': '$processed_items.item_total'
+                    },
+                    'vat': {
+                        '$sum': '$processed_items.item_vat'
+                    },
+                    'net': {
+                        '$sum': '$processed_items.item_net'
+                    }
+                }
+            }
+        ]
+        cursor = await receiving_collection.aggregate(received_number_pipeline)
+        results = await cursor.to_list(None)
+        return {"received": results if results else []}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(e)
+        raise HTTPException(status_code=500, detail=f"{str(e)}")
