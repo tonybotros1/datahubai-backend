@@ -137,6 +137,41 @@ def safe_float(value, default=0.0):
         return default
 
 
+async def get_currencies(company_id: ObjectId):
+    currency_pipeline = [
+        {
+            '$match': {
+                'company_id': company_id
+            }
+        }, {
+            '$lookup': {
+                'from': 'all_countries',
+                'localField': 'country_id',
+                'foreignField': '_id',
+                'as': 'country_details'
+            }
+        }, {
+            '$unwind': {
+                'path': '$country_details',
+                'preserveNullAndEmptyArrays': True
+            }
+        }, {
+            '$addFields': {
+                'currency_code': '$country_details.currency_code'
+            }
+        }, {
+            '$project': {
+                '_id': 1,
+                'currency_code': 1
+            }
+        }
+    ]
+
+    cursor = await currencies_collection.aggregate(currency_pipeline)
+    results = await cursor.to_list(None)
+    return results
+
+
 # =========================== main function section ===========================
 @router.post('/get_file')
 async def get_file(file: UploadFile = File(...), screen_name: str = Form(...),
@@ -699,34 +734,38 @@ async def dealing_with_receiving_header(file, data, delete_every_thing: bool):
         company_id = ObjectId(data.get('company_id'))
         if delete_every_thing:
             await receiving_collection.delete_many({'company_id': company_id})
-            await employees_collection.delete_many({'company_id': company_id, "department": {"$in": ["Receiving"]}})
+            # await employees_collection.delete_many({'company_id': company_id, "department": {"$in": ["Receiving"]}})
             print("all deleted")
 
         contents = await file.read()
         df = pd.read_excel(BytesIO(contents))
+        df = df.fillna("")
+        total_rows = len(df)
         df.columns = df.columns.str.strip().str.lower()
         df['hd_date'] = pd.to_datetime(df['hd_date'], errors='coerce')
-        df_2025 = df[
-            (
-                (df["hd_date"].dt.year == 2025)
-            )
-
-        ].sort_values(by=df.columns[0])
-        print("number of rows: ", len(df_2025))
+        # df_2025 = df[
+        #     (
+        #         (df["hd_date"].dt.year == 2025)
+        #     )
+        #
+        # ].sort_values(by=df.columns[0])
+        # print("number of rows: ", len(df_2025))
 
         existing_branches = {b['name']: ObjectId(b['_id']) for b in
                              await branches_collection.find({"company_id": company_id}).to_list(length=None)}
-        existing_vendors = {b['entity_name'].capitalize().strip(): b for b in
+        existing_vendors = {b['entity_name'].strip(): b for b in
                             await entity_information_collection.find(
                                 {"entity_code": "Vendor", "company_id": company_id}).to_list(length=None)}
-        existing_employees = {b['name']: ObjectId(b['_id']) for b in
-                              await employees_collection.find({"company_id": company_id}).to_list(length=None)}
-        uae_country_doc = await countries_collection.find_one({"code": "UAE"})
-        uae_country_id = str(uae_country_doc["_id"])
-        uae_currency_doc = await currencies_collection.find_one({"country_id": ObjectId(uae_country_id)})
-        uae_currency_id = str(uae_currency_doc["_id"])
+        employees_list = await list_collection.find_one({"code": "ISSUE_RECEIVE_PEOPLE"}, {"_id": 1})
+        employees_list_id = ObjectId(employees_list['_id']) if employees_list else None
+        employees_list_values = {b['name'].strip(): b['_id'] for b in
+                                 await value_collection.find({"list_id": employees_list_id}).to_list(length=None)}
+        print(employees_list_values.get('000- PAUL'))
 
-        for i, row in enumerate(df_2025.itertuples(index=False), start=1):
+        all_currencies = {b['currency_code'].strip(): b['_id'] for b in await get_currencies(company_id)}
+
+        await manager.broadcast({"type": "start", "total": total_rows})
+        for i, row in enumerate(df.itertuples(index=False), start=1):
             # receiving_id = clean_value(row[0], number=True),
             date = row[1]
             reference_number = clean_value(row[2])
@@ -737,18 +776,30 @@ async def dealing_with_receiving_header(file, data, delete_every_thing: bool):
             approved_by = clean_value(row[7])
             ordered_by = clean_value(row[8])
             purchased_by = clean_value(row[9])
-            rate = clean_value(row[11], number=True)
-            shipping = clean_value(row[12], number=True)
-            handling = clean_value(row[13], number=True)
-            others = clean_value(row[14], number=True)
-            amount = clean_value(row[15], number=True)
+            currency = clean_value(row[10])
+            rate = safe_float(row[11])
+            shipping = safe_float(row[12])
+            handling = safe_float(row[13])
+            others = safe_float(row[14])
+            amount = safe_float(row[15])
+
+            try:
+                if currency:
+                    currency_id = all_currencies.get(currency.upper())
+                    if not currency_id:
+                        currency_id = None
+                else:
+                    currency_id = None
+            except Exception as e:
+                print(f"Error currency processing row {i}: {e}")
+                raise
 
             if vendor:
-                vendor_data = existing_vendors.get(vendor.capitalize())
+                vendor_data = existing_vendors.get(vendor.strip())
                 if vendor_data:
                     vendor_id = vendor_data.get("_id")
                 else:
-                    vendor_details = await create_entity_service(entity_name=str(vendor.capitalize().strip()),
+                    vendor_details = await create_entity_service(entity_name=str(vendor.strip()),
                                                                  entity_code=['Vendor'],
                                                                  credit_limit=0,
                                                                  warranty_days=0,
@@ -764,7 +815,7 @@ async def dealing_with_receiving_header(file, data, delete_every_thing: bool):
                                                                  lpo_required="N"
                                                                  )
                     print("added new Vendor")
-                    existing_vendors[str(vendor).capitalize().strip()] = vendor_details
+                    existing_vendors[str(vendor).strip()] = vendor_details
                     vendor_id = vendor_details['_id']
             else:
                 vendor_id = None
@@ -787,15 +838,9 @@ async def dealing_with_receiving_header(file, data, delete_every_thing: bool):
 
             try:
                 if approved_by:
-                    approved_by_id = existing_employees.get(str(approved_by).upper())
+                    approved_by_id = employees_list_values.get(str(approved_by).upper())
                     if not approved_by_id:
-                        approved_by_model = EmployeesModel(
-                            name=str(approved_by).upper(),
-                            department=['Receiving']
-                        )
-                        new_approved_by = await create_employee(employee=approved_by_model, data=data)
-                        approved_by_id = ObjectId(new_approved_by['employee']['_id'])
-                        existing_employees[str(approved_by).upper()] = approved_by_id
+                        approved_by_id = None
                 else:
                     approved_by_id = None
             except Exception as row_err:
@@ -805,15 +850,9 @@ async def dealing_with_receiving_header(file, data, delete_every_thing: bool):
 
             try:
                 if ordered_by:
-                    ordered_by_id = existing_employees.get(str(ordered_by).upper())
+                    ordered_by_id = employees_list_values.get(str(ordered_by).upper())
                     if not ordered_by_id:
-                        ordered_by_model = EmployeesModel(
-                            name=str(ordered_by).upper(),
-                            department=['Receiving']
-                        )
-                        new_ordered_by = await create_employee(employee=ordered_by_model, data=data)
-                        ordered_by_id = ObjectId(new_ordered_by['employee']['_id'])
-                        existing_employees[str(ordered_by).upper()] = ordered_by_id
+                        ordered_by_id = None
                 else:
                     ordered_by_id = None
             except Exception as row_err:
@@ -823,15 +862,9 @@ async def dealing_with_receiving_header(file, data, delete_every_thing: bool):
 
             try:
                 if purchased_by:
-                    purchased_by_id = existing_employees.get(str(purchased_by).upper())
+                    purchased_by_id = employees_list_values.get(str(purchased_by).upper())
                     if not purchased_by_id:
-                        purchased_by_model = EmployeesModel(
-                            name=str(purchased_by).upper(),
-                            department=['Receiving']
-                        )
-                        new_purchased_by = await create_employee(employee=purchased_by_model, data=data)
-                        purchased_by_id = ObjectId(new_purchased_by['employee']['_id'])
-                        existing_employees[str(purchased_by).upper()] = purchased_by_id
+                        purchased_by_id = None
                 else:
                     purchased_by_id = None
             except Exception as row_err:
@@ -839,32 +872,41 @@ async def dealing_with_receiving_header(file, data, delete_every_thing: bool):
                 print(f"Error PURCHASED BY processing row {i}: {row_err}")
                 raise
 
-            receiving_dict = {
-                "company_id": company_id,
-                "receiving_id": int(row[0]),
-                "date": date,
-                "receiving_number": str(int(row[0])),
-                "reference_number": reference_number,
-                "vendor": ObjectId(vendor_id),
-                "note": notes if notes else "",
-                "status": status,
-                "branch": branch_id,
-                "approved_by": approved_by_id,
-                "ordered_by": ordered_by_id,
-                "purchased_by": purchased_by_id,
-                "currency": ObjectId(uae_currency_id),
-                "rate": float(rate),
-                "shipping": float(shipping),
-                "handling": float(handling),
-                "other": float(others),
-                "amount": float(amount) if amount else 0,
-                "createdAt": security.now_utc(),
-                "updatedAt": security.now_utc(),
-            }
-            await receiving_collection.insert_one(receiving_dict)
+            try:
+                receiving_dict = {
+                    "company_id": company_id,
+                    "receiving_id": int(row[0]),
+                    "date": date,
+                    "receiving_number": str(int(row[0])),
+                    "reference_number": reference_number,
+                    "vendor": ObjectId(vendor_id),
+                    "note": notes if notes else "",
+                    "status": status,
+                    "branch": branch_id,
+                    "approved_by": ObjectId(approved_by_id) if approved_by_id else None,
+                    "ordered_by": ObjectId(ordered_by_id) if ordered_by_id else None,
+                    "purchased_by": ObjectId(purchased_by_id) if purchased_by_id else None,
+                    "currency": ObjectId(currency_id),
+                    "rate": float(rate),
+                    "shipping": float(shipping),
+                    "handling": float(handling),
+                    "other": float(others),
+                    "amount": float(amount) if amount else 0,
+                    "createdAt": security.now_utc(),
+                    "updatedAt": security.now_utc(),
+                }
+                await receiving_collection.insert_one(receiving_dict)
+            except Exception as row_err:
+                print(f"Error inserting receiving processing row {i}, id: {int(row[0])},: {row_err}")
+                raise
             print(f"added new receiving doc for row : {i}")
+            progress = int((i / total_rows) * 100)
+            await manager.send_progress(progress)
+        await manager.broadcast({"type": "done"})
+
 
     except Exception as e:
+        print(e)
         raise HTTPException(status_code=500, detail=str(e))
 
 

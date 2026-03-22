@@ -78,6 +78,7 @@ async def add_new_country(name: str = Form(...), code: Optional[str] = Form(...)
 
 
     except Exception as e:
+        print(e)
         return {"error": str(e)}
 
 

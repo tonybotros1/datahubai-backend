@@ -673,8 +673,53 @@ totals_job_cards_pipeline = [
     }, {
         '$lookup': {
             'from': 'all_receipts_invoices',
-            'localField': '_id',
-            'foreignField': 'job_id',
+            'let': {
+                'jobId': '$_id'
+            },
+            'pipeline': [
+                {
+                    '$match': {
+                        '$expr': {
+                            '$eq': [
+                                '$job_id', '$$jobId'
+                            ]
+                        }
+                    }
+                }, {
+                    '$lookup': {
+                        'from': 'all_receipts',
+                        'let': {
+                            'receiptId': '$receipt_id'
+                        },
+                        'pipeline': [
+                            {
+                                '$match': {
+                                    '$expr': {
+                                        '$and': [
+                                            {
+                                                '$eq': [
+                                                    '$_id', '$$receiptId'
+                                                ]
+                                            }, {
+                                                '$eq': [
+                                                    '$status', 'Posted'
+                                                ]
+                                            }
+                                        ]
+                                    }
+                                }
+                            }
+                        ],
+                        'as': 'receipt_details'
+                    }
+                }, {
+                    '$match': {
+                        'receipt_details': {
+                            '$ne': []
+                        }
+                    }
+                }
+            ],
             'as': 'receipts_invoices_details'
         }
     }, {
@@ -827,7 +872,6 @@ async def add_new_job_card(job_data: JobCard, data: dict = Depends(security.get_
 
         except Exception as e:
             await session.abort_transaction()
-            print(e)
             raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -882,7 +926,6 @@ async def delete_job_card(job_id: str, _: dict = Depends(security.get_current_us
             raise
 
         except Exception as e:
-            print(e)
             await session.abort_transaction()
             raise HTTPException(status_code=500, detail=f"Delete failed: {str(e)}")
 
@@ -935,7 +978,6 @@ async def copy_job_card(job_id: str, data: dict = Depends(security.get_current_u
             raise
 
         except Exception as e:
-            print(e)
             await session.abort_transaction()
             raise HTTPException(status_code=500, detail=f"Delete failed: {str(e)}")
 
@@ -994,16 +1036,12 @@ async def update_job_invoice_items(
         updated_list = []
 
         for item in items:
-            print(item)
             if item.get("deleted"):
                 if "id" not in item:
                     continue
-                print('yes deleted')
-                print(item['id'])
                 deleted_list.append(ObjectId(item["id"]))
 
             elif item.get("added") and not item.get("deleted"):
-                print('yes added')
                 item.pop("id", None)
                 # item.pop("uid", None)
                 item['company_id'] = company_id
@@ -1021,8 +1059,6 @@ async def update_job_invoice_items(
                 if "id" not in item:
                     continue
                 item_id = ObjectId(item["id"])
-                print('yes modified')
-                print(item_id)
                 item["updatedAt"] = security.now_utc()
                 if "job_card_id" in item:
                     item.pop("job_card_id", None)
@@ -1064,7 +1100,6 @@ async def update_job_invoice_items(
         return {"updated_items": updated_list, "deleted_items": [str(d) for d in deleted_list]}
 
     except Exception as e:
-        print(e)
         await s.abort_transaction()
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -1348,11 +1383,56 @@ async def search_engine_for_job_cards_3(
                 }
             },
             {
-                "$lookup": {
-                    "from": "all_receipts_invoices",
-                    "localField": "_id",
-                    "foreignField": "job_id",
-                    "as": "receipts_invoices_details"
+                '$lookup': {
+                    'from': 'all_receipts_invoices',
+                    'let': {
+                        'jobId': '$_id'
+                    },
+                    'pipeline': [
+                        {
+                            '$match': {
+                                '$expr': {
+                                    '$eq': [
+                                        '$job_id', '$$jobId'
+                                    ]
+                                }
+                            }
+                        }, {
+                            '$lookup': {
+                                'from': 'all_receipts',
+                                'let': {
+                                    'receiptId': '$receipt_id'
+                                },
+                                'pipeline': [
+                                    {
+                                        '$match': {
+                                            '$expr': {
+                                                '$and': [
+                                                    {
+                                                        '$eq': [
+                                                            '$_id', '$$receiptId'
+                                                        ]
+                                                    }, {
+                                                        '$eq': [
+                                                            '$status', 'Posted'
+                                                        ]
+                                                    }
+                                                ]
+                                            }
+                                        }
+                                    }
+                                ],
+                                'as': 'receipt_details'
+                            }
+                        }, {
+                            '$match': {
+                                'receipt_details': {
+                                    '$ne': []
+                                }
+                            }
+                        }
+                    ],
+                    'as': 'receipts_invoices_details'
                 }
             },
             {
@@ -1509,7 +1589,6 @@ async def search_engine_for_job_cards_3(
         job_cards = await cursor.to_list(None)
         cursor2 = await job_cards_collection.aggregate(job_totals_pipeline)
         total_result = await cursor2.to_list(None)
-        print(total_result)
         return {
             "job_cards": job_cards if job_cards else [],
             "grand_totals": total_result[0] if total_result else {"total_amount": 0, "total_vat": 0,
@@ -1528,7 +1607,6 @@ async def search_engine_for_job_cards_3(
         # return {"job_cards": all_job_cards, "grand_totals": all_grand_totals}
 
     except Exception as e:
-        print(e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -1671,7 +1749,6 @@ async def search_engine_for_job_card_in_ap_invoices_screen(filter_jobs: JobCardS
     except HTTPException:
         raise
     except Exception as e:
-        print(e)
         raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
 
 
@@ -1756,7 +1833,6 @@ async def get_all_internal_notes_for_job_card(job_id: str, data: dict = Depends(
     except HTTPException:
         raise
     except Exception as e:
-        print(e)
         raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
 
 
@@ -1808,7 +1884,6 @@ async def add_new_internal_note_for_job_card(job_id: str, note_type: str = Form(
     except HTTPException:
         raise
     except Exception as e:
-        print(e)
         raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
 
 
@@ -1886,7 +1961,6 @@ async def create_job_card_for_current_quotation(job_id: str, data: dict = Depend
             await session.abort_transaction()
             raise
         except Exception as e:
-            print(e)
             await session.abort_transaction()
             raise HTTPException(status_code=500, detail=f"failed: {str(e)}")
 
@@ -1903,7 +1977,6 @@ async def open_quotation_card_screen_by_quotation_number_for_job(quotation_id: s
     except HTTPException:
         raise
     except Exception as e:
-        print(e)
         raise HTTPException(status_code=500, detail=f"failed: {str(e)}")
 
 
@@ -2038,13 +2111,11 @@ async def get_customer_outstanding(customer_id: str, data: dict = Depends(securi
         ]
         cursor = await job_cards_collection.aggregate(customer_outstanding_pipeline)
         result = await cursor.next()
-        print(result)
         return result
 
     except HTTPException:
         raise
     except Exception as e:
-        print(e)
         raise HTTPException(status_code=500, detail=f"failed: {str(e)}")
 
 
@@ -2270,7 +2341,6 @@ async def get_job_items_summary_table(job_id: str, _: dict = Depends(security.ge
         result = await cursor.next()
         return {"summary_table": result['items_summary']}
     except Exception as e:
-        print(e)
         raise HTTPException(status_code=500, detail=f"failed: {str(e)}")
 
 
