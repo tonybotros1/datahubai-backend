@@ -19,6 +19,7 @@ all_banks_collection = get_collection("all_banks")
 class TimeFilter(BaseModel):
     from_date: Optional[datetime] = None
     to_date: Optional[datetime] = None
+    type: Optional[str] = None
 
 
 @router.post("/get_job_cards_daily_summary")
@@ -27,10 +28,16 @@ async def get_job_cards_daily_summary(time_filter: TimeFilter, data: dict = Depe
         from_date = time_filter.from_date
         to_date = time_filter.to_date
         company_id = ObjectId(data.get('company_id'))
+        job_status_filter = []
+
+        if time_filter.type == "month":
+            job_status_filter.append({
+                "$eq": ["$job_status_1", "Posted"]
+            })
         daily_summary_pipeline = [
             {
                 '$match': {
-                    'company_id': company_id
+                    'company_id': company_id,
                 }
             }, {
                 '$lookup': {
@@ -42,8 +49,9 @@ async def get_job_cards_daily_summary(time_filter: TimeFilter, data: dict = Depe
                         {
                             '$match': {
                                 '$expr': {
-                                    '$eq': [
-                                        '$branch', '$$branch_id'
+                                    '$and': [
+                                        {'$eq': ['$branch', '$$branch_id']},
+                                        *job_status_filter
                                     ]
                                 }
                             }
@@ -113,8 +121,53 @@ async def get_job_cards_daily_summary(time_filter: TimeFilter, data: dict = Depe
                         }, {
                             '$lookup': {
                                 'from': 'all_receipts_invoices',
-                                'localField': '_id',
-                                'foreignField': 'job_id',
+                                'let': {
+                                    'jobId': '$_id'
+                                },
+                                'pipeline': [
+                                    {
+                                        '$match': {
+                                            '$expr': {
+                                                '$eq': [
+                                                    '$job_id', '$$jobId'
+                                                ]
+                                            }
+                                        }
+                                    }, {
+                                        '$lookup': {
+                                            'from': 'all_receipts',
+                                            'let': {
+                                                'receiptId': '$receipt_id'
+                                            },
+                                            'pipeline': [
+                                                {
+                                                    '$match': {
+                                                        '$expr': {
+                                                            '$and': [
+                                                                {
+                                                                    '$eq': [
+                                                                        '$_id', '$$receiptId'
+                                                                    ]
+                                                                }, {
+                                                                    '$eq': [
+                                                                        '$status', 'Posted'
+                                                                    ]
+                                                                }
+                                                            ]
+                                                        }
+                                                    }
+                                                }
+                                            ],
+                                            'as': 'receipt_details'
+                                        }
+                                    }, {
+                                        '$match': {
+                                            'receipt_details': {
+                                                '$ne': []
+                                            }
+                                        }
+                                    }
+                                ],
                                 'as': 'receipts_invoices_details'
                             }
                         }, {
@@ -351,6 +404,24 @@ async def get_job_cards_daily_summary(time_filter: TimeFilter, data: dict = Depe
             }, {
                 '$project': {
                     'job_details': 0
+                }
+            },
+            {
+                '$addFields': {
+                    'is_summary': {
+                        '$cond': [
+                            {
+                                '$eq': [
+                                    '$name', 'ALL BRANCHES'
+                                ]
+                            }, 1, 0
+                        ]
+                    }
+                }
+            }, {
+                '$sort': {
+                    'is_summary': 1,
+                    'jobs_count': -1
                 }
             }
         ]
@@ -762,8 +833,13 @@ async def get_salesman_summary(time_filter: TimeFilter, data: dict = Depends(sec
                         {
                             '$match': {
                                 '$expr': {
-                                    '$eq': [
-                                        '$salesman', '$$salesman'
+                                    '$and': [
+                                        {'$eq': [
+                                            '$salesman', '$$salesman'
+                                        ]},
+                                        {'$eq': [
+                                            '$job_status_1', 'Posted'
+                                        ]}
                                     ]
                                 }
                             }
@@ -833,8 +909,53 @@ async def get_salesman_summary(time_filter: TimeFilter, data: dict = Depends(sec
                         }, {
                             '$lookup': {
                                 'from': 'all_receipts_invoices',
-                                'localField': '_id',
-                                'foreignField': 'job_id',
+                                'let': {
+                                    'jobId': '$_id'
+                                },
+                                'pipeline': [
+                                    {
+                                        '$match': {
+                                            '$expr': {
+                                                '$eq': [
+                                                    '$job_id', '$$jobId'
+                                                ]
+                                            }
+                                        }
+                                    }, {
+                                        '$lookup': {
+                                            'from': 'all_receipts',
+                                            'let': {
+                                                'receiptId': '$receipt_id'
+                                            },
+                                            'pipeline': [
+                                                {
+                                                    '$match': {
+                                                        '$expr': {
+                                                            '$and': [
+                                                                {
+                                                                    '$eq': [
+                                                                        '$_id', '$$receiptId'
+                                                                    ]
+                                                                }, {
+                                                                    '$eq': [
+                                                                        '$status', 'Posted'
+                                                                    ]
+                                                                }
+                                                            ]
+                                                        }
+                                                    }
+                                                }
+                                            ],
+                                            'as': 'receipt_details'
+                                        }
+                                    }, {
+                                        '$match': {
+                                            'receipt_details': {
+                                                '$ne': []
+                                            }
+                                        }
+                                    }
+                                ],
                                 'as': 'receipts_invoices_details'
                             }
                         }, {
@@ -1072,6 +1193,24 @@ async def get_salesman_summary(time_filter: TimeFilter, data: dict = Depends(sec
                 '$project': {
                     'job_details': 0
                 }
+            },
+            {
+                '$addFields': {
+                    'is_summary': {
+                        '$cond': [
+                            {
+                                '$eq': [
+                                    '$name', 'ALL BRANCHES'
+                                ]
+                            }, 1, 0
+                        ]
+                    }
+                }
+            }, {
+                '$sort': {
+                    'is_summary': 1,
+                    'jobs_count': -1
+                }
             }
         ]
         cursor = await salesman_collection.aggregate(salesman_summary_pipeline)
@@ -1089,7 +1228,7 @@ async def get_customer_aging_summary(data: dict = Depends(security.get_current_u
         customers_aging_pipeline = [
             {
                 '$match': {
-                    'company_id': company_id,
+                    'company_id': ObjectId('68bbfc4b56c35562f967422d'),
                     'job_status_1': 'Posted'
                 }
             }, {
@@ -1138,16 +1277,29 @@ async def get_customer_aging_summary(data: dict = Depends(security.get_current_u
                 '$lookup': {
                     'from': 'all_receipts_invoices',
                     'let': {
-                        'job_id': '$_id'
+                        'jobId': '$_id'
                     },
                     'pipeline': [
                         {
                             '$match': {
                                 '$expr': {
                                     '$eq': [
-                                        '$job_id', '$$job_id'
+                                        '$job_id', '$$jobId'
                                     ]
                                 }
+                            }
+                        }, {
+                            '$lookup': {
+                                'from': 'all_receipts',
+                                'localField': 'receipt_id',
+                                'foreignField': '_id',
+                                'as': 'receipt'
+                            }
+                        }, {
+                            '$unwind': '$receipt'
+                        }, {
+                            '$match': {
+                                'receipt.status': 'Posted'
                             }
                         }, {
                             '$group': {
@@ -1191,11 +1343,19 @@ async def get_customer_aging_summary(data: dict = Depends(security.get_current_u
             }, {
                 '$set': {
                     'age_days': {
-                        '$dateDiff': {
-                            'startDate': '$invoice_date',
-                            'endDate': '$$NOW',
-                            'unit': 'day'
-                        }
+                        '$cond': [
+                            {
+                                '$ifNull': [
+                                    '$invoice_date', False
+                                ]
+                            }, {
+                                '$dateDiff': {
+                                    'startDate': '$invoice_date',
+                                    'endDate': '$$NOW',
+                                    'unit': 'day'
+                                }
+                            }, 0
+                        ]
                     }
                 }
             }, {
@@ -1309,7 +1469,7 @@ async def get_customer_aging_summary(data: dict = Depends(security.get_current_u
                                 '$and': [
                                     {
                                         '$gt': [
-                                            '$age_days', 91
+                                            '$age_days', 90
                                         ]
                                     }, {
                                         '$lte': [
@@ -1472,7 +1632,7 @@ async def get_customer_aging_summary(data: dict = Depends(security.get_current_u
                                             ]
                                         }, {
                                             '$eq': [
-                                                '$company_id', company_id
+                                                '$company_id', ObjectId('68bbfc4b56c35562f967422d')
                                             ]
                                         }, {
                                             '$eq': [
@@ -1516,10 +1676,7 @@ async def get_customer_aging_summary(data: dict = Depends(security.get_current_u
                 }
             }, {
                 '$sort': {
-                    'bucket_360_plus': -1,
-                    'bucket_181_360': -1,
-                    'bucket_91_180': -1,
-                    'bucket_0_90': -1
+                    'total_outstanding': -1
                 }
             }, {
                 '$limit': 2000
@@ -1542,7 +1699,6 @@ async def get_customer_aging_summary(data: dict = Depends(security.get_current_u
                 }
             }
         ]
-        print("Aging loading...")
 
         cursor = await job_cards_collection.aggregate(customers_aging_pipeline)
         results = await cursor.to_list(None)
@@ -2290,7 +2446,7 @@ async def get_post_dated_cheques(data: dict = Depends(security.get_current_user)
                 }
             },
             {
-                "$sort":{
+                "$sort": {
                     "cheque_date": 1
                 }
             }
