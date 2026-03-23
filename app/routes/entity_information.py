@@ -36,6 +36,7 @@ def serializer(doc: dict) -> dict:
 
 
 class EntityInformationModel(BaseModel):
+    code: Optional[str] = None
     name: Optional[str] = None
     country: Optional[PyObjectId] = None
     city: Optional[PyObjectId] = None
@@ -593,60 +594,59 @@ async def get_all_entities(data: dict = Depends(security.get_current_user)):
         raise e
 
 
-# @router.get("/get_all_customers")
-# async def get_all_customers(data: dict = Depends(security.get_current_user)):
-#     try:
-#         company_id = ObjectId(data.get("company_id"))
-#         new_pipeline = copy.deepcopy(customer_vendor_pipeline)
-#         new_pipeline.insert(0, {
-#             "$match": {
-#                 "company_id": company_id,
-#                 "entity_code": "Customer",
-#                 "status": True
-#             }
-#         })
-#         cursor = await entity_information_collection.aggregate(new_pipeline)
-#         print("======================= done =======================")
-#         results = await cursor.to_list(None)
-#         return {"customers": results}
-#
-#     except Exception as e:
-#         raise e
-
-
 @router.get("/get_all_customers")
 async def get_all_customers(data: dict = Depends(security.get_current_user)):
-    company_id = ObjectId(data.get("company_id"))
-
-    # 1. Prepare pipeline
-    new_pipeline = [{
-        "$match": {
-            "company_id": company_id,
-            "entity_code": "Customer",
-            "status": True
-        }
-    }] + customer_vendor_pipeline
-
-    # 2. Define an async generator to yield data
-    async def event_generator():
+    try:
+        company_id = ObjectId(data.get("company_id"))
+        new_pipeline = copy.deepcopy(customer_vendor_pipeline)
+        new_pipeline.insert(0, {
+            "$match": {
+                "company_id": company_id,
+                "entity_code": "Customer",
+                "status": True
+            }
+        })
         cursor = await entity_information_collection.aggregate(new_pipeline)
+        results = await cursor.to_list(None)
+        return {"customers": results}
 
-        yield '{"customers": ['  # Start JSON array
+    except Exception as e:
+        raise e
 
-        first = True
-        async for doc in cursor:
-            if not first:
-                yield ","
 
-            # Use json_util to handle ObjectIds or manually convert
-            doc["_id"] = str(doc["_id"])
-            yield json.dumps(doc)
-            first = False
-
-        yield "]}"  # Close JSON array
-
-    # 3. Return a StreamingResponse
-    return StreamingResponse(event_generator(), media_type="application/json")
+# @router.get("/get_all_customers")
+# async def get_all_customers(data: dict = Depends(security.get_current_user)):
+#     company_id = ObjectId(data.get("company_id"))
+#
+#     # 1. Prepare pipeline
+#     new_pipeline = [{
+#         "$match": {
+#             "company_id": company_id,
+#             "entity_code": "Customer",
+#             "status": True
+#         }
+#     }] + customer_vendor_pipeline
+#
+#     # 2. Define an async generator to yield data
+#     async def event_generator():
+#         cursor = await entity_information_collection.aggregate(new_pipeline)
+#
+#         yield '{"customers": ['  # Start JSON array
+#
+#         first = True
+#         async for doc in cursor:
+#             if not first:
+#                 yield ","
+#
+#             # Use json_util to handle ObjectIds or manually convert
+#             doc["_id"] = str(doc["_id"])
+#             yield json.dumps(doc)
+#             first = False
+#
+#         yield "]}"  # Close JSON array
+#
+#     # 3. Return a StreamingResponse
+#     return StreamingResponse(event_generator(), media_type="application/json")
 
 
 @router.get("/get_all_vendors")
@@ -721,7 +721,7 @@ async def add_new_entity(
             "lpo_required": "Y" if lpo_required else "N",
             "entity_picture": entity_picture,
             "entity_picture_public_id": entity_picture_public_id,
-            "entity_code": entity_code.split(","),
+            "entity_code": entity_code,
             "warranty_days": warranty_days if warranty_days else 0,
             "credit_limit": credit_limit if credit_limit else 0,
             "salesman_id": ObjectId(salesman_id) if salesman_id else None,
@@ -771,7 +771,7 @@ async def update_entity(entity_id: str, entity_name: str = Form(None),
     try:
         doc = {
             "entity_name": entity_name,
-            "entity_code": entity_code.split(","),
+            "entity_code": entity_code,
             "credit_limit": credit_limit or 0,
             "warranty_days": warranty_days or 0,
             "salesman_id": ObjectId(salesman_id) if salesman_id else None,
@@ -868,6 +868,8 @@ async def search_engine_for_entity_information(filter_entities: EntityInformatio
         match_stage = {}
         if company_id:
             match_stage["company_id"] = company_id
+        if filter_entities.code:
+            match_stage["entity_code"] = filter_entities.code
         if filter_entities.name:
             match_stage["entity_name"] = {"$regex": filter_entities.name, "$options": "i"}
         if filter_entities.country:

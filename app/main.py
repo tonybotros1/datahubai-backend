@@ -93,20 +93,22 @@ app.include_router(job_cards_dashboard.router, prefix="/job_cards_dashboard", ta
 app.include_router(to_do_list.router, prefix="/to_do_list", tags=["To-Do List"])
 app.include_router(account_transfers.router, prefix="/account_transfers", tags=["Account Transfers"])
 
+
 # app.include_router(test.router, prefix="/test", tags=["Test"])
 
 
 # نقطة نهاية WebSocket العامة
-@app.websocket("/ws/{user_id}")
-async def websocket_endpoint(websocket: WebSocket, user_id: str):
-    await manager.connect(websocket, user_id=user_id if user_id is not "" else None)
+@app.websocket("/ws/{company_id}/{user_id}")
+async def websocket_endpoint(websocket: WebSocket, company_id: str, user_id: str):
+    await manager.connect(websocket, company_id=company_id if company_id != "" else None,
+                          user_id=user_id if user_id is not "" else None)
     try:
         while True:
             # يمكنك معالجة الرسائل الواردة من العميل إذا لزم الأمر
             data = await websocket.receive_text()
             await manager.broadcast({"echo": data})
     except WebSocketDisconnect:
-        manager.disconnect(websocket, user_id=user_id)
+        manager.disconnect(websocket, user_id=user_id,company_id=company_id)
 
 
 @app.get("/")

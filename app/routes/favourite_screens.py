@@ -115,7 +115,7 @@ async def add_screen_to_favourites(screen_id: str = Body(..., embed=True),
         result = await favourite_collection.insert_one(favourite_dict)
         fav_details = await get_favourite_screen_details(result.inserted_id)
         serialized = serialize_doc(fav_details)
-        await manager.broadcast({
+        await manager.send_to_user(user_id,{
             "type": "favourite_added",
             "data": serialized
         })

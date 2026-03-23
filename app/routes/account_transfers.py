@@ -192,7 +192,7 @@ async def update_new_transfer(transfer_id: str, transfer_data: TransferModel,
         added_transfer = await get_transfer_details(transfer_id)
 
         encoded_data = jsonable_encoder(added_transfer)
-        await manager.broadcast({
+        await manager.send_to_company(company_id,{
             "type": "transfer_updated",
             "data": encoded_data
         })
