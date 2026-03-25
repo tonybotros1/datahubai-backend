@@ -260,12 +260,12 @@ async def register_company(
         address: str = Form(None),
         country: str = Form(None),
         city: str = Form(None),
-        _: dict = Depends(security.get_current_user)
+        data: dict = Depends(security.get_current_user)
 ):
     async with database.client.start_session() as s:
         try:
             await s.start_transaction()
-
+            my_company_id = data.get("company_id")
             company_logo_url = ""
             company_logo_public_id = ""
             if company_logo:
@@ -315,7 +315,7 @@ async def register_company(
             await s.commit_transaction()
             details = await get_company_details(res_company.inserted_id)
             serialized = serialize_doc(details[0])
-            await manager.broadcast({
+            await manager.send_to_company(my_company_id, {
                 "type": "company_created",
                 "data": serialized
             })
@@ -353,10 +353,11 @@ async def update_company(company_id: str, user_id: str, company_name: str = Form
                          phone_number: str = Form(None),
                          address: str = Form(None),
                          country: str = Form(None),
-                         city: str = Form(None), _: dict = Depends(security.get_current_user)):
+                         city: str = Form(None), data: dict = Depends(security.get_current_user)):
     async with database.client.start_session() as s:
         try:
             await s.start_transaction()
+            my_company_id = data.get("company_id")
             current_company = await companies_collection.find_one({"_id": ObjectId(company_id)}, session=s)
             if not current_company:
                 raise HTTPException(status_code=404, detail="Company not found")
@@ -396,7 +397,7 @@ async def update_company(company_id: str, user_id: str, company_name: str = Form
             await s.commit_transaction()
             details = await get_company_details(ObjectId(company_id))
             serialized = serialize_doc(details[0])
-            await manager.broadcast({
+            await manager.send_to_company(my_company_id, {
                 "type": "company_updated",
                 "data": serialized
             })
@@ -415,8 +416,9 @@ async def update_company(company_id: str, user_id: str, company_name: str = Form
 
 
 @router.delete("/delete_company/{company_id}/{user_id}")
-async def delete_company(company_id: str, user_id: str, _: dict = Depends(security.get_current_user)):
+async def delete_company(company_id: str, user_id: str, data: dict = Depends(security.get_current_user)):
     try:
+        my_company_id = data.get("company_id")
         if not company_id:
             raise HTTPException(status_code=400, detail="Invalid Company ID")
         if not user_id:
@@ -449,7 +451,7 @@ async def delete_company(company_id: str, user_id: str, _: dict = Depends(securi
             await session.commit_transaction()
 
             # 4. Broadcast deletion
-            await manager.broadcast({
+            await manager.send_to_company(my_company_id, {
                 "type": "company_deleted",
                 "data": {"_id": str(company_id)},
             })
@@ -464,14 +466,15 @@ async def delete_company(company_id: str, user_id: str, _: dict = Depends(securi
 
 @router.patch("/change_company_status/{company_id}")
 async def change_user_status(company_id: str, company_status: bool = Body(None),
-                             _: dict = Depends(security.get_current_user)):
+                             data: dict = Depends(security.get_current_user)):
     try:
+        my_company_id = data.get("company_id")
         result = await companies_collection.update_one(
             {"_id": ObjectId(company_id)}, {"$set": {"status": company_status, "updatedAt": security.now_utc()}},
         )
         if not result:
             raise HTTPException(status_code=404, detail="User not found")
-        await manager.broadcast({
+        await manager.send_to_company(my_company_id, {
             "type": "company_status_updated",
             "data": {"status": company_status, "_id": company_id}
         })

@@ -37,8 +37,9 @@ async def get_all_sys_variables(_: dict = Depends(security.get_current_user)):
 
 
 @router.post("/add_new_variable")
-async def add_new_variable(variable: SystemVariablesModel, _: dict = Depends(security.get_current_user)):
+async def add_new_variable(variable: SystemVariablesModel, data: dict = Depends(security.get_current_user)):
     try:
+        company_id = data.get("company_id")
         variable = variable.model_dump(exclude_unset=True)
         variable_dict = {
             "value": variable["value"],
@@ -49,7 +50,7 @@ async def add_new_variable(variable: SystemVariablesModel, _: dict = Depends(sec
         result = await sys_variables_collection.insert_one(variable_dict)
         variable_dict["_id"] = result.inserted_id
         serialized = serializer(variable_dict)
-        await manager.broadcast({
+        await manager.send_to_company(company_id, {
             "type": "variable_added",
             "data": serialized
         })
@@ -60,8 +61,9 @@ async def add_new_variable(variable: SystemVariablesModel, _: dict = Depends(sec
 
 @router.patch("/update_variable/{variable_id}")
 async def update_variable(variable_id: str, variable: SystemVariablesModel,
-                          _: dict = Depends(security.get_current_user)):
+                          data: dict = Depends(security.get_current_user)):
     try:
+        company_id = data.get("company_id")
         if not ObjectId.is_valid(variable_id):
             raise HTTPException(status_code=400, detail="Invalid variable ID")
         variable_data = variable.model_dump(exclude_unset=True)
@@ -75,7 +77,7 @@ async def update_variable(variable_id: str, variable: SystemVariablesModel,
         if not result:
             raise HTTPException(status_code=404, detail="Variable not found")
         serialized = serializer(result)
-        await manager.broadcast({
+        await manager.send_to_company(company_id, {
             "type": "variable_updated",
             "data": serialized
         })
@@ -90,19 +92,21 @@ async def update_variable(variable_id: str, variable: SystemVariablesModel,
 
 
 @router.delete("/delete_variable/{variable_id}")
-async def delete_variable(variable_id: str, _: dict = Depends(security.get_current_user)):
+async def delete_variable(variable_id: str, data: dict = Depends(security.get_current_user)):
     try:
+        company_id = data.get("company_id")
         variable_id = ObjectId(variable_id)
         result = await sys_variables_collection.delete_one({"_id": variable_id})
         if result.deleted_count == 0:
             raise HTTPException(status_code=404, detail="Variable not found")
-        await manager.broadcast({
+        await manager.send_to_company(company_id, {
             "type": "variable_deleted",
             "data": {"_id": str(variable_id)}
         })
 
     except Exception as e:
         raise e
+
 
 @router.get("/get_variable_values/{code}")
 async def get_variable_values(code: str, _: dict = Depends(security.get_current_user)):
@@ -112,7 +116,7 @@ async def get_variable_values(code: str, _: dict = Depends(security.get_current_
             {"_id": 0, "value": 1}
         ).to_list(length=None)
 
-        return {"values": [item.get("value","").lower() for item in results]}
+        return {"values": [item.get("value", "").lower() for item in results]}
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

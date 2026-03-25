@@ -58,7 +58,7 @@ async def add_new_inventory_item(inventory_item: InventoryItem, data: dict = Dep
             raise HTTPException(status_code=500, detail="Failed to insert item")
         item_dict["_id"] = result.inserted_id
         serialized = serializer(item_dict)
-        await manager.broadcast({
+        await manager.send_to_company(str(company_id), {
             "type": "inventory_item_added",
             "data": serialized
         })
@@ -73,8 +73,9 @@ async def add_new_inventory_item(inventory_item: InventoryItem, data: dict = Dep
 
 @router.patch("/update_inventory_item/{item_id}")
 async def update_inventory_item(item_id: str, inventory_item: InventoryItem,
-                                _: dict = Depends(security.get_current_user)):
+                                data: dict = Depends(security.get_current_user)):
     try:
+        company_id = data.get("company_id")
         item_id = ObjectId(item_id)
         items = inventory_item.model_dump(exclude_unset=True)
         items["updatedAt"] = security.now_utc()
@@ -89,7 +90,7 @@ async def update_inventory_item(item_id: str, inventory_item: InventoryItem,
         serialized = serializer(result)
         print(serialized)
 
-        await manager.broadcast({
+        await manager.send_to_company(company_id, {
             "type": "inventory_item_updated",
             "data": serialized
         })
@@ -99,11 +100,12 @@ async def update_inventory_item(item_id: str, inventory_item: InventoryItem,
 
 
 @router.delete("/delete_item/{item_id}")
-async def delete_branch(item_id: str, _: dict = Depends(security.get_current_user)):
+async def delete_branch(item_id: str, data: dict = Depends(security.get_current_user)):
     try:
+        company_id = data.get("company_id")
         result = await inventory_items_collection.delete_one({"_id": ObjectId(item_id)})
         if result.deleted_count == 1:
-            await manager.broadcast({
+            await manager.send_to_company(company_id, {
                 "type": "inventory_item_deleted",
                 "data": {"_id": item_id}
             })

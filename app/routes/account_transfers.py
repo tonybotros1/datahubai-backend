@@ -202,14 +202,15 @@ async def update_new_transfer(transfer_id: str, transfer_data: TransferModel,
 
 
 @router.delete("/delete_transfer/{transfer_id}")
-async def delete_transfer(transfer_id: str, _: dict = Depends(security.get_current_user)):
+async def delete_transfer(transfer_id: str, data: dict = Depends(security.get_current_user)):
     try:
+        company_id = data.get("company_id")
         transfer_id = ObjectId(transfer_id)
         result = await account_transfers_collection.delete_one({"_id": transfer_id})
         if result.deleted_count == 0:
             raise HTTPException(status_code=404, detail="Transfer not found")
 
-        await manager.broadcast({
+        await manager.send_to_company(company_id,{
             "type": "transfer_deleted",
             "data": {"_id": str(transfer_id)}
         })

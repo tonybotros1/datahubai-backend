@@ -115,7 +115,7 @@ async def add_screen_to_favourites(screen_id: str = Body(..., embed=True),
         result = await favourite_collection.insert_one(favourite_dict)
         fav_details = await get_favourite_screen_details(result.inserted_id)
         serialized = serialize_doc(fav_details)
-        await manager.send_to_user(user_id,{
+        await manager.send_to_user(user_id, {
             "type": "favourite_added",
             "data": serialized
         })
@@ -144,7 +144,7 @@ async def remove_screen_from_favourites(
         if not result:
             raise HTTPException(status_code=404, detail="Favourite not found")
 
-        await manager.broadcast({
+        await manager.send_to_user(user_id, {
             "type": "favourite_deleted",
             "data": {"_id": str(result["_id"])}  # send deleted favourite id
         })

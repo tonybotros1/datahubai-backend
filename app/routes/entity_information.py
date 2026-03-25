@@ -742,8 +742,8 @@ async def add_new_entity(
         result = await entity_information_collection.insert_one(doc)
         new_entity = await get_entity_details(result.inserted_id)
         serialized = serializer(new_entity)
-        await manager.broadcast({
-            "type": "entity_created",
+        await manager.send_to_company(company_id, {
+            "type": f"entity_created_{entity_code.lower()}",
             "data": serialized
         })
 
@@ -767,8 +767,9 @@ async def update_entity(entity_id: str, entity_name: str = Form(None),
                         entity_phone: str = Form("[]"),
                         entity_social: str = Form("[]"),
                         file: UploadFile = File(None),
-                        _: dict = Depends(security.get_current_user), ):
+                        data: dict = Depends(security.get_current_user), ):
     try:
+        company_id = data.get("company_id")
         doc = {
             "entity_name": entity_name,
             "entity_code": entity_code,
@@ -817,8 +818,8 @@ async def update_entity(entity_id: str, entity_name: str = Form(None),
         await  entity_information_collection.update_one({"_id": ObjectId(entity_id)}, {"$set": doc})
         updated_entity = await get_entity_details(ObjectId(entity_id))
         serialized = serializer(updated_entity)
-        await manager.broadcast({
-            "type": "entity_updated",
+        await manager.send_to_company(company_id,{
+            "type": f"entity_updated_{entity_code.lower()}",
             "data": serialized
         })
 
@@ -828,13 +829,14 @@ async def update_entity(entity_id: str, entity_name: str = Form(None),
 
 
 @router.delete("/delete_entity/{entity_id}")
-async def delete_entity(entity_id: str, _: dict = Depends(security.get_current_user)):
+async def delete_entity(entity_id: str, data: dict = Depends(security.get_current_user)):
     try:
+        company_id = data.get("company_id")
         result = await entity_information_collection.find_one_and_delete({"_id": ObjectId(entity_id)})
         if result and result.get("entity_picture_public_id"):
             await upload_images.delete_image_from_server(result["entity_picture_public_id"])
 
-        await manager.broadcast({
+        await manager.send_to_company(company_id,{
             "type": "entity_deleted",
             "data": {"_id": entity_id}
         })
@@ -844,14 +846,15 @@ async def delete_entity(entity_id: str, _: dict = Depends(security.get_current_u
 
 
 @router.patch("/change_entity_status/{entity_id}")
-async def change_entity_status(entity_id: str, status: bool = Body(None), _: dict = Depends(security.get_current_user)):
+async def change_entity_status(entity_id: str, status: bool = Body(None), data: dict = Depends(security.get_current_user)):
     try:
+        company_id = data.get("company_id")
         result = await entity_information_collection.update_one(
             {"_id": ObjectId(entity_id)}, {"$set": {"status": status, "updatedAt": security.now_utc()}},
         )
         if not result:
             raise HTTPException(status_code=404, detail="Entity not found")
-        await manager.broadcast({
+        await manager.send_to_company(company_id,{
             "type": "entity_status_updated",
             "data": {"status": status, "_id": entity_id}
         })
@@ -926,7 +929,17 @@ async def search_engine_for_entity_information(filter_entities: EntityInformatio
         })
         cursor = await entity_information_collection.aggregate(base_search_pipeline)
         results = await cursor.to_list(None)
-        return {"entities": results[0].get('entities', []), 'count': results[0].get('grand_totals')[0]}
+        if not results:
+            return {"entities": [], "count": 0}
 
+        entities = results[0].get("entities", [])
+        grand_totals = results[0].get("grand_totals", [])
+
+        count = grand_totals[0]["grand_count"] if grand_totals else 0
+
+        return {
+            "entities": entities,
+            "count": count
+        }
     except Exception as error:
         raise HTTPException(status_code=500, detail=str(error))

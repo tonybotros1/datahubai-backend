@@ -386,7 +386,7 @@ async def start_function(start: StartFunction, data: dict = Depends(security.get
         result = await  time_sheets_collection.insert_one(sheet_dict)
         new_start_result = await get_time_sheet_details(result.inserted_id)
         serialized = serializer(new_start_result)
-        await manager.broadcast({
+        await manager.send_to_company(str(company_id), {
             "type": "time_sheets_start_function",
             "data": serialized
         })
@@ -413,7 +413,7 @@ async def pause_function(time_sheet_id: str, data: dict = Depends(security.get_c
                 {"_id": time_sheet_id},
                 {"$set": {"active_periods": active_periods}},
             )
-            await manager.broadcast({
+            await manager.send_to_company(str(company_id), {
                 "type": "time_sheets_pause_function",
                 "data": {"_id": str(time_sheet_id)}
             })
@@ -444,7 +444,7 @@ async def continue_function(time_sheet_id: str, data: dict = Depends(security.ge
             {"_id": time_sheet_id},
             {"$set": {"active_periods": active_periods}},
         )
-        await manager.broadcast({
+        await manager.send_to_company(str(company_id), {
             "type": "time_sheets_continue_function",
             "data": {"_id": str(time_sheet_id)}
         })
@@ -473,7 +473,7 @@ async def finish_function(time_sheet_id: str, data: dict = Depends(security.get_
             {"_id": time_sheet_id},
             {"$set": {"active_periods": active_periods, "end_date": end_date}},
         )
-        await manager.broadcast({
+        await manager.send_to_company(str(company_id), {
             "type": "time_sheets_finish_function",
             "data": {"_id": str(time_sheet_id)}
         })
@@ -507,7 +507,7 @@ async def pause_all_function(data: dict = Depends(security.get_current_user)):
 
         if updates:
             await time_sheets_collection.bulk_write(updates)
-        await manager.broadcast({
+        await manager.send_to_company(str(company_id), {
             "type": "time_sheets_pause_all_function",
             "data": {"status": "paused"}
         })

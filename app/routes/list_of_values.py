@@ -104,13 +104,14 @@ async def get_all_lists(_: dict = Depends(security.get_current_user)):
 
 @router.post("/add_new_list")
 async def add_new_list(
-        _: dict = Depends(security.get_current_user),
+        data: dict = Depends(security.get_current_user),
         name: str = Body(None), code: str = Body(None),
         mastered_by: str = Body(None),
 ):
     mastered_by_id = ObjectId(mastered_by) if mastered_by else ''
 
     try:
+        company_id = data.get('company_id')
         list_dict = {
             "name": name,
             "code": code,
@@ -122,7 +123,7 @@ async def add_new_list(
         result = await list_collection.insert_one(list_dict)
         new_list = await get_list_details(result.inserted_id)
         serialized = serializer(new_list)
-        await manager.broadcast({
+        await manager.send_to_company(company_id, {
             "type": "list_added",
             "data": serialized
         })
@@ -134,12 +135,12 @@ async def add_new_list(
 
 
 @router.delete("/remove_list/{list_id}")
-async def remove_list(list_id: str, _: dict = Depends(security.get_current_user)):
+async def remove_list(list_id: str, data: dict = Depends(security.get_current_user)):
     try:
         result = await list_collection.delete_one({"_id": ObjectId(list_id)})
-
+        company_id = data.get('company_id')
         if result.deleted_count == 1:
-            await manager.broadcast({
+            await manager.send_to_company(company_id, {
                 "type": "list_deleted",
                 "data": {"_id": list_id}
             })
@@ -153,10 +154,10 @@ async def remove_list(list_id: str, _: dict = Depends(security.get_current_user)
 
 @router.patch("/update_list/{list_id}")
 async def update_list(list_id: str, name: str = Body(None), code: str = Body(None),
-                      mastered_by: str = Body(None), _: dict = Depends(security.get_current_user)):
+                      mastered_by: str = Body(None), data: dict = Depends(security.get_current_user)):
     try:
         mastered_by_id = ObjectId(mastered_by) if mastered_by else ''
-
+        company_id = data.get('company_id')
         await  list_collection.find_one_and_update({"_id": ObjectId(list_id)}, {
             "$set": {
                 "name": name,
@@ -167,7 +168,7 @@ async def update_list(list_id: str, name: str = Body(None), code: str = Body(Non
         })
         updated_list = await get_list_details(ObjectId(list_id))
         serialized = serializer(updated_list)
-        await manager.broadcast({
+        await manager.send_to_company(company_id, {
             "type": "list_updated",
             "data": serialized
         })
@@ -289,7 +290,7 @@ async def add_new_value(list_id: str = Path(...),
         result = await value_collection.insert_one(value_dict)
         new_value = await get_value_details(result.inserted_id)
         serialized = serializer(new_value)
-        await manager.broadcast({
+        await manager.send_to_company(str(company_id), {
             "type": "list_value_added",
             "data": serialized
         })
@@ -301,11 +302,12 @@ async def add_new_value(list_id: str = Path(...),
 
 
 @router.delete("/delete_value/{value_id}")
-async def delete_value(value_id: str, _: dict = Depends(security.get_current_user)):
+async def delete_value(value_id: str, data: dict = Depends(security.get_current_user)):
     try:
+        company_id = data.get("company_id")
         result = await value_collection.delete_one({"_id": ObjectId(value_id)})
         if result.deleted_count == 1:
-            await manager.broadcast({
+            await manager.send_to_company(company_id, {
                 "type": "list_value_deleted",
                 "data": {"_id": value_id}
             })
@@ -319,9 +321,10 @@ async def delete_value(value_id: str, _: dict = Depends(security.get_current_use
 @router.patch("/update_value/{value_id}")
 async def update_value(value_id: str, name: str = Body(None),
                        mastered_by_id: str = Body(None),
-                       _: dict = Depends(security.get_current_user)
+                       data: dict = Depends(security.get_current_user)
                        ):
     try:
+        company_id = data.get("company_id")
         mastered_by_id = ObjectId(mastered_by_id) if mastered_by_id else ''
         result = await value_collection.find_one_and_update(
             {"_id": ObjectId(value_id)},
@@ -334,7 +337,7 @@ async def update_value(value_id: str, name: str = Body(None),
         edited_value = await get_value_details(ObjectId(value_id))
         serialized = serializer(edited_value)
 
-        await manager.broadcast({
+        await manager.send_to_company(company_id, {
             "type": "list_value_updated",
             "data": serialized
         })

@@ -164,7 +164,7 @@ async def add_new_branch(name: str = Body(None), code: Optional[str] = Body(None
         result = await branches_collection.insert_one(branch_dic)
         new_branch = await get_branch_details(result.inserted_id)
         serialized = serializer(new_branch)
-        await manager.broadcast({
+        await manager.send_to_company(str(company_id), {
             "type": "branch_added",
             "data": serialized
         })
@@ -178,8 +178,9 @@ async def add_new_branch(name: str = Body(None), code: Optional[str] = Body(None
 @router.patch("/update_branch/{branch_id}")
 async def update_branch(branch_id: str, name: str = Body(None), code: str = Body(None), line: str = Body(None),
                         country_id: str = Body(None), city_id: str = Body(None),
-                        _: dict = Depends(security.get_current_user)):
+                        data: dict = Depends(security.get_current_user)):
     try:
+        company_id = data.get("company_id")
         branch_id = ObjectId(branch_id)
         result = await branches_collection.update_one(
             {"_id": branch_id},
@@ -193,7 +194,7 @@ async def update_branch(branch_id: str, name: str = Body(None), code: str = Body
         updated_branch = await get_branch_details(branch_id)
         serialized = serializer(updated_branch)
 
-        await manager.broadcast({
+        await manager.send_to_company(company_id, {
             "type": "branch_updated",
             "data": serialized
         })
@@ -203,15 +204,17 @@ async def update_branch(branch_id: str, name: str = Body(None), code: str = Body
 
 
 @router.patch("/change_branch_status/{branch_id}")
-async def change_branch_status(branch_id: str, status: bool = Body(None), _: dict = Depends(security.get_current_user)):
+async def change_branch_status(branch_id: str, status: bool = Body(None),
+                               data: dict = Depends(security.get_current_user)):
     try:
+        company_id = data.get("company_id")
         result = await branches_collection.find_one_and_update(
             {"_id": ObjectId(branch_id)}, {"$set": {"status": status, "updatedAt": datetime.now(timezone.utc), }},
             return_document=ReturnDocument.AFTER
         )
         if not result:
             raise HTTPException(status_code=404, detail="Branch not found")
-        await manager.broadcast({
+        await manager.send_to_company(str(company_id), {
             "type": "branch_status_updated",
             "data": {"status": status, "_id": branch_id}
         })
@@ -220,11 +223,12 @@ async def change_branch_status(branch_id: str, status: bool = Body(None), _: dic
 
 
 @router.delete("/delete_branch/{branch_id}")
-async def delete_branch(branch_id: str, _: dict = Depends(security.get_current_user)):
+async def delete_branch(branch_id: str, data: dict = Depends(security.get_current_user)):
     try:
+        company_id = data.get("company_id")
         result = await branches_collection.delete_one({"_id": ObjectId(branch_id)})
         if result.deleted_count == 1:
-            await manager.broadcast({
+            await manager.send_to_company(str(company_id), {
                 "type": "branch_deleted",
                 "data": {"_id": branch_id}
             })

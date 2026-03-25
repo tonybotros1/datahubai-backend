@@ -56,7 +56,7 @@ async def add_new_counter(code: str = Body(None), description: str = Body(None),
         result = await counters_collection.insert_one(counter_dict)
         counter_dict["_id"] = str(result.inserted_id)
         serialized = serializer(counter_dict)
-        await manager.broadcast({
+        await manager.send_to_company(str(company_id), {
             "type": "counter_added",
             "data": serialized
         })
@@ -66,11 +66,12 @@ async def add_new_counter(code: str = Body(None), description: str = Body(None),
 
 
 @router.delete("/remove_counter/{counter_id}")
-async def remove_counter(counter_id: str, _: dict = Depends(security.get_current_user)):
+async def remove_counter(counter_id: str, data: dict = Depends(security.get_current_user)):
     try:
+        company_id = data.get("company_id")
         result = await counters_collection.delete_one({"_id": ObjectId(counter_id)})
         if result.deleted_count == 1:
-            await manager.broadcast({
+            await manager.send_to_company(company_id, {
                 "type": "counter_deleted",
                 "data": {"_id": counter_id}
             })
@@ -86,9 +87,10 @@ async def remove_counter(counter_id: str, _: dict = Depends(security.get_current
 async def update_counter(counter_id: str,
                          code: str = Body(None), description: str = Body(None), prefix: str = Body(None),
                          value: int = Body(None), length: int = Body(None), separator: str = Body(None)
-                         , _: dict = Depends(security.get_current_user)
+                         , data: dict = Depends(security.get_current_user)
                          ):
     try:
+        company_id = data.get("company_id")
         result = await counters_collection.find_one_and_update(
             {"_id": ObjectId(counter_id)},
             {"$set": {"code": code, "description": description, "prefix": prefix, "value": value, "length": length,
@@ -101,7 +103,7 @@ async def update_counter(counter_id: str,
 
         serialized = serializer(result)
 
-        await manager.broadcast({
+        await manager.send_to_company(company_id, {
             "type": "counter_updated",
             "data": serialized
         })
@@ -113,9 +115,10 @@ async def update_counter(counter_id: str,
 
 @router.patch("/change_counter_status/{counter_id}")
 async def change_counter_status(counter_id: str, status: bool = Body(None),
-                                _: dict = Depends(security.get_current_user)
+                                data: dict = Depends(security.get_current_user)
                                 ):
     try:
+        company_id = data.get("company_id")
         result = await counters_collection.find_one_and_update(
             {"_id": ObjectId(counter_id)}, {"$set": {"status": status, "updatedAt": datetime.now(timezone.utc), }},
             return_document=ReturnDocument.AFTER
@@ -123,7 +126,7 @@ async def change_counter_status(counter_id: str, status: bool = Body(None),
         if not result:
             raise HTTPException(status_code=404, detail="Counter not found")
         serialized = serializer(result)
-        await manager.broadcast({
+        await manager.send_to_company(company_id, {
             "type": "counter_updated",
             "data": serialized
         })

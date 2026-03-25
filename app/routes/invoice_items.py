@@ -56,7 +56,7 @@ async def add_new_invoice_item(invoice: InvoiceItem, data: dict = Depends(securi
         new_invoice = await invoice_items_collection.insert_one(invoice_dict)
         invoice_dict["_id"] = new_invoice.inserted_id
         serialized = serializer(invoice_dict)
-        await manager.broadcast({
+        await manager.send_to_company(str(company_id), {
             "type": "invoice_item_added",
             "data": serialized
         })
@@ -71,15 +71,16 @@ async def add_new_invoice_item(invoice: InvoiceItem, data: dict = Depends(securi
 
 
 @router.patch("/update_invoice_item/{invoice_id}")
-async def update_invoice_item(invoice_id: str, invoice: InvoiceItem, _: dict = Depends(security.get_current_user)):
+async def update_invoice_item(invoice_id: str, invoice: InvoiceItem, data: dict = Depends(security.get_current_user)):
     try:
+        company_id = data.get("company_id")
         invoice = invoice.model_dump(exclude_unset=True)
         invoice["updatedAt"] = security.now_utc()
         updated_invoice = await invoice_items_collection.find_one_and_update({"_id": ObjectId(invoice_id)},
                                                                              {"$set": invoice},
                                                                              return_document=ReturnDocument.AFTER)
         serialized = serializer(updated_invoice)
-        await manager.broadcast({
+        await manager.send_to_company(company_id, {
             "type": "invoice_item_updated",
             "data": serialized
         })
@@ -92,13 +93,14 @@ async def update_invoice_item(invoice_id: str, invoice: InvoiceItem, _: dict = D
 
 
 @router.delete("/delete_invoice_item/{invoice_id}")
-async def delete_technician(invoice_id: str, _: dict = Depends(security.get_current_user)):
+async def delete_technician(invoice_id: str, data: dict = Depends(security.get_current_user)):
     try:
+        company_id = data.get("company_id")
         result = await invoice_items_collection.delete_one({"_id": ObjectId(invoice_id)})
         if result.deleted_count == 0:
             raise HTTPException(status_code=404, detail="Invoice not found")
 
-        await manager.broadcast({
+        await manager.send_to_company(company_id, {
             "type": "invoice_item_deleted",
             "data": {"_id": invoice_id}
         })

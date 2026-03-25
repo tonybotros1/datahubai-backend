@@ -173,7 +173,7 @@ async def create_employee(employee: EmployeesModel, data: dict = Depends(securit
         for filed in ids_list:
             if employee.get(filed):
                 employee[filed] = ObjectId(employee[filed]) if employee[filed] else None
-        new_employee_counter = await create_custom_counter("EN", "E",description='Employees Counter',data= data)
+        new_employee_counter = await create_custom_counter("EN", "E", description='Employees Counter', data=data)
         employee["company_id"] = company_id
         employee["createdAt"] = security.now_utc()
         employee["updatedAt"] = security.now_utc()
@@ -183,7 +183,7 @@ async def create_employee(employee: EmployeesModel, data: dict = Depends(securit
         result = await employees_collection.insert_one(employee)
         new_employee = await get_employee_details(result.inserted_id)
         serialized = serializer(new_employee)
-        await manager.broadcast({
+        await manager.send_to_company(str(company_id), {
             "type": "employee_added",
             "data": serialized
         })
@@ -194,8 +194,9 @@ async def create_employee(employee: EmployeesModel, data: dict = Depends(securit
 
 
 @router.patch("/update_employee/{employee_id}")
-async def update_employee(employee_id: str, employee: EmployeesModel, _: dict = Depends(security.get_current_user)):
+async def update_employee(employee_id: str, employee: EmployeesModel, data: dict = Depends(security.get_current_user)):
     try:
+        company_id = data.get("company_id")
         employee = employee.model_dump(exclude_unset=True)
         ids_list = ["gender", "nationality", "martial_status", "status"]
         for filed in ids_list:
@@ -206,7 +207,7 @@ async def update_employee(employee_id: str, employee: EmployeesModel, _: dict = 
         if result.modified_count > 0:
             updated_employee = await get_employee_details(ObjectId(employee_id))
             serialized = serializer(updated_employee)
-            await manager.broadcast({
+            await manager.send_to_company(company_id, {
                 "type": "employee_updated",
                 "data": serialized
             })
@@ -216,11 +217,12 @@ async def update_employee(employee_id: str, employee: EmployeesModel, _: dict = 
 
 
 @router.delete("/delete_employee/{employee_id}")
-async def delete_employee(employee_id: str, _: dict = Depends(security.get_current_user)):
+async def delete_employee(employee_id: str, data: dict = Depends(security.get_current_user)):
     try:
+        company_id = data.get("company_id")
         result = await employees_collection.delete_one({"_id": ObjectId(employee_id)})
         if result.deleted_count == 1:
-            await manager.broadcast({
+            await manager.send_to_company(company_id, {
                 "type": "employee_deleted",
                 "data": {"_id": employee_id}
             })

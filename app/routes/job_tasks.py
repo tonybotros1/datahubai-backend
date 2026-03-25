@@ -1,14 +1,12 @@
 from typing import Optional
 
 from bson import ObjectId
-from fastapi import APIRouter, Body, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from pymongo import ReturnDocument, ASCENDING
 from app.core import security
 from app.database import get_collection
-from datetime import datetime, timezone
-
-from app.routes.auth import companies
+from datetime import datetime
 from app.websocket_config import manager
 
 router = APIRouter()
@@ -63,12 +61,12 @@ async def add_new_job_task(task: JobTaskModel, data: dict = Depends(security.get
         result = await job_tasks_collection.insert_one(task_dict)
         task_dict['_id'] = str(result.inserted_id)
         serialized = serializer(task_dict)
-        await manager.broadcast({
+        await manager.send_to_company(str(company_id), {
             "type": "job_task_added",
             "data": serialized
         })
 
-        return {"task" : serialized}
+        return {"task": serialized}
 
     except HTTPException:
         raise
@@ -78,8 +76,9 @@ async def add_new_job_task(task: JobTaskModel, data: dict = Depends(security.get
 
 
 @router.patch("/update_job_task/{task_id}")
-async def update_job_task(task_id: str, task: JobTaskModel, _: dict = Depends(security.get_current_user)):
+async def update_job_task(task_id: str, task: JobTaskModel, data: dict = Depends(security.get_current_user)):
     try:
+        company_id = data.get("company_id")
         task = task.model_dump(exclude_unset=True)
         task.update({
             "updatedAt": security.now_utc(),
@@ -92,7 +91,7 @@ async def update_job_task(task_id: str, task: JobTaskModel, _: dict = Depends(se
             raise HTTPException(status_code=404, detail="Task not found")
 
         serialized = serializer(result)
-        await manager.broadcast({
+        await manager.send_to_company(company_id, {
             "type": "job_task_updated",
             "data": serialized
         })
@@ -105,11 +104,12 @@ async def update_job_task(task_id: str, task: JobTaskModel, _: dict = Depends(se
 
 
 @router.delete("/delete_job_task/{task_id}")
-async def delete_job_task(task_id: str, _: dict = Depends(security.get_current_user)):
+async def delete_job_task(task_id: str, data: dict = Depends(security.get_current_user)):
     try:
+        company_id = data.get("company_id")
         result = await job_tasks_collection.delete_one({"_id": ObjectId(task_id)})
         if result.deleted_count == 1:
-            await manager.broadcast({
+            await manager.send_to_company(company_id, {
                 "type": "job_task_deleted",
                 "data": {"_id": task_id}
             })

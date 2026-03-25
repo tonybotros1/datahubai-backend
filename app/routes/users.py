@@ -129,7 +129,7 @@ async def add_new_user(user: UserCreate, data: dict = Depends(security.get_curre
         new_user = serializer(new_user)
 
         # Broadcast event
-        await manager.broadcast({
+        await manager.send_to_company(str(company_id), {
             "type": "user_added",
             "data": new_user
         })
@@ -149,11 +149,12 @@ async def add_new_user(user: UserCreate, data: dict = Depends(security.get_curre
 
 @router.patch("/update_user/{user_id}")
 async def update_user(
-        user_id: str, user: UserUpdate, _: dict = Depends(security.get_current_user)
+        user_id: str, user: UserUpdate, data: dict = Depends(security.get_current_user)
 ):
     try:
         # Convert user_id safely
         try:
+            company_id = data.get("company_id")
             user_obj_id = ObjectId(user_id)
         except errors.InvalidId:
             raise HTTPException(status_code=400, detail="Invalid user ID")
@@ -202,7 +203,7 @@ async def update_user(
         updated_user = serializer(result)
 
         # Broadcast update
-        await manager.broadcast({
+        await manager.send_to_company(company_id, {
             "type": "user_updated",
             "data": updated_user
         })
@@ -214,15 +215,16 @@ async def update_user(
 
 
 @router.delete("/remove_user/{user_id}")
-async def remove_user(user_id: str, _: dict = Depends(security.get_current_user)):
+async def remove_user(user_id: str, data: dict = Depends(security.get_current_user)):
     try:
+        company_id = data.get("company_id")
         result = await users_collection.delete_one({"_id": ObjectId(user_id)})
 
         if result.deleted_count == 0:
             raise HTTPException(status_code=404, detail="Role not found")
         await refresh_tokens_collection.delete_many({"user_id": ObjectId(user_id)})
 
-        await manager.broadcast({
+        await manager.send_to_company(company_id, {
             "type": "user_deleted",
             "data": {"_id": user_id}
         })
@@ -233,15 +235,16 @@ async def remove_user(user_id: str, _: dict = Depends(security.get_current_user)
 
 
 @router.patch("/change_user_status/{user_id}")
-async def change_user_status(user_id: str, status: bool = Body(None), _: dict = Depends(security.get_current_user)):
+async def change_user_status(user_id: str, status: bool = Body(None), data: dict = Depends(security.get_current_user)):
     try:
+        company_id = data.get("company_id")
         result = await users_collection.find_one_and_update(
             {"_id": ObjectId(user_id)}, {"$set": {"status": status, "updatedAt": datetime.now(timezone.utc), }},
             return_document=ReturnDocument.AFTER
         )
         if not result:
             raise HTTPException(status_code=404, detail="User not found")
-        await manager.broadcast({
+        await manager.send_to_company(company_id, {
             "type": "user_status_updated",
             "data": {"status": status, "_id": user_id}
         })

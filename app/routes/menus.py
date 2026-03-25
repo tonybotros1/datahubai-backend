@@ -43,8 +43,9 @@ async def get_menus(_: dict = Depends(security.get_current_user)):
 # this is to add new menu
 @router.post("/add_new_menu")
 async def add_new_menu(name: str | None = Body(None), code: str | None = Body(None), route: str | None = Body(None)
-                       , _: dict = Depends(security.get_current_user)):
+                       , data: dict = Depends(security.get_current_user)):
     try:
+        company_id = data.get("company_id")
         menu_dict = {
             "name": name,
             "code": code,
@@ -57,7 +58,7 @@ async def add_new_menu(name: str | None = Body(None), code: str | None = Body(No
         result = await menus_collection.insert_one(menu_dict)
         menu_dict["_id"] = str(result.inserted_id)
         serialized = menus_serializer(menu_dict)
-        await manager.broadcast({
+        await manager.send_to_company(company_id, {
             "type": "menu_created",
             "data": serialized
         })
@@ -68,9 +69,9 @@ async def add_new_menu(name: str | None = Body(None), code: str | None = Body(No
 
 
 @router.delete("/delete_menu/{menu_id}")
-async def delete_menu(menu_id: str, _: dict = Depends(security.get_current_user)):
+async def delete_menu(menu_id: str, data: dict = Depends(security.get_current_user)):
     try:
-
+        company_id = data.get("company_id")
         # 1️⃣ Remove menuId from all parents' children arrays
         await menus_collection.update_many(
             {"children": ObjectId(menu_id)},
@@ -83,7 +84,7 @@ async def delete_menu(menu_id: str, _: dict = Depends(security.get_current_user)
         if result.deleted_count == 0:
             raise HTTPException(status_code=404, detail="Menu not found")
 
-        await manager.broadcast({
+        await manager.send_to_company(company_id, {
             "type": "menu_deleted",
             "data": {"_id": menu_id}
         })
@@ -97,8 +98,9 @@ async def delete_menu(menu_id: str, _: dict = Depends(security.get_current_user)
 
 @router.patch("/update_menu/{menu_id}")
 async def update_menu(menu_id: str, name: str | None = Body(None), code: str | None = Body(None),
-                      route: str | None = Body(None), _: dict = Depends(security.get_current_user)):
+                      route: str | None = Body(None), data: dict = Depends(security.get_current_user)):
     try:
+        company_id = data.get("company_id")
         menu = await menus_collection.find_one_and_update({"_id": ObjectId(menu_id)},
                                                           {"$set": {"updatedAt": datetime.now(timezone.utc),
                                                                     "name": name, "code": code, "route_name": route}},
@@ -107,7 +109,7 @@ async def update_menu(menu_id: str, name: str | None = Body(None), code: str | N
                                                           )
 
         serialized = menus_serializer(menu)
-        await manager.broadcast({
+        await manager.send_to_company(company_id,{
             "type": "menu_updated",
             "data": serialized
         })
@@ -210,8 +212,6 @@ async def get_user_menu_tree(user_data: dict = Depends(security.get_current_user
         # Safely access 'rootMenus' and 'tree'
         root_menus = data.get("rootMenus", [])
         tree_nodes_list = data.get("tree", [])
-
-
 
         # Flatten the list of lists from tree_nodes
         all_nodes = root_menus + [node for sublist in tree_nodes_list for node in sublist]

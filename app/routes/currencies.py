@@ -127,7 +127,7 @@ async def add_new_currency(currency: Currencies, data: dict = Depends(security.g
         result = await currencies_collection.insert_one(currency_dict)
         new_currency = await get_currency_details(result.inserted_id)
         serialized = serializer(new_currency)
-        await manager.broadcast({
+        await manager.send_to_company(str(company_id), {
             "type": "currency_created",
             "data": serialized
         })
@@ -145,8 +145,9 @@ async def add_new_currency(currency: Currencies, data: dict = Depends(security.g
 
 
 @router.patch("/update_currency/{currency_id}")
-async def update_currency(currency_id: str, currency: Currencies, _: dict = Depends(security.get_current_user)):
+async def update_currency(currency_id: str, currency: Currencies, data: dict = Depends(security.get_current_user)):
     try:
+        company_id = data.get("company_id")
         currency = currency.model_dump(exclude_unset=True)
         currency["updatedAt"] = security.now_utc()
         currency["country_id"] = ObjectId(currency["country_id"])
@@ -155,7 +156,7 @@ async def update_currency(currency_id: str, currency: Currencies, _: dict = Depe
             {"_id": currency_id}, {"$set": currency})
         updated_currency = await get_currency_details(currency_id)
         serialized = serializer(updated_currency)
-        await manager.broadcast({
+        await manager.send_to_company(company_id, {
             "type": "currency_updated",
             "data": serialized
         })
@@ -168,13 +169,14 @@ async def update_currency(currency_id: str, currency: Currencies, _: dict = Depe
 
 
 @router.delete("/delete_currency/{currency_id}")
-async def delete_currency(currency_id: str, _: dict = Depends(security.get_current_user)):
+async def delete_currency(currency_id: str, data: dict = Depends(security.get_current_user)):
     try:
+        company_id = data.get("company_id")
         result = await currencies_collection.delete_one({"_id": ObjectId(currency_id)})
         if result.deleted_count == 0:
             raise HTTPException(status_code=404, detail="Salesman not found")
 
-        await manager.broadcast({
+        await manager.send_to_company(company_id, {
             "type": "currency_deleted",
             "data": {"_id": str(currency_id)}
         })
@@ -185,13 +187,15 @@ async def delete_currency(currency_id: str, _: dict = Depends(security.get_curre
 
 
 @router.patch("/change_currency_status/{currency_id}")
-async def change_user_status(currency_id: str, status: bool = Body(None), _: dict = Depends(security.get_current_user)):
+async def change_user_status(currency_id: str, status: bool = Body(None),
+                             data: dict = Depends(security.get_current_user)):
     try:
+        company_id = data.get("company_id")
         await currencies_collection.update_one(
             {"_id": ObjectId(currency_id)}, {"$set": {"status": status, "updatedAt": security.now_utc()}},
         )
 
-        await manager.broadcast({
+        await manager.send_to_company(company_id, {
             "type": "currency_status_updated",
             "data": {"status": status, "_id": currency_id}
         })

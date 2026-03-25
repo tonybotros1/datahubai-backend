@@ -436,7 +436,7 @@ async def add_new_transfer(transfer_data: TransferModel, data: dict = Depends(se
         added_transfer = await get_transfer_details(result.inserted_id)
 
         encoded_data = jsonable_encoder(added_transfer)
-        await manager.broadcast({
+        await manager.send_to_company(str(company_id), {
             "type": "transfer_created",
             "data": encoded_data
         })
@@ -467,7 +467,7 @@ async def update_new_transfer(transfer_id: str, transfer_data: TransferModel,
         added_transfer = await get_transfer_details(transfer_id)
 
         encoded_data = jsonable_encoder(added_transfer)
-        await manager.broadcast({
+        await manager.send_to_company(str(company_id), {
             "type": "transfer_updated",
             "data": encoded_data
         })
@@ -477,14 +477,15 @@ async def update_new_transfer(transfer_id: str, transfer_data: TransferModel,
 
 
 @router.delete("/delete_transfer/{transfer_id}")
-async def delete_transfer(transfer_id: str, _: dict = Depends(security.get_current_user)):
+async def delete_transfer(transfer_id: str, data: dict = Depends(security.get_current_user)):
     try:
+        company_id = data.get("company_id")
         transfer_id = ObjectId(transfer_id)
         result = await all_trades_transfers_collection.delete_one({"_id": transfer_id})
         if result.deleted_count == 0:
             raise HTTPException(status_code=404, detail="Transfer not found")
 
-        await manager.broadcast({
+        await manager.send_to_company(company_id, {
             "type": "transfer_deleted",
             "data": {"_id": str(transfer_id)}
         })
@@ -564,7 +565,7 @@ async def add_purchase_agreement_item(purchase_agreement_item: PurchaseAgreement
         })
 
         encoded_data = jsonable_encoder(purchase_agreement_item_dict)
-        await manager.broadcast({
+        await manager.send_to_company(str(company_id), {
             "type": "purchase_agreement_item_created",
             "data": encoded_data
         })
@@ -576,8 +577,9 @@ async def add_purchase_agreement_item(purchase_agreement_item: PurchaseAgreement
 
 @router.patch("/update_purchase_agreement_item/{purchase_item_id}")
 async def update_purchase_agreement_item(purchase_item_id: str, purchase_agreement_item: PurchaseAgreementModel,
-                                         _: dict = Depends(security.get_current_user)):
+                                         data: dict = Depends(security.get_current_user)):
     try:
+        company_id = data.get('company_id')
         purchase_item_id = ObjectId(purchase_item_id)
         purchase_agreement_item_details_pipeline = [
             {
@@ -616,7 +618,7 @@ async def update_purchase_agreement_item(purchase_item_id: str, purchase_agreeme
         result = await cursor.next()
 
         encoded_data = jsonable_encoder(result)
-        await manager.broadcast({
+        await manager.send_to_company(company_id, {
             "type": "purchase_agreement_item_updated",
             "data": encoded_data
         })
@@ -627,11 +629,12 @@ async def update_purchase_agreement_item(purchase_item_id: str, purchase_agreeme
 
 
 @router.delete("/delete_purchase_agreement_item/{purchase_id}")
-async def delete_purchase_agreement_item(purchase_id: str, _: dict = Depends(security.get_current_user)):
+async def delete_purchase_agreement_item(purchase_id: str, data: dict = Depends(security.get_current_user)):
     try:
+        company_id = data.get('company_id')
         result = await all_trades_purchase_agreement_items_collection.delete_one({"_id": ObjectId(purchase_id)})
         if result.deleted_count == 1:
-            await manager.broadcast({
+            await manager.send_to_company(company_id, {
                 "type": "purchase_agreement_item_deleted",
                 "data": {"_id": purchase_id}
             })
@@ -867,7 +870,7 @@ async def add_new_capital_or_outstanding(add_type: str, capital: CapitalModel,
             raise HTTPException(status_code=400, detail="Invalid add_type.")
         new_capital_or_outstanding = await get_capital_or_outstanding_details(result.inserted_id, add_type)
         serialized = serialize(new_capital_or_outstanding)
-        await manager.broadcast({
+        await manager.send_to_company(str(company_id), {
             "type": "capital_created" if add_type == "capitals" else "outstanding_created",
             "data": serialized
         })
@@ -879,8 +882,9 @@ async def add_new_capital_or_outstanding(add_type: str, capital: CapitalModel,
 
 
 @router.delete("/delete_capital_or_outstanding/{type_name}/{type_id}")
-async def delete_capital_or_outstanding(type_name: str, type_id: str, _: dict = Depends(security.get_current_user)):
+async def delete_capital_or_outstanding(type_name: str, type_id: str, data: dict = Depends(security.get_current_user)):
     try:
+        company_id = data.get("company_id")
         if type_name == "capitals":
             result = await all_capitals_collection.find_one_and_delete({"_id": ObjectId(type_id)})
 
@@ -894,7 +898,7 @@ async def delete_capital_or_outstanding(type_name: str, type_id: str, _: dict = 
             "pay": result.get("pay", 0),
             "receive": result.get("receive", 0),
         }
-        await manager.broadcast({
+        await manager.send_to_company(company_id, {
             "type": "capital_deleted" if type_name == "capitals" else "outstanding_deleted",
             "data": {"_id": type_id},
         })
@@ -976,7 +980,7 @@ async def update_capital_or_outstanding(type_name: str, type_id: str, capital: C
         totals_result = await cursor.to_list(length=1)
         totals = totals_result[0] if totals_result else {"pay": 0, "receive": 0, "net": 0}
 
-        await manager.broadcast({
+        await manager.send_to_company(str(company_id), {
             "type": "capital_updated" if type_name == "capitals" else "outstanding_updated",
             "data": serialized,
             "totals": totals
@@ -1438,7 +1442,7 @@ async def add_new_general_expenses(general: GeneralExpensesModel,
 
         new_capital_or_outstanding = await get_general_expenses_details(result.inserted_id)
         serialized = general_expenses_serialize(new_capital_or_outstanding)
-        await manager.broadcast({
+        await manager.send_to_company(str(company_id), {
             "type": "general_expenses_created",
             "data": serialized
         })
@@ -1449,9 +1453,9 @@ async def add_new_general_expenses(general: GeneralExpensesModel,
 
 
 @router.delete("/delete_general_expenses/{type_id}")
-async def delete_general_expenses(type_id: str, _: dict = Depends(security.get_current_user)):
+async def delete_general_expenses(type_id: str, data: dict = Depends(security.get_current_user)):
     try:
-
+        company_id = data.get("company_id")
         result = await all_general_expenses_collection.find_one_and_delete({"_id": ObjectId(type_id)})
         if not result:
             raise HTTPException(status_code=404, detail="General expenses not found.")
@@ -1459,7 +1463,7 @@ async def delete_general_expenses(type_id: str, _: dict = Depends(security.get_c
             "pay": result.get("pay", 0),
             "receive": result.get("receive", 0),
         }
-        await manager.broadcast({
+        await manager.send_to_company(company_id, {
             "type": "general_expenses_deleted",
             "data": {"_id": type_id},
         })
@@ -1528,7 +1532,7 @@ async def update_generale_expenses(type_id: str, general: GeneralExpensesModel,
         totals_result = await cursor.to_list(length=1)
         totals = totals_result[0] if totals_result else {"pay": 0, "receive": 0, "net": 0}
 
-        await manager.broadcast({
+        await manager.send_to_company(str(company_id), {
             "type": "general_expenses_updated",
             "data": serialized,
             "totals": totals
@@ -1609,7 +1613,7 @@ async def add_trade_item(item_model: CarTradingItemsModel, data: dict = Depends(
         added_item = await get_trade_item_details(result.inserted_id)
         encoded_data = jsonable_encoder(added_item)
 
-        await manager.broadcast({
+        await manager.send_to_company(str(company_id), {
             "type": "trade_item_added",
             "data": encoded_data
         })
@@ -1620,8 +1624,9 @@ async def add_trade_item(item_model: CarTradingItemsModel, data: dict = Depends(
 
 @router.patch("/update_trade_item/{item_id}")
 async def update_trade_item(item_id: str, item_model: CarTradingItemsModel,
-                            _: dict = Depends(security.get_current_user)):
+                            data: dict = Depends(security.get_current_user)):
     try:
+        company_id = data.get("company_id")
         item_id = ObjectId(item_id)
         item_model = item_model.model_dump(exclude_unset=True)
         item_model.pop("trade_id")
@@ -1634,7 +1639,7 @@ async def update_trade_item(item_id: str, item_model: CarTradingItemsModel,
         added_item = await get_trade_item_details(item_id)
         encoded_data = jsonable_encoder(added_item)
 
-        await manager.broadcast({
+        await manager.send_to_company(company_id, {
             "type": "trade_item_updated",
             "data": encoded_data
         })
@@ -1644,11 +1649,12 @@ async def update_trade_item(item_id: str, item_model: CarTradingItemsModel,
 
 
 @router.delete("/delete_trade_item/{item_id}")
-async def delete_trade_item(item_id: str, _: dict = Depends(security.get_current_user)):
+async def delete_trade_item(item_id: str, data: dict = Depends(security.get_current_user)):
     try:
+        company_id = data.get("company_id")
         item_id = ObjectId(item_id)
         await all_trades_items_collection.delete_one({"_id": item_id})
-        await manager.broadcast({
+        await manager.send_to_company(company_id, {
             "type": "trade_item_deleted",
             "data": {"_id": str(item_id)}
         })

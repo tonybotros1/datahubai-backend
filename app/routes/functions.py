@@ -26,8 +26,9 @@ async def get_screens(_: dict = Depends(security.get_current_user)):
 
 @router.post("/add_screen")
 async def add_screen(name: str = Body(..., embed=True), route_name: str = Body(..., embed=True),
-                     description: str = Body(..., embed=True), _: dict = Depends(security.get_current_user)):
+                     description: str = Body(..., embed=True), data: dict = Depends(security.get_current_user)):
     try:
+        company_id = data.get("company_id")
         screen_dict = {
             "name": name,
             "route_name": route_name,
@@ -39,7 +40,7 @@ async def add_screen(name: str = Body(..., embed=True), route_name: str = Body(.
         result = await screens_collection.insert_one(screen_dict)
         screen_dict['_id'] = str(result.inserted_id)
         serialized = screen_serializer(screen_dict)
-        await manager.broadcast({
+        await manager.send_to_company(company_id, {
             "type": "screen_created",
             "data": serialized
         })
@@ -49,8 +50,9 @@ async def add_screen(name: str = Body(..., embed=True), route_name: str = Body(.
 
 
 @router.delete("/delete_screen/{screen_id}")
-async def delete_screen(screen_id: str, _: dict = Depends(security.get_current_user)):
+async def delete_screen(screen_id: str, data: dict = Depends(security.get_current_user)):
     try:
+        company_id = data.get("company_id")
         # 1️⃣ Remove menuId from all parents' children arrays
         await menus_collection.update_many(
             {"children": ObjectId(screen_id)},
@@ -60,7 +62,7 @@ async def delete_screen(screen_id: str, _: dict = Depends(security.get_current_u
         if result.deleted_count == 0:
             raise HTTPException(status_code=404, detail="Screen not found")
         else:
-            await manager.broadcast({
+            await manager.send_to_company(company_id, {
                 "type": "screen_deleted",
                 "data": {"_id": screen_id}
             })
@@ -73,8 +75,9 @@ async def delete_screen(screen_id: str, _: dict = Depends(security.get_current_u
 
 @router.patch("/edit_screen/{screen_id}")
 async def edit_screen(screen_id: str, name: str | None = Body(None), screen_route: str | None = Body(None),
-                      description: str | None = None, _: dict = Depends(security.get_current_user)):
+                      description: str | None = None, data: dict = Depends(security.get_current_user)):
     try:
+        company_id = data.get("company_id")
         screen = await screens_collection.find_one({"_id": ObjectId(screen_id)})
         if screen is None:
             raise HTTPException(status_code=404, detail="Screen not found")
@@ -92,7 +95,7 @@ async def edit_screen(screen_id: str, name: str | None = Body(None), screen_rout
 
             await screens_collection.update_one({"_id": ObjectId(screen_id)}, {"$set": screen})
             serialized = screen_serializer(screen)
-            await manager.broadcast({
+            await manager.send_to_company(company_id, {
                 "type": "screen_updated",
                 "data": serialized
             })

@@ -50,7 +50,7 @@ async def add_new_salesman(sale_man: SaleManModel, data: dict = Depends(security
         result = await  salesman_collection.insert_one(sale_man_dict)
         sale_man_dict["_id"] = result.inserted_id
         serialized = serializer(sale_man_dict)
-        await manager.broadcast({
+        await manager.send_to_company(str(company_id), {
             "type": "salesman_added",
             "data": serialized
         })
@@ -62,13 +62,14 @@ async def add_new_salesman(sale_man: SaleManModel, data: dict = Depends(security
 
 
 @router.delete("/delete_salesman/{salesman_id}")
-async def delete_salesman(salesman_id: str, _: dict = Depends(security.get_current_user)):
+async def delete_salesman(salesman_id: str, data: dict = Depends(security.get_current_user)):
     try:
+        company_id = data.get("company_id")
         result = await salesman_collection.delete_one({"_id": ObjectId(salesman_id)})
         if result.deleted_count == 0:
             raise HTTPException(status_code=404, detail="Salesman not found")
 
-        await manager.broadcast({
+        await manager.send_to_company(company_id, {
             "type": "salesman_deleted",
             "data": {"_id": str(salesman_id)}
         })
@@ -79,8 +80,9 @@ async def delete_salesman(salesman_id: str, _: dict = Depends(security.get_curre
 
 
 @router.patch("/update_salesman/{salesman_id}")
-async def update_salesman(salesman_id: str, sale_man: SaleManModel, _: dict = Depends(security.get_current_user)):
+async def update_salesman(salesman_id: str, sale_man: SaleManModel, data: dict = Depends(security.get_current_user)):
     try:
+        company_id = data.get("company_id")
         update_data = sale_man.model_dump(exclude_unset=True)
 
         result = await salesman_collection.find_one_and_update({"_id": ObjectId(salesman_id)}, {"$set": update_data},
@@ -88,12 +90,12 @@ async def update_salesman(salesman_id: str, sale_man: SaleManModel, _: dict = De
         if not result:
             raise HTTPException(status_code=404, detail="Salesman not found")
         serialized = serializer(result)
-        await manager.broadcast({
+        await manager.send_to_company(company_id, {
             "type": "salesman_updated",
             "data": serialized
         })
 
     except HTTPException as e:  # Let FastAPI handle HTTP errors
         raise e
-    except Exception :
+    except Exception:
         raise HTTPException(status_code=500, detail="Internal server error")

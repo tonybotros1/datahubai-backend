@@ -105,8 +105,9 @@ async def get_all_roles(_: dict = Depends(security.get_current_user)):
 
 @router.post("/add_new_role")
 async def add_new_role(role_name: str | None = Body(None), menu_id: str | None = Body(None),
-                       _: dict = Depends(security.get_current_user)):
+                       data: dict = Depends(security.get_current_user)):
     try:
+        company_id = data.get("company_id")
         role_dict = {
             "role_name": role_name,
             "menu_id": ObjectId(menu_id),
@@ -116,7 +117,7 @@ async def add_new_role(role_name: str | None = Body(None), menu_id: str | None =
         }
         result = await roles_collection.insert_one(role_dict)
         serialized = await get_role_details(result.inserted_id)
-        await manager.broadcast({
+        await manager.send_to_company(company_id, {
             "type": "role_created",
             "data": serialized
         })
@@ -128,8 +129,9 @@ async def add_new_role(role_name: str | None = Body(None), menu_id: str | None =
 
 @router.patch("/update_role_status/{role_id}")
 async def update_role_status(role_id: str, status: bool = Body(..., embed=True),
-                             _: dict = Depends(security.get_current_user)):
+                             data: dict = Depends(security.get_current_user)):
     try:
+        company_id = data.get("company_id")
         await roles_collection.find_one_and_update(
             {"_id": ObjectId(role_id)}, {"$set": {"is_shown_for_users": status,
                                                   "updatedAt": datetime.now(timezone.utc),
@@ -137,7 +139,7 @@ async def update_role_status(role_id: str, status: bool = Body(..., embed=True),
             return_document=ReturnDocument.AFTER
         )
         serialized = await get_role_details(role_id)
-        await manager.broadcast({
+        await manager.send_to_company(company_id, {
             "type": "role_updated",
             "data": serialized
         })
@@ -150,8 +152,9 @@ async def update_role_status(role_id: str, status: bool = Body(..., embed=True),
 
 @router.patch("/update_role/{role_id}")
 async def update_role(role_id: str, role_name: str | None = Body(None), menu_id: str | None = Body(None),
-                      _: dict = Depends(security.get_current_user)):
+                      data: dict = Depends(security.get_current_user)):
     try:
+        company_id = data.get("company_id")
         await  roles_collection.find_one_and_update({"_id": ObjectId(role_id)}, {
             "$set": {
                 "role_name": role_name,
@@ -161,7 +164,7 @@ async def update_role(role_id: str, role_name: str | None = Body(None), menu_id:
         })
 
         serialized = await get_role_details(role_id)
-        await manager.broadcast({
+        await manager.send_to_company(company_id, {
             "type": "role_updated",
             "data": serialized
         })
@@ -173,14 +176,15 @@ async def update_role(role_id: str, role_name: str | None = Body(None), menu_id:
 
 
 @router.delete("/delete_role/{role_id}")
-async def delete_role(role_id: str, _: dict = Depends(security.get_current_user)):
+async def delete_role(role_id: str, data: dict = Depends(security.get_current_user)):
     try:
+        company_id = data.get("company_id")
         result = await roles_collection.delete_one({"_id": ObjectId(role_id)})
 
         if result.deleted_count == 0:
             raise HTTPException(status_code=404, detail="Role not found")
 
-        await manager.broadcast({
+        await manager.send_to_company(company_id, {
             "type": "role_deleted",
             "data": {"_id": role_id}
         })

@@ -52,7 +52,7 @@ async def add_new_technician(tech: Technician, data: dict = Depends(security.get
         result = await all_technicians_collection.insert_one(tech_dict)
         tech_dict["_id"] = result.inserted_id
         serialized = serializer(tech_dict)
-        await manager.broadcast({
+        await manager.send_to_company(str(company_id), {
             "type": "tech_added",
             "data": serialized
         })
@@ -64,8 +64,9 @@ async def add_new_technician(tech: Technician, data: dict = Depends(security.get
 
 
 @router.patch("/update_technician/{tech_id}")
-async def update_technician(tech_id: str, tech: Technician, _: dict = Depends(security.get_current_user)):
+async def update_technician(tech_id: str, tech: Technician, data: dict = Depends(security.get_current_user)):
     try:
+        company_id = data.get('company_id')
         tech = tech.model_dump(exclude_unset=True)
         tech["updatedAt"] = security.now_utc()
 
@@ -73,7 +74,7 @@ async def update_technician(tech_id: str, tech: Technician, _: dict = Depends(se
                                                                       return_document=ReturnDocument.AFTER)
         print(result)
         serialized = serializer(result)
-        await manager.broadcast({
+        await manager.send_to_company(company_id, {
             "type": "tech_updated",
             "data": serialized
         })
@@ -85,13 +86,14 @@ async def update_technician(tech_id: str, tech: Technician, _: dict = Depends(se
 
 
 @router.delete("/delete_technicians/{tech_id}")
-async def delete_technician(tech_id: str, _: dict = Depends(security.get_current_user)):
+async def delete_technician(tech_id: str, data: dict = Depends(security.get_current_user)):
     try:
+        company_id = data.get('company_id')
         result = await all_technicians_collection.delete_one({"_id": ObjectId(tech_id)})
         if result.deleted_count == 0:
             raise HTTPException(status_code=404, detail="Technician not found")
 
-        await manager.broadcast({
+        await manager.send_to_company(company_id, {
             "type": "tech_deleted",
             "data": {"_id": tech_id}
         })

@@ -230,7 +230,7 @@ async def add_new_bank(bank: BanksModel, data: dict = Depends(security.get_curre
         result = await all_banks_collection.insert_one(bank_dict)
         new_bank = await get_bank_details(result.inserted_id)
         serialized = serializer_doc(new_bank)
-        await manager.broadcast({
+        await manager.send_to_company(str(company_id), {
             "type": "bank_created",
             "data": serialized
         })
@@ -242,8 +242,9 @@ async def add_new_bank(bank: BanksModel, data: dict = Depends(security.get_curre
 
 
 @router.patch("/update_bank/{bank_id}")
-async def update_bank(bank_id: str, bank: BanksModel, _: dict = Depends(security.get_current_user)):
+async def update_bank(bank_id: str, bank: BanksModel, data: dict = Depends(security.get_current_user)):
     try:
+        company_id = data.get("company_id")
         bank = bank.model_dump(exclude_unset=True)
         bank['currency_id'] = ObjectId(bank['currency_id']) if bank['currency_id'] else None
         bank['account_type_id'] = ObjectId(bank['account_type_id']) if bank['account_type_id'] else None
@@ -254,7 +255,7 @@ async def update_bank(bank_id: str, bank: BanksModel, _: dict = Depends(security
         )
         new_bank = await get_bank_details(ObjectId(bank_id))
         serialized = serializer_doc(new_bank)
-        await manager.broadcast({
+        await manager.send_to_company(company_id, {
             "type": "bank_updated",
             "data": serialized
         })
@@ -264,10 +265,11 @@ async def update_bank(bank_id: str, bank: BanksModel, _: dict = Depends(security
 
 
 @router.delete("/delete_bank/{bank_id}")
-async def delete_bank(bank_id: str, _: dict = Depends(security.get_current_user)):
+async def delete_bank(bank_id: str, data: dict = Depends(security.get_current_user)):
     try:
+        company_id = data.get("company_id")
         await all_banks_collection.delete_one({"_id": ObjectId(bank_id)})
-        await manager.broadcast({
+        await manager.send_to_company(company_id, {
             "type": "bank_deleted",
             "data": {"_id": bank_id}
         })

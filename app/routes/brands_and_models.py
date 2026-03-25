@@ -76,7 +76,7 @@ async def create_brand(
         brand_dict["_id"] = str(insert_result.inserted_id)
         serialized = brand_serializer(brand_dict)
 
-        await manager.broadcast({
+        await manager.send_to_company(str(company_id), {
             "type": "brand_created",
             "data": serialized
         })
@@ -89,7 +89,8 @@ async def create_brand(
 
 @router.patch("/edit_brand/{brand_id}")
 async def update_brand(brand_id: str, name: str | None = Form(None), logo: UploadFile | None = File(None),
-                       _: dict = Depends(security.get_current_user)):
+                       data: dict = Depends(security.get_current_user)):
+    company_id = data.get("company_id")
     brand = await brands_collection.find_one({"_id": ObjectId(brand_id)})
     if not brand:
         raise HTTPException(status_code=404, detail="Brand not found")
@@ -121,7 +122,7 @@ async def update_brand(brand_id: str, name: str | None = Form(None), logo: Uploa
     brand_data["status"] = brand.get("status", True)
     serialized = brand_serializer(brand_data)
 
-    await manager.broadcast({
+    await manager.send_to_company(company_id, {
         "type": "brand_updated",
         "data": serialized
     })
@@ -134,13 +135,14 @@ from bson import ObjectId
 
 
 @router.delete("/delete_brand/{brand_id}")
-async def delete_brand(brand_id: str, _: dict = Depends(security.get_current_user)):
+async def delete_brand(brand_id: str, data: dict = Depends(security.get_current_user)):
     # Find the brand first
     brand = await brands_collection.find_one({"_id": ObjectId(brand_id)})
     if not brand:
         raise HTTPException(status_code=404, detail="Brand not found")
 
     try:
+        company_id = data.get("company_id")
         # If brand has a logo, try to delete it
         if brand.get("logo") and brand.get("logo_public_id"):
             await upload_images.delete_image_from_server(brand["logo_public_id"])
@@ -151,7 +153,7 @@ async def delete_brand(brand_id: str, _: dict = Depends(security.get_current_use
             raise HTTPException(status_code=404, detail="Brand not found")
 
         # Broadcast the deletion event
-        await manager.broadcast({
+        await manager.send_to_company(company_id, {
             "type": "brand_deleted",
             "data": {"_id": brand_id}
         })
@@ -166,7 +168,8 @@ async def delete_brand(brand_id: str, _: dict = Depends(security.get_current_use
 
 @router.patch("/edit_brand_status/{brand_id}")
 async def edit_brand_status(brand_id: str, status: bool = Body(..., embed=True),
-                            _: dict = Depends(security.get_current_user)):
+                            data: dict = Depends(security.get_current_user)):
+    company_id = data.get("company_id")
     result = await brands_collection.update_one(
         {"_id": ObjectId(brand_id)}, {"$set": {"status": status, "updatedAt": datetime.now(timezone.utc)}})
     if result.matched_count == 0:
@@ -174,7 +177,7 @@ async def edit_brand_status(brand_id: str, status: bool = Body(..., embed=True),
 
     updated_brand = await brands_collection.find_one({"_id": ObjectId(brand_id)})
 
-    await manager.broadcast({
+    await manager.send_to_company(company_id, {
         "type": "brand_updated",
         "data": brand_serializer(updated_brand)
     })
@@ -208,7 +211,7 @@ async def add_new_model(brand_id: str, name: str = Body(..., embed=True),
         model_dict["_id"] = str(insert_result.inserted_id)
 
         serialized = model_serializer(model_dict)
-        await manager.broadcast({
+        await manager.send_to_company(str(company_id), {
             "type": "model_created",
             "data": serialized
         })
@@ -222,7 +225,8 @@ async def add_new_model(brand_id: str, name: str = Body(..., embed=True),
 
 @router.patch("/edit_model_status/{model_id}")
 async def edit_model_status(model_id: str, status: bool = Body(..., embed=True),
-                            _: dict = Depends(security.get_current_user)):
+                            data: dict = Depends(security.get_current_user)):
+    company_id = data.get("company_id")
     result = await models_collection.update_one({"_id": ObjectId(model_id)},
                                                 {"$set": {"status": status, "updatedAt": datetime.now(timezone.utc)}})
     if result.matched_count == 0:
@@ -230,7 +234,7 @@ async def edit_model_status(model_id: str, status: bool = Body(..., embed=True),
 
     updated_model = await models_collection.find_one({"_id": ObjectId(model_id)})
 
-    await manager.broadcast({
+    await manager.send_to_company(company_id, {
         "type": "model_updated",
         "data": model_serializer(updated_model)
     })
@@ -239,10 +243,11 @@ async def edit_model_status(model_id: str, status: bool = Body(..., embed=True),
 
 
 @router.delete("/delete_model/{model_id}")
-async def delete_model(model_id: str, _: dict = Depends(security.get_current_user)):
+async def delete_model(model_id: str, data: dict = Depends(security.get_current_user)):
     try:
+        company_id = data.get("company_id")
         await models_collection.delete_one({"_id": ObjectId(model_id)})
-        await manager.broadcast({
+        await manager.send_to_company(company_id, {
             "type": "model_deleted",
             "data": {"_id": model_id}
         })
@@ -254,7 +259,8 @@ async def delete_model(model_id: str, _: dict = Depends(security.get_current_use
 
 
 @router.patch("/edit_model/{model_id}")
-async def edit_model(model_id: str, name: str = Body(..., embed=True), _: dict = Depends(security.get_current_user)):
+async def edit_model(model_id: str, name: str = Body(..., embed=True), data: dict = Depends(security.get_current_user)):
+    company_id = data.get("company_id")
     updated_model = await models_collection.find_one_and_update(
         {"_id": ObjectId(model_id)},
         {"$set": {"updatedAt": datetime.now(timezone.utc), "name": name}},
@@ -264,7 +270,7 @@ async def edit_model(model_id: str, name: str = Body(..., embed=True), _: dict =
     if not updated_model:
         raise HTTPException(status_code=404, detail="Model not found")
 
-    await manager.broadcast({
+    await manager.send_to_company(company_id, {
         "type": "model_updated",
         "data": model_serializer(updated_model)
     })
@@ -283,9 +289,8 @@ async def get_brands_by_status(data: dict = Depends(security.get_current_user)):
 
 
 @router.get("/get_models_by_status/{brand_id}")
-async def get_models_by_status(brand_id: str, data: dict = Depends(security.get_current_user)):
+async def get_models_by_status(brand_id: str, _: dict = Depends(security.get_current_user)):
     try:
-        company_id = ObjectId(data.get("company_id"))
         models = await models_collection.find(
             {"brand_id": ObjectId(brand_id), "status": True, },
             {"name": 1, "_id": {"$toString": "$_id"}}).sort("name",

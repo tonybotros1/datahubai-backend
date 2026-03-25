@@ -546,7 +546,7 @@ async def create_job_from_inspection_report(job_date: Optional[datetime] = Form(
 
             res = await get_current_job_card_inspection_report_details(str(result.inserted_id))
             serialized = serializer(res['inspection_report'])
-            await manager.broadcast({
+            await manager.send_to_company(str(company_id), {
                 "type": "inspection_report_added",
                 "data": serialized
             })
@@ -594,9 +594,10 @@ async def update_job_from_inspection_report(
         extra_checks: Optional[str] = Form(None),
         new_images: Optional[List[UploadFile]] = File(None),
         kept_images: Optional[str] = Form("[]"),
-        _: dict = Depends(security.get_current_user)
+        data: dict = Depends(security.get_current_user)
 ):
     try:
+        company_id = data.get("company_id")
         kept_images = json.loads(kept_images)
         job_card_id = ObjectId(job_card_id)
 
@@ -712,7 +713,7 @@ async def update_job_from_inspection_report(
         )
         res = await get_current_job_card_inspection_report_details(str(job_card_id))
         serialized = serializer(res['inspection_report'])
-        await manager.broadcast({
+        await manager.send_to_company(str(company_id), {
             "type": "inspection_report_updated",
             "data": serialized
         })

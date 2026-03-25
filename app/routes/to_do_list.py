@@ -809,9 +809,10 @@ async def get_admin_id(company_id: ObjectId) -> list:
 async def update_task_status(
         task_id: str,
         task: UpdateTaskModel,
-        _: dict = Depends(security.get_current_user),
+        data: dict = Depends(security.get_current_user),
 ):
     try:
+        company_id = data.get("company_id")
         oid = ObjectId(task_id)
     except InvalidId:
         raise HTTPException(status_code=400, detail="Invalid task_id")
@@ -825,7 +826,7 @@ async def update_task_status(
     if not updated_task:
         raise HTTPException(status_code=404, detail="Task not found")
 
-    await manager.broadcast({
+    await manager.send_to_company(company_id, {
         "type": "task_status_updated",
         "data": {"status": task.status, "_id": str(oid)},
     })
