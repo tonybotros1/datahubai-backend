@@ -11,7 +11,6 @@ from app.routes.banks_and_others import BanksModel, add_new_bank
 from app.routes.branches import add_new_branch
 from app.routes.brands_and_models import create_brand, add_new_model
 from app.routes.countries_and_cities import add_new_city
-from app.routes.employees import create_employee, EmployeesModel
 from app.routes.inventory_items import InventoryItem, add_new_inventory_item
 from app.routes.invoice_items import InvoiceItem, add_new_invoice_item
 from app.routes.job_tasks import JobTaskModel, add_new_job_task
@@ -948,7 +947,7 @@ async def dealing_with_ap_invoices(file, data, delete_every_thing: bool):
                            await value_collection.find({}).to_list(length=None)}
         print("got existing_values")
 
-        existing_vendors = {b['entity_name'].capitalize().strip(): b for b in
+        existing_vendors = {b['entity_name'].strip(): b for b in
                             await entity_information_collection.find(
                                 {"entity_code": "Vendor", "company_id": company_id}).to_list(length=None)}
         print("got existing_vendors")
@@ -1011,7 +1010,7 @@ async def dealing_with_ap_invoices(file, data, delete_every_thing: bool):
                     if vendor_data:
                         vendor_id = vendor_data.get("_id")
                     else:
-                        vendor_details = await create_entity_service(entity_name=str(vendor.capitalize().strip()),
+                        vendor_details = await create_entity_service(entity_name=str(vendor.strip()),
                                                                      entity_code=['Vendor'],
                                                                      credit_limit=0,
                                                                      warranty_days=0,
@@ -1027,7 +1026,7 @@ async def dealing_with_ap_invoices(file, data, delete_every_thing: bool):
                                                                      lpo_required="N"
                                                                      )
                         print("added new Vendor")
-                        existing_vendors[str(vendor).capitalize().strip()] = vendor_details
+                        existing_vendors[str(vendor).strip()] = vendor_details
                         vendor_id = vendor_details['_id']
                 else:
                     vendor_id = None
