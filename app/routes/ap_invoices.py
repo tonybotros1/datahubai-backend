@@ -209,6 +209,9 @@ pipeline: List[dict[str, Any]] = [
             },
             'vendor': {
                 '$toString': '$vendor'
+            },
+            'batch_id': {
+                '$toString': '$batch_id'
             }
         }
     },

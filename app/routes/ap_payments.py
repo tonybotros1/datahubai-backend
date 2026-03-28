@@ -290,6 +290,8 @@ ap_payment_details_pipeline: list[dict[str, Any]] = [
             },
             'account': {
                 '$toString': '$account'
+            },'batch_id': {
+                '$toString': '$batch_id'
             }
         }
     }

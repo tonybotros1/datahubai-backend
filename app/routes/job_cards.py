@@ -1624,44 +1624,13 @@ async def search_engine_for_job_card_in_ap_invoices_screen(filter_jobs: JobCardS
         company_id = ObjectId(data.get("company_id"))
         user_id = ObjectId(data.get("sub"))
         base_search_pipeline: list[dict] = []
-        match_stage = {}
+        user_branches = await get_user_branches(user_id)
+        if user_branches:
+            branch_filters = [{"branch": b, "company_id": company_id} for b in user_branches]
+            match_stage: Any = {"$or": branch_filters}
+        else:
+            match_stage = {"company_id": company_id}
 
-        base_search_pipeline.append(
-            {
-                '$lookup': {
-                    'from': 'sys-users',
-                    'let': {
-                        'user_id': user_id
-                    },
-                    'pipeline': [
-                        {
-                            '$match': {
-                                '$expr': {
-                                    '$eq': [
-                                        '$_id', '$$user_id'
-                                    ]
-                                }
-                            }
-                        }
-                    ],
-                    'as': 'user_details'
-                }
-            },
-        )
-        base_search_pipeline.append(
-            {
-                '$addFields': {
-                    'user_branches': {
-                        '$arrayElemAt': [
-                            '$user_details.branches', 0
-                        ]
-                    }
-                }
-            },
-        )
-
-        if company_id:
-            match_stage["company_id"] = company_id
         if filter_jobs.car_brand:
             match_stage["car_brand"] = filter_jobs.car_brand
         if filter_jobs.car_model:
@@ -1676,7 +1645,7 @@ async def search_engine_for_job_card_in_ap_invoices_screen(filter_jobs: JobCardS
             match_stage["customer"] = filter_jobs.customer_name
         match_stage['type'] = "JOB"
         base_search_pipeline.append({"$match": match_stage})
-        base_search_pipeline.append({"$sort": {'job_date': -1}})
+        base_search_pipeline.append({"$sort": {'job_number': -1}})
 
         lookups = [
             ("car_brand", "all_brands"),
@@ -1727,23 +1696,26 @@ async def search_engine_for_job_card_in_ap_invoices_screen(filter_jobs: JobCardS
 
         job_cards_pipeline = base_search_pipeline + [
             {
-                "$project": {
-                    'car_brand_details': 0,
-                    'car_model_details': 0,
-                    'customer_details': 0,
+                '$project': {
+                    '_id': { '$toString': "$_id"},
+                    'job_number': 1,
+                    'car_brand_name': 1,
+                    'car_model_name': 1,
+                    'plate_number': 1,
+                    'vehicle_identification_number': 1,
+                    'customer_name': 1
                 }
             }
         ]
-        job_cards_pipeline.append(
-            {"$limit": 200},
-
-        )
+        # job_cards_pipeline.append(
+        #     {"$limit": 200},
+        #
+        # )
 
         job_cards_cursor = await job_cards_collection.aggregate(job_cards_pipeline)
         job_cards_raw = await job_cards_cursor.to_list(None)
-        job_cards = [serializer(r) for r in job_cards_raw]
         return {
-            "job_cards": job_cards,
+            "job_cards": job_cards_raw,
         }
 
     except HTTPException:
