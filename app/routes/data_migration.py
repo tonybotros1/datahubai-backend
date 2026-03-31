@@ -61,6 +61,9 @@ issuing_items_details_collection = get_collection("issuing_items_details")
 issuing_converters_details_collection = get_collection("issuing_converters_details")
 account_transfers_collection = get_collection("account_transfers")
 
+batch_payment_process_collection = get_collection("batch_payment_process")
+batch_payment_process_items_collection = get_collection("batch_payment_process_items")
+
 
 def normalize_number_to_string(value):
     if value is None:
@@ -204,7 +207,303 @@ async def get_file(file: UploadFile = File(...), screen_name: str = Form(...),
             await dealing_with_issuing_converters_details(file, data, delete_every_thing)
         elif screen_name.lower() == 'account transfers':
             await dealing_with_account_transfers(file, data, delete_every_thing)
+        elif screen_name.lower() == 'batch payment process':
+            await dealing_with_batch_payment_process(file, data, delete_every_thing)
+        elif screen_name.lower() == 'batch payment items process':
+            await dealing_with_batch_payment_items_process(file, data, delete_every_thing)
 
+
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# =========================== Batches Payment Process Section ===========================
+async def dealing_with_batch_payment_items_process(file, data, delete_every_thing: bool):
+    try:
+        company_id = ObjectId(data.get('company_id'))
+
+        if delete_every_thing:
+            await batch_payment_process_items_collection.delete_many({'company_id': company_id})
+
+        contents = await file.read()
+        df = pd.read_excel(BytesIO(contents))
+        df = df.fillna("")
+        total_rows = len(df)
+
+        try:
+            existing_vendors = {b['entity_name'].strip(): b for b in
+                                await entity_information_collection.find(
+                                    {"entity_code": "Vendor", "company_id": company_id}).to_list(length=None)}
+            print("got existing_vendors")
+
+            existing_job_cards = {b.get("job_id", None): ObjectId(b["_id"]) for b in
+                                  await job_cards_collection.find({"company_id": company_id}).to_list()}
+            print("got existing_job_cards")
+
+            existing_receiving = {str(b.get("receiving_id", None)): ObjectId(b["_id"]) for b in
+                                  await job_cards_collection.find({"company_id": company_id}).to_list()}
+            print("got existing_receiving")
+
+            existing_ap_payment_types = {b["type"].capitalize().strip(): b["_id"] for b in
+                                         await ap_payment_types_collection.find({"company_id": company_id}).to_list(
+                                             length=None)}
+            print("got existing_ap_payment_types")
+
+            existing_batches = {b.get("batch_number", None): ObjectId(b["_id"]) for b in
+                                await batch_payment_process_collection.find(
+                                    {"company_id": company_id}).to_list()}
+            print("got existing_batches")
+
+        except Exception as e:
+            print("Error while loading existing data:", e)
+            raise
+
+        await manager.broadcast({"type": "start", "total": total_rows})
+
+        # ===== MAIN LOOP =====
+        for i, row in enumerate(df.itertuples(index=False), start=1):
+            try:
+                print(f"\nProcessing row {i}")
+
+                try:
+                    reference_number = normalize_number_to_string(row[0])
+                    invoice_number = normalize_number_to_string(row[1])
+                    # invoice_date = to_mongo_datetime(row[2]) if row[2] else None
+                    vendor = row[3]
+                    transaction_type = row[4]
+                    amount = safe_float(row[5])
+                    vat = safe_float(row[6])
+                    job_id = normalize_number_to_string(row[7])
+                    received_number = normalize_number_to_string(row[8])
+                    note = row[9]
+                except Exception as e:
+                    print(f"[Row {i}] Error parsing row: {e}")
+                    print("Row Data:", row)
+                    raise
+
+                raw_date = row[2]
+
+                if raw_date:
+                    try:
+                        parsed_date = pd.to_datetime(raw_date, errors='coerce')
+
+                        if pd.isna(parsed_date):
+                            print(f"[Row {i}] ❌ Bad date format: {raw_date}")
+                            invoice_date = None
+                        else:
+                            invoice_date = parsed_date.to_pydatetime()
+                    except Exception as e:
+                        print(f"[Row {i}] Date conversion error: {e}")
+                        raise
+                else:
+                    invoice_date = None
+
+                # ===== VENDOR =====
+                try:
+                    if vendor:
+                        vendor_data = existing_vendors.get(vendor.strip())
+                        if vendor_data:
+                            vendor_id = vendor_data.get("_id")
+                        else:
+                            vendor_details = await create_entity_service(
+                                entity_name=str(vendor.strip()),
+                                entity_code='Vendor',
+                                credit_limit=0,
+                                warranty_days=0,
+                                salesman_id=None,
+                                entity_status='Company',
+                                group_name="",
+                                industry_id=None,
+                                trn="",
+                                entity_type_id=None,
+                                entity_address=[],
+                                entity_phone=[],
+                                entity_social=[],
+                                company_id=company_id,
+                                lpo_required="N"
+                            )
+                            print(f"[Row {i}] Added new vendor")
+                            existing_vendors[str(vendor).strip()] = vendor_details
+                            vendor_id = vendor_details['_id']
+                    else:
+                        vendor_id = None
+                except Exception as e:
+                    print(f"[Row {i}] Error in vendor handling: {e}")
+                    print("Row Data:", row)
+                    raise
+
+                # ===== JOB CARD =====
+                try:
+                    job_card_id = existing_job_cards.get(int(job_id), None) if job_id else None
+                except Exception as e:
+                    print(f"[Row {i}] Error in job_id: {e}")
+                    print("job_id value:", job_id)
+                    raise
+
+                # ===== TRANSACTION TYPE =====
+                try:
+                    if transaction_type:
+                        key = transaction_type.capitalize().strip()
+                        transaction_type_id = existing_ap_payment_types.get(key)
+
+                        if not transaction_type_id:
+                            ap_payment_type_model = APPaymentTypes(type=key)
+                            new_ap_payment_type = await add_new_ap_payment_type(types=ap_payment_type_model, data=data)
+                            transaction_type_id = new_ap_payment_type['type']['_id']
+                            existing_ap_payment_types[key] = transaction_type_id
+                    else:
+                        transaction_type_id = None
+                except Exception as e:
+                    print(f"[Row {i}] Error in transaction type: {e}")
+                    print("transaction_type:", transaction_type)
+                    raise
+
+                # ===== REFERENCES =====
+                try:
+                    reference_number_id = existing_batches.get(str(reference_number),
+                                                               None) if reference_number else None
+                    received_number_id = existing_receiving.get(str(received_number), None) if received_number else None
+                except Exception as e:
+                    print(f"[Row {i}] Error in references: {e}")
+                    raise
+
+                # ===== INSERT =====
+                item_dict = {}
+                try:
+                    if reference_number_id:
+                        item_dict = {
+                            "batch_id": ObjectId(reference_number_id) if reference_number_id else None,
+                            "company_id": company_id,
+                            "transaction_type": transaction_type_id,
+                            "received_number": ObjectId(received_number_id) if received_number_id else None,
+                            "vendor": ObjectId(vendor_id) if vendor_id else None,
+                            "amount": amount,
+                            "vat": vat,
+                            "invoice_number": invoice_number,
+                            "invoice_date": invoice_date,
+                            "job_number_id": job_card_id,
+                            "note": note,
+                            "createdAt": security.now_utc(),
+                            "updatedAt": security.now_utc(),
+                        }
+
+                        await batch_payment_process_items_collection.insert_one(item_dict)
+
+                except Exception as e:
+                    print(f"[Row {i}] Error inserting item: {e}")
+                    print("Item Data:", item_dict)
+                    raise
+
+                print(f"Row {i} inserted successfully")
+
+                progress = int((i / total_rows) * 100)
+                await manager.send_progress(progress)
+
+            except Exception as row_error:
+                print("\n========== ERROR FOUND ==========")
+                print(f"Row Number: {i}")
+                print("Row Content:", row)
+                print("Error:", str(row_error))
+                print("=================================\n")
+                raise  # STOP PROCESS
+
+        await manager.broadcast({"type": "done"})
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+async def dealing_with_batch_payment_process(file, data, delete_every_thing: bool):
+    try:
+        company_id = ObjectId(data.get('company_id'))
+        if delete_every_thing:
+            await ap_payment_collection.delete_many({'company_id': company_id})
+            await ap_payment_invoices_collection.delete_many({'company_id': company_id})
+            await ap_invoices_collection.delete_many({'company_id': company_id})
+            await ap_invoices_items_collection.delete_many({'company_id': company_id})
+            await batch_payment_process_collection.delete_many({'company_id': company_id})
+            await batch_payment_process_items_collection.delete_many({'company_id': company_id})
+
+        contents = await file.read()
+        df = pd.read_excel(BytesIO(contents))
+        df = df.fillna("")
+        total_rows = len(df)
+        uae_country_doc = await countries_collection.find_one({"code": "UAE"})
+        uae_country_id = str(uae_country_doc["_id"])
+        uae_currency_doc = await currencies_collection.find_one({"country_id": ObjectId(uae_country_id)})
+        uae_currency_id = str(uae_currency_doc["_id"])
+        account_types_bank_doc = await value_collection.find_one({"name": "Bank"})
+        account_types_list_id = str(account_types_bank_doc["_id"])
+
+        existing_banks = {b["account_number"].strip(): ObjectId(b["_id"]) for b in
+                          await banks_collection.find({"company_id": company_id}).to_list(length=None)}
+        print("got existing_banks")
+
+        existing_values = {b["name"].capitalize(): ObjectId(b["_id"]) for b in
+                           await value_collection.find({"list_id": ObjectId('68c346ecea4b81049ba91fb7')}).to_list(
+                               length=None)}
+        print("got existing_values")
+
+        await manager.broadcast({"type": "start", "total": total_rows})
+        for i, row in enumerate(df.itertuples(index=False), start=1):
+            batch_number = normalize_number_to_string(row[0])
+            batch_date = to_mongo_datetime(row[1]) if row[1] else None
+            status = row[2].capitalize()
+            note = row[3]
+            payment_type = row[4]
+            account = row[5]
+            cheque_number = normalize_number_to_string(row[6])
+            cheque_date = to_mongo_datetime(row[7]) if row[7] else None
+            currency = row[8]
+            rate = row[9]
+
+            # if status == 'Posted':
+            if payment_type:
+                payment_type_to_search = 'Credit Card' if payment_type.capitalize() == 'Card' else payment_type
+                payment_type_id = existing_values.get(payment_type_to_search.capitalize().strip(), None)
+            else:
+                payment_type_id = None
+
+            try:
+                if account:
+                    account_id = existing_banks.get(str(account).strip())
+                    if not account_id:
+                        account_model = BanksModel(
+                            account_name=account,
+                            account_number=account,
+                            currency_id=uae_currency_id,
+                            account_type_id=account_types_list_id
+                        )
+                        new_account = await add_new_bank(bank=account_model, data=data)
+                        account_id = ObjectId(new_account['account']['_id'])
+                        existing_banks[str(account).strip()] = account_id
+                else:
+                    account_id = None
+            except Exception as e:
+                print(f"error in account {e}")
+                raise
+
+            batch_doc = {
+                "batch_number": batch_number,
+                "batch_date": batch_date,
+                "status": status,
+                "cheque_date": cheque_date,
+                "note": note,
+                "cheque_number": cheque_number,
+                "currency": currency,
+                "rate": rate,
+                'payment_type': payment_type_id,
+                "account": account_id,
+                "company_id": company_id,
+                "createdAt": security.now_utc(),
+                "updatedAt": security.now_utc(),
+            }
+            await batch_payment_process_collection.insert_one(batch_doc)
+            print(i)
+            progress = int((i / total_rows) * 100)
+            await manager.send_progress(progress)
+        await manager.broadcast({"type": "done"})
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -799,7 +1098,7 @@ async def dealing_with_receiving_header(file, data, delete_every_thing: bool):
                     vendor_id = vendor_data.get("_id")
                 else:
                     vendor_details = await create_entity_service(entity_name=str(vendor.strip()),
-                                                                 entity_code=['Vendor'],
+                                                                 entity_code='Vendor',
                                                                  credit_limit=0,
                                                                  warranty_days=0,
                                                                  salesman_id=None,
@@ -1011,7 +1310,7 @@ async def dealing_with_ap_invoices(file, data, delete_every_thing: bool):
                         vendor_id = vendor_data.get("_id")
                     else:
                         vendor_details = await create_entity_service(entity_name=str(vendor.strip()),
-                                                                     entity_code=['Vendor'],
+                                                                     entity_code='Vendor',
                                                                      credit_limit=0,
                                                                      warranty_days=0,
                                                                      salesman_id=None,
@@ -1349,7 +1648,7 @@ async def dealing_with_ar_receipts_invoices(file: UploadFile, data: dict, delete
 async def create_entity_service(
         *,
         entity_name: str,
-        entity_code: list[str],
+        entity_code: str,
         credit_limit: float,
         warranty_days: int,
         salesman_id: ObjectId | None,
@@ -1761,7 +2060,7 @@ async def dealing_with_job_cards(file: UploadFile, data: dict, delete_every_thin
                         print("done from website_list")
 
                         customer_details = await create_entity_service(entity_name=str(customer.strip()),
-                                                                       entity_code=['Customer'],
+                                                                       entity_code='Customer',
                                                                        credit_limit=float(
                                                                            customer_credit_limit) if customer_credit_limit else 0,
                                                                        warranty_days=int(

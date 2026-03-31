@@ -1,3 +1,4 @@
+import asyncio
 from typing import Optional, Any
 from bson import ObjectId
 from fastapi import APIRouter, HTTPException, Depends
@@ -508,6 +509,32 @@ async def search_engine_for_batch_payment_process(filter_batch: BatchSearch,
 
 
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/post_all_new_batch_payment_process")
+async def post_all_new_batch_payment_process(data: dict = Depends(security.get_current_user)):
+    try:
+        company_id = ObjectId(data.get("company_id"))
+
+        # GET ALL NEW BATCHES
+        new_batches = await batch_payment_process_collection.find({
+            "company_id": company_id,
+            "status": "New"
+        }).to_list(length=None)
+
+        if not new_batches:
+            return {"message": "No new batches found"}
+
+        for i, row in enumerate(new_batches, start=1):
+            if row['_id']:
+                await post_batch(str(row['_id']), data=data)
+                print(i)
+
+        return {"message": f"{len(new_batches)} batches processed successfully"}
+
+    except Exception as e:
+        print(e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
