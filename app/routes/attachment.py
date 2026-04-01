@@ -158,6 +158,7 @@ async def add_new_attachment(code: str = Form(None),
 async def delete_attachment(
         attachment_id: str,
         _: dict = Depends(security.get_current_user),
+
 ):
     try:
         obj_id = ObjectId(attachment_id)
