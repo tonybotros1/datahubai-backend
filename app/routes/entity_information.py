@@ -4,17 +4,12 @@ from bson import ObjectId
 from fastapi import APIRouter, Depends, HTTPException, Body, Form, UploadFile, File
 from pydantic import BaseModel
 import json
-
-from starlette.responses import StreamingResponse
-
 from app.core import security
 from app.database import get_collection
 from datetime import datetime
-
 from app.routes.car_trading import PyObjectId
 from app.websocket_config import manager
 from app.widgets import upload_images
-from app.widgets.upload_images import upload_image
 
 router = APIRouter()
 entity_information_collection = get_collection("entity_information")

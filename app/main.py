@@ -9,7 +9,7 @@ from app.routes import brands_and_models, users, countries_and_cities, functions
     currencies, entity_information, ap_payment_types, banks_and_others, technician, invoice_items, job_cards, \
     quotation_cards, job_tasks, time_sheets, employees_performance, company_variables, ar_receipts, ap_payments, \
     ap_invoices, inventory_items, employees, receiving, inspection_reports, converters, issue_items, data_migration, \
-    job_cards_dashboard, to_do_list, account_transfers, batch_payment_process
+    job_cards_dashboard, to_do_list, account_transfers, batch_payment_process, attachment
 from app.routes import test
 from app.websocket_config import manager
 
@@ -93,6 +93,8 @@ app.include_router(job_cards_dashboard.router, prefix="/job_cards_dashboard", ta
 app.include_router(to_do_list.router, prefix="/to_do_list", tags=["To-Do List"])
 app.include_router(account_transfers.router, prefix="/account_transfers", tags=["Account Transfers"])
 app.include_router(batch_payment_process.router, prefix="/batch_payment_process", tags=["Batch Process"])
+app.include_router(attachment.router, prefix="/attachment", tags=["Attachment"])
+
 
 # app.include_router(test.router, prefix="/test", tags=["Test"])
 
@@ -108,7 +110,7 @@ async def websocket_endpoint(websocket: WebSocket, company_id: str, user_id: str
             data = await websocket.receive_text()
             await manager.broadcast({"echo": data})
     except WebSocketDisconnect:
-        manager.disconnect(websocket, user_id=user_id,company_id=company_id)
+        manager.disconnect(websocket, user_id=user_id, company_id=company_id)
 
 
 @app.get("/")
