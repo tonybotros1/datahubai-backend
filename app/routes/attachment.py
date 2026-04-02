@@ -1,5 +1,5 @@
 import copy
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from bson import ObjectId
 from bson.errors import InvalidId
 from fastapi import APIRouter, Depends, HTTPException, Body, Form, UploadFile, File
@@ -113,7 +113,7 @@ async def get_attachment_details(attachment_id: ObjectId):
 async def add_new_attachment(code: str = Form(None),
                              document_id: str = Form(None),
                              name: str = Form(None),
-                             attachment: UploadFile = File(None),
+                             attachments: List[UploadFile] = File(None),
                              start_date: datetime = Form(None),
                              end_date: datetime = Form(None),
                              note: str = Form(None),
@@ -121,15 +121,22 @@ async def add_new_attachment(code: str = Form(None),
                              attachment_type: str = Form(None),
                              data: dict = Depends(security.get_current_user)):
     try:
+        if not attachments:
+            raise HTTPException(status_code=400, detail="At least one attachment is required")
+
         company_id = ObjectId(data.get("company_id"))
-        attach_public_id = None
-        attach_url = None
-        file_name = ""
-        if attachment:
-            result = await upload_image(attachment, folder="attachments")
-            file_name = result["file_name"]
-            attach_url = result["url"] if "url" in result else None
-            attach_public_id = result['public_id'] if "public_id" in result else None
+        attachments_list = []
+        if attachments:
+            for attachment in attachments:
+                result = await upload_image(attachment, folder="attachments")
+                file_name = result["file_name"]
+                attach_url = result["url"] if "url" in result else None
+                attach_public_id = result['public_id'] if "public_id" in result else None
+                attachments_list.append({
+                    "attach_url": attach_url,
+                    "attach_public_id": attach_public_id,
+                    "file_name": file_name,
+                })
 
         attachment_doc = {
             "company_id": company_id,
@@ -141,9 +148,7 @@ async def add_new_attachment(code: str = Form(None),
             "note": note,
             "number": number,
             "attachment_type": ObjectId(attachment_type) if attachment_type else None,
-            "file_name": file_name,
-            "attach_public_id": attach_public_id,
-            "attach_url": attach_url,
+            "attachments": attachments_list,
             "createdAt": security.now_utc(),
             "updatedAt": security.now_utc(),
         }
