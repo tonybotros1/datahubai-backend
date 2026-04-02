@@ -97,6 +97,18 @@ async def get_all_attachment(attach_search: AttachmentSearchModel, data: dict = 
         raise HTTPException(status_code=500, detail=str(e))
 
 
+async def get_attachment_details(attachment_id: ObjectId):
+    try:
+        new_pipeline: Any = copy.deepcopy(attachment_details_pipeline)
+        new_pipeline.insert(0, {"$match": {"_id": attachment_id}})
+        cursor = await attachment_collection.aggregate(new_pipeline)
+        results = await cursor.to_list(1)
+        return results[0] if len(results) > 0 else None
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post("/add_new_attachment")
 async def add_new_attachment(code: str = Form(None),
                              document_id: str = Form(None),
@@ -136,19 +148,10 @@ async def add_new_attachment(code: str = Form(None),
             "updatedAt": security.now_utc(),
         }
         new_attachment = await attachment_collection.insert_one(attachment_doc)
-        return {
-            "attach_url": attach_url,
-            "name": name,
-            "code": code,
-            "start_date": start_date,
-            "end_date": end_date,
-            "note": note,
-            "number": number,
-            "attachment_type_name": attachment_type,
-            "attachment_type": attachment_type,
-            "file_name": file_name,
-            "_id": str(new_attachment.inserted_id),
-        }
+        new_attachment_details = await get_attachment_details(new_attachment.inserted_id)
+
+        return {"result" : new_attachment_details}
+
     except Exception as e:
         print(e)
         raise HTTPException(status_code=500, detail=str(e))
