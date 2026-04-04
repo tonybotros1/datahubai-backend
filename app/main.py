@@ -10,7 +10,10 @@ from app.routes import brands_and_models, users, countries_and_cities, functions
     quotation_cards, job_tasks, time_sheets, employees_performance, company_variables, ar_receipts, ap_payments, \
     ap_invoices, inventory_items, employees, receiving, inspection_reports, converters, issue_items, data_migration, \
     job_cards_dashboard, to_do_list, account_transfers, batch_payment_process, attachment
-from app.routes import test
+
+
+from app.routes.manzel_healthcare_task import medication_reminder_system
+
 from app.websocket_config import manager
 
 users_collection = get_collection("sys-users")
@@ -94,9 +97,7 @@ app.include_router(to_do_list.router, prefix="/to_do_list", tags=["To-Do List"])
 app.include_router(account_transfers.router, prefix="/account_transfers", tags=["Account Transfers"])
 app.include_router(batch_payment_process.router, prefix="/batch_payment_process", tags=["Batch Process"])
 app.include_router(attachment.router, prefix="/attachment", tags=["Attachment"])
-
-
-# app.include_router(test.router, prefix="/test", tags=["Test"])
+app.include_router(medication_reminder_system.router, prefix="/medication_reminder_system", tags=["Medication Reminder"])
 
 
 # نقطة نهاية WebSocket العامة

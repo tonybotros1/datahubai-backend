@@ -155,7 +155,7 @@ async def add_new_attachment(code: str = Form(None),
         new_attachment = await attachment_collection.insert_one(attachment_doc)
         new_attachment_details = await get_attachment_details(new_attachment.inserted_id)
 
-        return {"result" : new_attachment_details}
+        return {"result": new_attachment_details}
 
     except Exception as e:
         print(e)
@@ -177,11 +177,11 @@ async def delete_attachment(
     if not attachment:
         raise HTTPException(status_code=404, detail="Attachment not found")
 
-    attach_public_id = attachment.get("attach_public_id")
-    if attach_public_id:
-        deleted = await delete_file_from_server(attach_public_id)
-        if not deleted:
-            raise HTTPException(status_code=500, detail="Failed to delete file from storage")
+    attachments = attachment.get("attachments")
+    if attachments:
+        for element in attachments:
+            attach_public_id = element.get("attach_public_id")
+            await delete_file_from_server(attach_public_id)
 
     result = await attachment_collection.delete_one({"_id": obj_id})
     if result.deleted_count != 1:
