@@ -1,13 +1,11 @@
 import copy
 from typing import Optional, List, Any
-
 from bson import ObjectId
-from fastapi import APIRouter, Body, HTTPException, Depends, Form, UploadFile, File
+from fastapi import APIRouter, HTTPException, Depends, Form, UploadFile, File
 from pydantic import BaseModel
-from pymongo import ReturnDocument
 from app.core import security
 from app.database import get_collection
-from datetime import datetime, timezone
+from datetime import datetime
 
 from app.routes.counters import create_custom_counter
 from app.websocket_config import manager
@@ -15,6 +13,8 @@ from app.widgets import upload_images
 
 router = APIRouter()
 employees_collection = get_collection("employees")
+employees_address_collection = get_collection("employees_address")
+employees_contacts_and_relatives_collection = get_collection("employees_contacts_and_relatives")
 
 
 def serializer(doc: dict) -> dict:
@@ -50,6 +50,12 @@ class EmployeesModel(BaseModel):
     job_description: Optional[str] = None
     status: Optional[str] = None
     department: Optional[List[str]] = None
+
+
+class EmployeeAddressModel(BaseModel):
+    line: Optional[str] = None
+    country: Optional[str] = None
+    city: Optional[str] = None
 
 
 main_screen_pipeline: list[dict[str, Any]] = [
@@ -260,6 +266,73 @@ details_pipeline = [
             'as': 'reporting_manager_details'
         }
     }, {
+        '$lookup': {
+            'from': 'employees_address',
+            'let': {
+                'employee_id': '$_id'
+            },
+            'pipeline': [
+                {
+                    '$match': {
+                        '$expr': {
+                            '$eq': [
+                                '$employee_id', '$$employee_id'
+                            ]
+                        }
+                    }
+                }, {
+                    '$lookup': {
+                        'from': 'all_countries',
+                        'localField': 'country',
+                        'foreignField': '_id',
+                        'as': 'country_details'
+                    }
+                }, {
+                    '$lookup': {
+                        'from': 'all_countries_cities',
+                        'localField': 'city',
+                        'foreignField': '_id',
+                        'as': 'city_details'
+                    }
+                }, {
+                    '$addFields': {
+                        'country_name': {
+                            '$ifNull': [
+                                {
+                                    '$first': '$country_details.name'
+                                }, None
+                            ]
+                        },
+                        'city_name': {
+                            '$ifNull': [
+                                {
+                                    '$first': '$city_details.name'
+                                }, None
+                            ]
+                        },
+                        'country': {
+                            '$toString': '$country'
+                        },
+                        'city': {
+                            '$toString': '$city'
+                        },
+                        '_id': {
+                            '$toString': '$_id'
+                        }
+                    }
+                }, {
+                    '$project': {
+                        'line': 1,
+                        'country': 1,
+                        'city': 1,
+                        'country_name': 1,
+                        'city_name': 1
+                    }
+                }
+            ],
+            'as': 'addresses_list'
+        }
+    }, {
         '$addFields': {
             'status_name': {
                 '$let': {
@@ -394,6 +467,13 @@ details_pipeline = [
                     'in': '$$match.name'
                 }
             },
+            'country_of_birth_name': {
+                '$ifNull': [
+                    {
+                        '$first': '$country_details.name'
+                    }, None
+                ]
+            },
             '_id': {
                 '$toString': '$_id'
             },
@@ -446,14 +526,15 @@ details_pipeline = [
         '$project': {
             'lookup_data': 0,
             'all_ids': 0,
-            'country_details': 0
+            'country_details': 0,
+            'reporting_manager_details': 0
         }
     }
 ]
 
 
 async def get_employee_details(employee_id: ObjectId):
-    new_pipeline = copy.deepcopy(main_screen_pipeline)
+    new_pipeline = copy.deepcopy(details_pipeline)
     new_pipeline.insert(0, {
         "$match": {
             "_id": employee_id
@@ -462,6 +543,16 @@ async def get_employee_details(employee_id: ObjectId):
     cursor = await employees_collection.aggregate(new_pipeline)
     result = await cursor.to_list(1)
     return result[0] if result else None
+
+
+@router.get("/get_employee_details_dor_editing/{employee_id}")
+async def get_employee_details_dor_editing(employee_id: str, _: dict = Depends(security.get_current_user)):
+    try:
+        result = await get_employee_details(ObjectId(employee_id))
+        return {"details": result}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/get_all_employees")
@@ -652,4 +743,330 @@ async def get_employees_by_department(department: str, data: dict = Depends(secu
         return {"employees": [serializer(e) for e in results]}
 
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ==================== CONTACTS AND RELATIVES SECTION ====================
+contacts_pipeline = [
+    {
+        '$addFields': {
+            'all_ids': [
+                '$relationship', '$gender', '$nationality'
+            ]
+        }
+    }, {
+        '$lookup': {
+            'from': 'all_lists_values',
+            'let': {
+                'ids': '$all_ids'
+            },
+            'pipeline': [
+                {
+                    '$match': {
+                        '$expr': {
+                            '$in': [
+                                '$_id', '$$ids'
+                            ]
+                        }
+                    }
+                }, {
+                    '$project': {
+                        '_id': 1,
+                        'name': 1
+                    }
+                }
+            ],
+            'as': 'lookup_data'
+        }
+    }, {
+        '$addFields': {
+            '_id': {
+                '$toString': '$_id'
+            },
+            'relationship': {
+                '$toString': '$relationship'
+            },
+            'gender': {
+                '$toString': '$gender'
+            },
+            'nationality': {
+                '$toString': '$nationality'
+            },
+            'company_id': {
+                '$toString': '$company_id'
+            },
+            'employee_id': {
+                '$toString': '$employee_id'
+            },
+            'relationship_name': {
+                '$let': {
+                    'vars': {
+                        'match': {
+                            '$first': {
+                                '$filter': {
+                                    'input': '$lookup_data',
+                                    'cond': {
+                                        '$eq': [
+                                            '$$this._id', '$relationship'
+                                        ]
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    'in': '$$match.name'
+                }
+            },
+            'gender_name': {
+                '$let': {
+                    'vars': {
+                        'match': {
+                            '$first': {
+                                '$filter': {
+                                    'input': '$lookup_data',
+                                    'cond': {
+                                        '$eq': [
+                                            '$$this._id', '$gender'
+                                        ]
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    'in': '$$match.name'
+                }
+            },
+            'nationality_name': {
+                '$let': {
+                    'vars': {
+                        'match': {
+                            '$first': {
+                                '$filter': {
+                                    'input': '$lookup_data',
+                                    'cond': {
+                                        '$eq': [
+                                            '$$this._id', '$nationality'
+                                        ]
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    'in': '$$match.name'
+                }
+            }
+        }
+    }, {
+        '$project': {
+            'all_ids': 0,
+            'lookup_data': 0
+        }
+    }
+]
+
+
+async def get_contacts_details(contact_id: ObjectId):
+    try:
+        new_pipeline: Any = copy.deepcopy(contacts_pipeline)
+        new_pipeline.insert(0, {
+            "$match": {
+                "_id": contact_id
+            }
+        })
+        cursor = await employees_contacts_and_relatives_collection.aggregate(new_pipeline)
+        result = await cursor.to_list(1)
+        return result[0] if result else None
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class EmployeeContactsAndRelatives(BaseModel):
+    full_name: Optional[str] = None
+    relationship: Optional[str] = None
+    phone_number: Optional[str] = None
+    gender: Optional[str] = None
+    date_of_birth: Optional[str] = None
+    nationality: Optional[str] = None
+    email_address: Optional[str] = None
+    note: Optional[str] = None
+    is_emergency: Optional[bool] = None
+
+
+@router.get("/get_employee_contact_and_relative/{employee_id}")
+async def get_employee_contact_and_relative(employee_id: str, _: dict = Depends(security.get_current_user)):
+    try:
+        employee_id = ObjectId(employee_id)
+        new_pipeline: Any = copy.deepcopy(contacts_pipeline)
+        new_pipeline.insert(0, {
+            "$match": {
+                "employee_id": employee_id
+            }
+        })
+
+        cursor = await employees_contacts_and_relatives_collection.aggregate(new_pipeline)
+        result = await cursor.to_list(None)
+        return {"new_contact": result if result else None}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/add_new_employee_contact_and_relative/{employee_id}")
+async def add_new_employee_contact_and_relative(employee_id: str, contact: EmployeeContactsAndRelatives,
+                                                data: dict = Depends(security.get_current_user)):
+    try:
+        company_id = ObjectId(data.get("company_id"))
+        contact = contact.model_dump(exclude_unset=True)
+        contact['company_id'] = company_id
+        contact['relationship'] = ObjectId(contact['relationship']) if contact['relationship'] else None
+        contact['gender'] = ObjectId(contact['gender']) if contact['gender'] else None
+        contact['nationality'] = ObjectId(contact['nationality']) if contact['nationality'] else None
+        contact['employee_id'] = ObjectId(employee_id) if employee_id else None
+        contact['createdAt'] = security.now_utc()
+        contact['updatedAt'] = security.now_utc()
+
+        new_contact = await employees_contacts_and_relatives_collection.insert_one(contact)
+
+        if not new_contact.inserted_id:
+            raise HTTPException(status_code=500, detail="Failed to create new contact")
+        added_contact = await get_contacts_details(new_contact.inserted_id)
+        print(added_contact)
+        return {"new_contact": added_contact}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ==================== ADDRESS SECTION ====================
+address_details_pipeline = [
+    {
+        '$lookup': {
+            'from': 'all_countries',
+            'localField': 'country',
+            'foreignField': '_id',
+            'as': 'country_details'
+        }
+    }, {
+        '$lookup': {
+            'from': 'all_countries_cities',
+            'localField': 'city',
+            'foreignField': '_id',
+            'as': 'city_details'
+        }
+    }, {
+        '$addFields': {
+            'country_name': {
+                '$ifNull': [
+                    {
+                        '$first': '$country_details.name'
+                    }, None
+                ]
+            },
+            'city_name': {
+                '$ifNull': [
+                    {
+                        '$first': '$city_details.name'
+                    }, None
+                ]
+            },
+            'country': {
+                '$toString': '$country'
+            },
+            'city': {
+                '$toString': '$city'
+            },
+            '_id': {
+                '$toString': '$_id'
+            }
+        }
+    }, {
+        '$project': {
+            'line': 1,
+            'country': 1,
+            'city': 1,
+            'country_name': 1,
+            'city_name': 1
+        }
+    }
+]
+
+
+async def get_employee_address_details(address_id: ObjectId):
+    try:
+        new_pipeline: Any = copy.deepcopy(address_details_pipeline)
+        new_pipeline.insert(0, {
+            "$match": {
+                "_id": address_id
+            }
+        })
+        cursor = await employees_address_collection.aggregate(new_pipeline)
+        result = await cursor.to_list(1)
+        return result[0] if result else None
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/add_employee_address/{employee_id}")
+async def add_employee_address(employee_id: str, address: EmployeeAddressModel,
+                               data: dict = Depends(security.get_current_user)):
+    try:
+        if not employee_id:
+            raise HTTPException(status_code=404, detail="Employee ID not found")
+        company_id = ObjectId(data.get("company_id"))
+        address = address.model_dump(exclude_unset=True)
+        if 'country' in address and address.get('country'):
+            address['country'] = ObjectId(address['country']) if address['country'] else None
+        if 'city' in address and address.get('city'):
+            address['city'] = ObjectId(address['city']) if address['city'] else None
+        address['company_id'] = company_id
+        address['employee_id'] = ObjectId(employee_id)
+        address['createdAt'] = security.now_utc()
+        address['updatedAt'] = security.now_utc()
+        added_address = await employees_address_collection.insert_one(address)
+        if not added_address.inserted_id:
+            raise HTTPException(status_code=500, detail="Failed to create address")
+
+        new_address_details = await get_employee_address_details(added_address.inserted_id)
+
+        return {"new_address": new_address_details}
+
+
+    except Exception as e:
+        print(e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.patch("/update_employee_address/{address_id}")
+async def update_employee_address(address_id: str, address: EmployeeAddressModel,
+                                  _: dict = Depends(security.get_current_user)):
+    try:
+        if not address_id:
+            raise HTTPException(status_code=404, detail="Address ID not found")
+        address = address.model_dump(exclude_unset=True)
+        if 'country' in address and address.get('country'):
+            address['country'] = ObjectId(address['country']) if address['country'] else None
+        if 'city' in address and address.get('city'):
+            address['city'] = ObjectId(address['city']) if address['city'] else None
+        address['updatedAt'] = security.now_utc()
+        await employees_address_collection.update_one({"_id": ObjectId(address_id)}, {"$set": address})
+        update_address_details = await get_employee_address_details(ObjectId(address_id))
+        return {"update_address": update_address_details}
+
+    except Exception as e:
+        print(e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/delete_employee_address/{address_id}")
+async def delete_employee_address(address_id: str, _: dict = Depends(security.get_current_user)):
+    try:
+        if not address_id:
+            raise HTTPException(status_code=404, detail="Address ID not found")
+        await employees_address_collection.delete_one({"_id": ObjectId(address_id)})
+        return {"deleted_address_id": address_id}
+
+    except Exception as e:
+        print(e)
         raise HTTPException(status_code=500, detail=str(e))
