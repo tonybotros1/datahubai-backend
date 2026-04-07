@@ -700,7 +700,7 @@ details_pipeline = [
             'reporting_manager_name': {
                 '$ifNull': [
                     {
-                        '$first': '$reporting_manager_details.name'
+                        '$first': '$reporting_manager_details.full_name'
                     }, None
                 ]
             }
