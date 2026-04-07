@@ -1,12 +1,13 @@
 import copy
 from typing import Optional, List, Any
 from bson import ObjectId
-from fastapi import APIRouter, HTTPException, Depends, Form, UploadFile, File
+from fastapi import APIRouter, HTTPException, Depends, Form, UploadFile, File, Body
 from pydantic import BaseModel
 from app.core import security
 from app.database import get_collection
 from datetime import datetime
 
+from app.routes.car_trading import PyObjectId
 from app.routes.counters import create_custom_counter
 from app.websocket_config import manager
 from app.widgets import upload_images
@@ -14,7 +15,11 @@ from app.widgets import upload_images
 router = APIRouter()
 employees_collection = get_collection("employees")
 employees_address_collection = get_collection("employees_address")
+employees_nationality_collection = get_collection("employees_nationality")
+employees_phone_collection = get_collection("employees_phone")
+employees_email_collection = get_collection("employees_email")
 employees_contacts_and_relatives_collection = get_collection("employees_contacts_and_relatives")
+attachment_collection = get_collection("attachment")
 
 
 def serializer(doc: dict) -> dict:
@@ -56,6 +61,34 @@ class EmployeeAddressModel(BaseModel):
     line: Optional[str] = None
     country: Optional[str] = None
     city: Optional[str] = None
+
+
+class EmployeeNationalityModel(BaseModel):
+    nationality: Optional[str] = None
+    start_date: Optional[datetime] = None
+    end_date: Optional[datetime] = None
+
+
+class EmployeePhoneModel(BaseModel):
+    type: Optional[str] = None
+    phone: Optional[str] = None
+
+
+class EmployeeEmailModel(BaseModel):
+    type: Optional[str] = None
+    email: Optional[str] = None
+
+
+class EmployeesSearch(BaseModel):
+    name: Optional[str] = None
+    employer: Optional[PyObjectId] = None
+    department: Optional[PyObjectId] = None
+    job_title: Optional[PyObjectId] = None
+    location: Optional[PyObjectId] = None
+    status: Optional[str] = None
+    type: Optional[str] = None
+    from_date: Optional[datetime] = None
+    to_date: Optional[datetime] = None
 
 
 main_screen_pipeline: list[dict[str, Any]] = [
@@ -333,6 +366,156 @@ details_pipeline = [
             'as': 'addresses_list'
         }
     }, {
+        '$lookup': {
+            'from': 'employees_nationality',
+            'let': {
+                'employee_id': '$_id'
+            },
+            'pipeline': [
+                {
+                    '$match': {
+                        '$expr': {
+                            '$eq': [
+                                '$employee_id', '$$employee_id'
+                            ]
+                        }
+                    }
+                }, {
+                    '$lookup': {
+                        'from': 'all_lists_values',
+                        'localField': 'nationality',
+                        'foreignField': '_id',
+                        'as': 'nationality_details'
+                    }
+                }, {
+                    '$addFields': {
+                        'nationality_name': {
+                            '$ifNull': [
+                                {
+                                    '$first': '$nationality_details.name'
+                                }, None
+                            ]
+                        },
+                        'nationality': {
+                            '$toString': '$nationality'
+                        },
+                        '_id': {
+                            '$toString': '$_id'
+                        }
+                    }
+                }, {
+                    '$project': {
+                        'createdAt': 0,
+                        'updatedAt': 0,
+                        'company_id': 0,
+                        'nationality_details': 0,
+                        'employee_id': 0
+                    }
+                }
+            ],
+            'as': 'nationalities_list'
+        }
+    }, {
+        '$lookup': {
+            'from': 'employees_phone',
+            'let': {
+                'employee_id': '$_id'
+            },
+            'pipeline': [
+                {
+                    '$match': {
+                        '$expr': {
+                            '$eq': [
+                                '$employee_id', '$$employee_id'
+                            ]
+                        }
+                    }
+                }, {
+                    '$lookup': {
+                        'from': 'all_lists_values',
+                        'localField': 'type',
+                        'foreignField': '_id',
+                        'as': 'type_details'
+                    }
+                }, {
+                    '$addFields': {
+                        'type_name': {
+                            '$ifNull': [
+                                {
+                                    '$first': '$type_details.name'
+                                }, None
+                            ]
+                        },
+                        'type': {
+                            '$toString': '$type'
+                        },
+                        '_id': {
+                            '$toString': '$_id'
+                        }
+                    }
+                }, {
+                    '$project': {
+                        'createdAt': 0,
+                        'updatedAt': 0,
+                        'company_id': 0,
+                        'type_details': 0,
+                        'employee_id': 0
+                    }
+                }
+            ],
+            'as': 'phone_list'
+        }
+    }, {
+        '$lookup': {
+            'from': 'employees_email',
+            'let': {
+                'employee_id': '$_id'
+            },
+            'pipeline': [
+                {
+                    '$match': {
+                        '$expr': {
+                            '$eq': [
+                                '$employee_id', '$$employee_id'
+                            ]
+                        }
+                    }
+                }, {
+                    '$lookup': {
+                        'from': 'all_lists_values',
+                        'localField': 'type',
+                        'foreignField': '_id',
+                        'as': 'type_details'
+                    }
+                }, {
+                    '$addFields': {
+                        'type_name': {
+                            '$ifNull': [
+                                {
+                                    '$first': '$type_details.name'
+                                }, None
+                            ]
+                        },
+                        'type': {
+                            '$toString': '$type'
+                        },
+                        '_id': {
+                            '$toString': '$_id'
+                        }
+                    }
+                }, {
+                    '$project': {
+                        'createdAt': 0,
+                        'updatedAt': 0,
+                        'company_id': 0,
+                        'type_details': 0,
+                        'employee_id': 0
+                    }
+                }
+            ],
+            'as': 'email_list'
+        }
+    }, {
         '$addFields': {
             'status_name': {
                 '$let': {
@@ -533,6 +716,42 @@ details_pipeline = [
 ]
 
 
+@router.post("/get_all_reporting_managers")
+async def get_all_reporting_managers(
+        employer_id: str = Body(None),
+        current_employee_id: str = Body(None),
+        data: dict = Depends(security.get_current_user)
+):
+    try:
+        company_id = ObjectId(data.get('company_id'))
+
+        pipeline: Any = [
+            {"$match": {"company_id": company_id, "person_type": "Employee"}}
+        ]
+
+        # Add employer filter if employer_id exists
+        if employer_id:
+            pipeline.append({"$match": {"employer": ObjectId(employer_id)}})
+
+        # Exclude current employee if current_employee_id exists
+        if current_employee_id:
+            pipeline.append({"$match": {"_id": {"$ne": ObjectId(current_employee_id)}}})
+
+        # Only return _id and full_name
+        pipeline.append({"$project": {"_id": 1, "full_name": 1}})
+
+        employees_cursor = await employees_collection.aggregate(pipeline)
+        employees = []
+        for emp in await employees_cursor.to_list(None):
+            emp["_id"] = str(emp["_id"])
+            employees.append(emp)
+
+        return {"status": "success", "result": employees}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 async def get_employee_details(employee_id: ObjectId):
     new_pipeline = copy.deepcopy(details_pipeline)
     new_pipeline.insert(0, {
@@ -683,7 +902,20 @@ async def update_employee(employee_id: str, full_name: str = Form(None), country
 async def delete_employee(employee_id: str, data: dict = Depends(security.get_current_user)):
     try:
         company_id = data.get("company_id")
-        result = await employees_collection.delete_one({"_id": ObjectId(employee_id)})
+        result = await employees_collection.find_one({"_id": ObjectId(employee_id)})
+        person_image_public_id = result.get("person_image_public_id")
+        if person_image_public_id:
+            await upload_images.delete_image_from_server(person_image_public_id)
+        employee_contacts_and_relatives = await employees_contacts_and_relatives_collection.find(
+            {"employee_id": ObjectId(employee_id)}).to_list(None)
+        for contact in employee_contacts_and_relatives:
+            contact_id = contact.get("_id")
+
+        # await employees_address_collection.delete_many({"employee_id": ObjectId(employee_id)})
+        # await employees_email_collection.delete_many({"employee_id": ObjectId(employee_id)})
+        # await employees_nationality_collection.delete_many({"employee_id": ObjectId(employee_id)})
+        # await employees_phone_collection.delete_many({"employee_id": ObjectId(employee_id)})
+        # await employees_contacts_and_relatives_collection.delete_many({"employee_id": ObjectId(employee_id)})
         if result.deleted_count == 1:
             await manager.send_to_company(company_id, {
                 "type": "employee_deleted",
@@ -886,7 +1118,7 @@ class EmployeeContactsAndRelatives(BaseModel):
     relationship: Optional[str] = None
     phone_number: Optional[str] = None
     gender: Optional[str] = None
-    date_of_birth: Optional[str] = None
+    date_of_birth: Optional[datetime] = None
     nationality: Optional[str] = None
     email_address: Optional[str] = None
     note: Optional[str] = None
@@ -906,7 +1138,7 @@ async def get_employee_contact_and_relative(employee_id: str, _: dict = Depends(
 
         cursor = await employees_contacts_and_relatives_collection.aggregate(new_pipeline)
         result = await cursor.to_list(None)
-        return {"new_contact": result if result else None}
+        return {"contact": result if result else None}
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -931,8 +1163,41 @@ async def add_new_employee_contact_and_relative(employee_id: str, contact: Emplo
         if not new_contact.inserted_id:
             raise HTTPException(status_code=500, detail="Failed to create new contact")
         added_contact = await get_contacts_details(new_contact.inserted_id)
-        print(added_contact)
         return {"new_contact": added_contact}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.patch("/update_employee_contact_and_relative/{contact_id}")
+async def update_employee_contact_and_relative(contact_id: str, contact: EmployeeContactsAndRelatives,
+                                               _: dict = Depends(security.get_current_user)):
+    try:
+        contact = contact.model_dump(exclude_unset=True)
+        contact['relationship'] = ObjectId(contact['relationship']) if contact['relationship'] else None
+        contact['gender'] = ObjectId(contact['gender']) if contact['gender'] else None
+        contact['nationality'] = ObjectId(contact['nationality']) if contact['nationality'] else None
+        contact['updatedAt'] = security.now_utc()
+
+        new_contact = await employees_contacts_and_relatives_collection.update_one({"_id": ObjectId(contact_id)},
+                                                                                   {"$set": contact})
+
+        if new_contact.matched_count == 0:
+            raise HTTPException(status_code=500, detail="Failed to update contact information")
+        updated_contact = await get_contacts_details(ObjectId(contact_id))
+        return {"updated_contact": updated_contact}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/delete_employee_contact_and_relative/{contact_id}")
+async def delete_employee_address(contact_id: str, _: dict = Depends(security.get_current_user)):
+    try:
+        if not contact_id:
+            raise HTTPException(status_code=404, detail="contact id not found")
+        await employees_contacts_and_relatives_collection.delete_one({"_id": ObjectId(contact_id)})
+        return {"deleted_contact_id": contact_id}
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -1034,7 +1299,6 @@ async def add_employee_address(employee_id: str, address: EmployeeAddressModel,
 
 
     except Exception as e:
-        print(e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -1055,7 +1319,6 @@ async def update_employee_address(address_id: str, address: EmployeeAddressModel
         return {"update_address": update_address_details}
 
     except Exception as e:
-        print(e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -1068,5 +1331,405 @@ async def delete_employee_address(address_id: str, _: dict = Depends(security.ge
         return {"deleted_address_id": address_id}
 
     except Exception as e:
-        print(e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ==================== NATIONALITY SECTION ====================
+
+employee_nationality_pipeline = [
+    {
+        '$lookup': {
+            'from': 'all_lists_values',
+            'localField': 'nationality',
+            'foreignField': '_id',
+            'as': 'nationality_details'
+        }
+    }, {
+        '$addFields': {
+            'nationality_name': {
+                '$ifNull': [
+                    {
+                        '$first': '$nationality_details.name'
+                    }, None
+                ]
+            },
+            '_id': {
+                '$toString': '$_id'
+            },
+            'nationality': {
+                '$toString': '$nationality'
+            },
+            'company_id': {
+                '$toString': '$company_id'
+            },
+            'employee_id': {
+                '$toString': '$employee_id'
+            }
+        }
+    }, {
+        '$project': {
+            'nationality_details': 0
+        }
+    }
+]
+
+
+async def get_employee_nationality_details(nationality_id: ObjectId):
+    try:
+        new_pipeline: Any = copy.deepcopy(employee_nationality_pipeline)
+        new_pipeline.insert(0, {
+            "$match": {
+                "_id": nationality_id
+            }
+        })
+        cursor = await employees_nationality_collection.aggregate(new_pipeline)
+        result = await cursor.to_list(1)
+        return result[0] if result else None
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/add_employee_nationality/{employee_id}")
+async def add_employee_nationality(employee_id: str, nationality: EmployeeNationalityModel,
+                                   data: dict = Depends(security.get_current_user)):
+    try:
+        if not employee_id:
+            raise HTTPException(status_code=404, detail="Employee ID not found")
+        company_id = ObjectId(data.get("company_id"))
+        nationality = nationality.model_dump(exclude_unset=True)
+        if 'nationality' in nationality and nationality.get('nationality'):
+            nationality['nationality'] = ObjectId(nationality['nationality']) if nationality['nationality'] else None
+
+        nationality['company_id'] = company_id
+        nationality['employee_id'] = ObjectId(employee_id)
+        nationality['createdAt'] = security.now_utc()
+        nationality['updatedAt'] = security.now_utc()
+        added_nationality = await employees_nationality_collection.insert_one(nationality)
+        if not added_nationality.inserted_id:
+            raise HTTPException(status_code=500, detail="Failed to create nationality")
+
+        new_nationality_details = await get_employee_nationality_details(added_nationality.inserted_id)
+
+        return {"new_nationality": new_nationality_details}
+
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.patch("/edit_employee_nationality/{nationality_id}")
+async def edit_employee_nationality(nationality_id: str, nationality: EmployeeNationalityModel,
+                                    _: dict = Depends(security.get_current_user)):
+    try:
+        if not nationality_id:
+            raise HTTPException(status_code=404, detail="nationality_id not found")
+        nationality = nationality.model_dump(exclude_unset=True)
+        if 'nationality' in nationality and nationality.get('nationality'):
+            nationality['nationality'] = ObjectId(nationality['nationality']) if nationality['nationality'] else None
+
+        nationality['updatedAt'] = security.now_utc()
+        updated_nationality = await employees_nationality_collection.update_one({"_id": ObjectId(nationality_id)},
+                                                                                {"$set": nationality})
+        if updated_nationality.modified_count == 0:
+            raise HTTPException(status_code=500, detail="Failed to update nationality")
+
+        new_nationality_details = await get_employee_nationality_details(updated_nationality.inserted_id)
+
+        return {"updated_nationality": new_nationality_details}
+
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/delete_employee_nationality/{nationality_id}")
+async def delete_employee_nationality(nationality_id: str, _: dict = Depends(security.get_current_user)):
+    try:
+        if not nationality_id:
+            raise HTTPException(status_code=404, detail="nationality_id not found")
+        await employees_nationality_collection.delete_one({"_id": ObjectId(nationality_id)})
+        return {"deleted_nationality_id": nationality_id}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ==================== PHONE SECTION ====================
+employee_phones_pipeline = [
+    {
+        '$lookup': {
+            'from': 'all_lists_values',
+            'localField': 'type',
+            'foreignField': '_id',
+            'as': 'type_details'
+        }
+    }, {
+        '$addFields': {
+            '_id': {
+                '$toString': '$_id'
+            },
+            'type': {
+                '$toString': '$type'
+            },
+            'company_id': {
+                '$toString': '$company_id'
+            },
+            'employee_id': {
+                '$toString': '$employee_id'
+            },
+            'type_name': {
+                '$ifNull': [
+                    {
+                        '$first': [
+                            '$type_details.name'
+                        ]
+                    }, None
+                ]
+            }
+        }
+    }, {
+        '$project': {
+            'type_details': 0
+        }
+    }
+]
+
+
+async def get_employee_phone_details(phone_id: ObjectId):
+    try:
+        new_pipeline: Any = copy.deepcopy(employee_phones_pipeline)
+        new_pipeline.insert(0, {
+            "$match": {
+                "_id": phone_id
+            }
+        })
+        cursor = await employees_phone_collection.aggregate(new_pipeline)
+        result = await cursor.to_list(1)
+        return result[0] if result else None
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/add_employee_phone/{employee_id}")
+async def add_employee_phone(employee_id: str, phone: EmployeePhoneModel,
+                             data: dict = Depends(security.get_current_user)):
+    try:
+        if not employee_id:
+            raise HTTPException(status_code=404, detail="Employee ID not found")
+        company_id = ObjectId(data.get("company_id"))
+        phone = phone.model_dump(exclude_unset=True)
+        if 'type' in phone and phone.get('type'):
+            phone['type'] = ObjectId(phone['type']) if phone['type'] else None
+
+        phone['company_id'] = company_id
+        phone['employee_id'] = ObjectId(employee_id)
+        phone['createdAt'] = security.now_utc()
+        phone['updatedAt'] = security.now_utc()
+        added_phone = await employees_phone_collection.insert_one(phone)
+        if not added_phone.inserted_id:
+            raise HTTPException(status_code=500, detail="Failed to create phone")
+
+        new_phone_details = await get_employee_phone_details(added_phone.inserted_id)
+
+        return {"new_phone": new_phone_details}
+
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.patch("/edit_employee_phone/{phone_id}")
+async def add_employee_phone(phone_id: str, phone: EmployeePhoneModel,
+                             _: dict = Depends(security.get_current_user)):
+    try:
+        if not phone_id:
+            raise HTTPException(status_code=404, detail="phone_id not found")
+        phone = phone.model_dump(exclude_unset=True)
+        if 'type' in phone and phone.get('type'):
+            phone['type'] = ObjectId(phone['type']) if phone['type'] else None
+
+        phone['updatedAt'] = security.now_utc()
+        added_phone = await employees_phone_collection.update_one({"_id": ObjectId(phone_id)}, {"$set": phone})
+        if added_phone.modified_count == 0:
+            raise HTTPException(status_code=500, detail="Failed to update phone")
+
+        updated_phone_details = await get_employee_phone_details(added_phone.inserted_id)
+
+        return {"updated_phone": updated_phone_details}
+
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/delete_employee_phone/{phone_id}")
+async def delete_employee_phone(phone_id: str, _: dict = Depends(security.get_current_user)):
+    try:
+        if not phone_id:
+            raise HTTPException(status_code=404, detail="phone_id not found")
+        await employees_phone_collection.delete_one({"_id": ObjectId(phone_id)})
+        return {"deleted_phone_id": phone_id}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ==================== EMAIL SECTION ====================
+employee_email_pipeline = [
+    {
+        '$lookup': {
+            'from': 'all_lists_values',
+            'localField': 'type',
+            'foreignField': '_id',
+            'as': 'type_details'
+        }
+    }, {
+        '$addFields': {
+            '_id': {
+                '$toString': '$_id'
+            },
+            'type': {
+                '$toString': '$type'
+            },
+            'company_id': {
+                '$toString': '$company_id'
+            },
+            'employee_id': {
+                '$toString': '$employee_id'
+            },
+            'type_name': {
+                '$ifNull': [
+                    {
+                        '$first': [
+                            '$type_details.name'
+                        ]
+                    }, None
+                ]
+            }
+        }
+    }, {
+        '$project': {
+            'type_details': 0
+        }
+    }
+]
+
+
+async def get_employee_email_details(email_id: ObjectId):
+    try:
+        new_pipeline: Any = copy.deepcopy(employee_email_pipeline)
+        new_pipeline.insert(0, {
+            "$match": {
+                "_id": email_id
+            }
+        })
+        cursor = await employees_email_collection.aggregate(new_pipeline)
+        result = await cursor.to_list(1)
+        return result[0] if result else None
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/add_employee_email/{employee_id}")
+async def add_employee_email(employee_id: str, email: EmployeeEmailModel,
+                             data: dict = Depends(security.get_current_user)):
+    try:
+        if not employee_id:
+            raise HTTPException(status_code=404, detail="Employee ID not found")
+        company_id = ObjectId(data.get("company_id"))
+        email = email.model_dump(exclude_unset=True)
+        if 'type' in email and email.get('type'):
+            email['type'] = ObjectId(email['type']) if email['type'] else None
+
+        email['company_id'] = company_id
+        email['employee_id'] = ObjectId(employee_id)
+        email['createdAt'] = security.now_utc()
+        email['updatedAt'] = security.now_utc()
+        added_email = await employees_email_collection.insert_one(email)
+        if not added_email.inserted_id:
+            raise HTTPException(status_code=500, detail="Failed to create email")
+
+        new_email_details = await get_employee_email_details(added_email.inserted_id)
+        return {"new_email": new_email_details}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.patch("/edit_employee_email/{email_id}")
+async def edit_employee_email(email_id: str, email: EmployeeEmailModel,
+                              _: dict = Depends(security.get_current_user)):
+    try:
+        if not email_id:
+            raise HTTPException(status_code=404, detail="email_id not found")
+        email = email.model_dump(exclude_unset=True)
+        if 'type' in email and email.get('type'):
+            email['type'] = ObjectId(email['type']) if email['type'] else None
+
+        email['updatedAt'] = security.now_utc()
+        added_email = await employees_email_collection.update_one({"_id": ObjectId(email_id)}, {"$set": email})
+        if not added_email.matched_count == 0:
+            raise HTTPException(status_code=500, detail="Failed to update email")
+
+        updated_email_details = await get_employee_email_details(ObjectId(email_id))
+        return {"updated_email": updated_email_details}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/delete_employee_email/{email_id}")
+async def delete_employee_email(email_id: str, _: dict = Depends(security.get_current_user)):
+    try:
+        if not email_id:
+            raise HTTPException(status_code=404, detail="email_id not found")
+        await employees_email_collection.delete_one({"_id": ObjectId(email_id)})
+        return {"deleted_email_id": email_id}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/search_engine_for_employees")
+async def search_engine_for_employees(
+        filter_employees: EmployeesSearch,
+        data: dict = Depends(security.get_current_user)
+):
+    try:
+        match_stage: Any = {}
+        company_id = ObjectId(data.get("company_id"))
+        if company_id:
+            match_stage = {"company_id": company_id}
+        if filter_employees.from_date or filter_employees.to_date:
+            match_stage['hire_date'] = {}
+            if filter_employees.from_date:
+                match_stage['hire_date']["$gte"] = filter_employees.from_date
+            if filter_employees.to_date:
+                match_stage['hire_date']["$lte"] = filter_employees.to_date
+
+        if filter_employees.name:
+            match_stage["full_name"] = {"$regex": filter_employees.name, "$options": "i"}
+        if filter_employees.employer:
+            match_stage["employer"] = filter_employees.employer
+        if filter_employees.department:
+            match_stage["department"] = filter_employees.department
+        if filter_employees.job_title:
+            match_stage["job_title"] = filter_employees.job_title
+        if filter_employees.location:
+            match_stage["location"] = filter_employees.location
+        if filter_employees.status:
+            match_stage["status"] = filter_employees.status
+        if filter_employees.type:
+            match_stage["person_type"] = filter_employees.type.capitalize()
+
+        new_search_pipeline = copy.deepcopy(main_screen_pipeline)
+        new_search_pipeline.insert(0, {"$match": match_stage})
+        cursor = await employees_collection.aggregate(new_search_pipeline)
+        employees = await cursor.to_list(None)
+        return {"employees": employees}
+
+    except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
