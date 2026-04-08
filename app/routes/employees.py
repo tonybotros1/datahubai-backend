@@ -19,6 +19,7 @@ employees_nationality_collection = get_collection("employees_nationality")
 employees_phone_collection = get_collection("employees_phone")
 employees_email_collection = get_collection("employees_email")
 employees_contacts_and_relatives_collection = get_collection("employees_contacts_and_relatives")
+employees_payrolls_collection = get_collection("employees_payrolls")
 attachment_collection = get_collection("attachment")
 
 
@@ -297,6 +298,55 @@ details_pipeline = [
             'localField': 'reporting_manager',
             'foreignField': '_id',
             'as': 'reporting_manager_details'
+        }
+    }, {
+        '$lookup': {
+            'from': 'employees_payrolls',
+            'let': {
+                'employee_id': '$_id'
+            },
+            'pipeline': [
+                {
+                    '$match': {
+                        '$expr': {
+                            '$eq': [
+                                '$employee_id', '$$employee_id'
+                            ]
+                        }
+                    }
+                }, {
+                    '$lookup': {
+                        'from': 'payroll_elements',
+                        'localField': 'name',
+                        'foreignField': '_id',
+                        'as': 'name_details'
+                    }
+                }, {
+                    '$addFields': {
+                        'name_value': {
+                            '$ifNull': [
+                                {
+                                    '$first': '$name_details.name'
+                                }, None
+                            ]
+                        },
+                        '_id': {
+                            '$toString': '$_id'
+                        },
+                        'name': {
+                            '$toString': '$name'
+                        },
+
+                    }
+                }, {
+                    '$project': {
+                        'name_details': 0,
+                        'company_id': 0,
+                        'employee_id': 0
+                    }
+                }
+            ],
+            'as': 'payrolls_details'
         }
     }, {
         '$lookup': {
@@ -978,6 +1028,133 @@ async def get_employees_by_department(department: str, data: dict = Depends(secu
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# =========================== PAYROLL SECTION ============================
+employee_payroll_pipeline = [
+    {
+        '$lookup': {
+            'from': 'payroll_elements',
+            'localField': 'name',
+            'foreignField': '_id',
+            'as': 'name_details'
+        }
+    }, {
+        '$addFields': {
+            '_id': {
+                '$toString': '$_id'
+            },
+            'name': {
+                '$toString': '$name'
+            },
+            'company_id': {
+                '$toString': '$company_id'
+            },
+            'employee_id': {
+                '$toString': '$employee_id'
+            },
+            'name_value': {
+                '$ifNull': [
+                    {
+                        '$first': '$name_details.name'
+                    }, None
+                ]
+            }
+        }
+    }, {
+        '$project': {
+            'name_details': 0
+        }
+    }
+]
+
+
+async def get_payroll_details(payroll_id: ObjectId):
+    try:
+        new_pipeline: Any = copy.deepcopy(employee_payroll_pipeline)
+        new_pipeline.insert(0, {
+            "$match": {
+                "_id": payroll_id
+            }
+        })
+        cursor = await employees_payrolls_collection.aggregate(new_pipeline)
+        result = await cursor.to_list(1)
+        return result[0] if result else None
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class EmployeePayrollModel(BaseModel):
+    name: Optional[str] = None
+    value: Optional[int] = None
+    start_date: Optional[datetime] = None
+    end_date: Optional[datetime] = None
+    notes: Optional[str] = None
+
+
+@router.post("/add_new_employee_payroll/{employee_id}")
+async def add_new_employee_payroll(employee_id: str, payroll: EmployeePayrollModel,
+                                   data: dict = Depends(security.get_current_user)):
+    try:
+        company_id = ObjectId(data.get("company_id"))
+        payroll = payroll.model_dump(exclude_unset=True)
+        payroll['company_id'] = company_id
+        payroll['name'] = ObjectId(payroll['name']) if payroll['name'] else None
+        payroll['employee_id'] = ObjectId(employee_id) if employee_id else None
+        payroll['value'] = payroll['value']
+        payroll['start_date'] = payroll['start_date']
+        payroll['end_date'] = payroll['end_date']
+        payroll['notes'] = payroll['notes']
+        payroll['createdAt'] = security.now_utc()
+        payroll['updatedAt'] = security.now_utc()
+
+        new_payroll = await employees_payrolls_collection.insert_one(payroll)
+
+        if not new_payroll.inserted_id:
+            raise HTTPException(status_code=500, detail="Failed to create new payroll document")
+        added_payroll = await get_payroll_details(new_payroll.inserted_id)
+        return {"new_payroll": added_payroll}
+    except Exception as e:
+        print(e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.patch("/update_employee_payroll/{payroll_id}")
+async def update_employee_payroll(payroll_id: str, payroll: EmployeePayrollModel,
+                                  _: dict = Depends(security.get_current_user)):
+    try:
+        payroll = payroll.model_dump(exclude_unset=True)
+        payroll['name'] = ObjectId(payroll['name']) if payroll['name'] else None
+        payroll['value'] = payroll['value']
+        payroll['start_date'] = payroll['start_date']
+        payroll['end_date'] = payroll['end_date']
+        payroll['notes'] = payroll['notes']
+        payroll['updatedAt'] = security.now_utc()
+
+        updated_payroll = await employees_payrolls_collection.update_one({"_id": ObjectId(payroll_id)},
+                                                                         {"$set": payroll})
+
+        if updated_payroll.matched_count == 0:
+            raise HTTPException(status_code=500, detail="Failed to update payroll document")
+        updated_payroll = await get_payroll_details(ObjectId(payroll_id))
+        print(updated_payroll)
+        return {"updated_payroll": updated_payroll}
+    except Exception as e:
+        print(e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/delete_employee_payroll/{payroll_id}")
+async def delete_employee_payroll(payroll_id: str, _: dict = Depends(security.get_current_user)):
+    try:
+        if not payroll_id:
+            raise HTTPException(status_code=404, detail="payroll id not found")
+        await employees_payrolls_collection.delete_one({"_id": ObjectId(payroll_id)})
+        return {"deleted_payroll_id": payroll_id}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # ==================== CONTACTS AND RELATIVES SECTION ====================
 contacts_pipeline = [
     {
@@ -1114,6 +1291,18 @@ async def get_contacts_details(contact_id: ObjectId):
 
 
 class EmployeeContactsAndRelatives(BaseModel):
+    full_name: Optional[str] = None
+    relationship: Optional[str] = None
+    phone_number: Optional[str] = None
+    gender: Optional[str] = None
+    date_of_birth: Optional[datetime] = None
+    nationality: Optional[str] = None
+    email_address: Optional[str] = None
+    note: Optional[str] = None
+    is_emergency: Optional[bool] = None
+
+
+class EmployeePayrollModel(BaseModel):
     full_name: Optional[str] = None
     relationship: Optional[str] = None
     phone_number: Optional[str] = None
