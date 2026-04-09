@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, Any
 from bson import ObjectId
 from fastapi import APIRouter, HTTPException, Depends
 from fastapi.encoders import jsonable_encoder
@@ -12,6 +12,10 @@ legislations_collection = get_collection("legislations")
 
 
 class LegislationModel(BaseModel):
+    name: Optional[str] = None
+
+
+class SearchModel(BaseModel):
     name: Optional[str] = None
 
 
@@ -57,4 +61,78 @@ async def add_new_legislation(leg: LegislationModel, data: dict = Depends(securi
 
     except Exception as e:
         print(e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.patch("/update_legislation/{leg_id}")
+async def update_legislation(leg_id: str, leg: LegislationModel, data: dict = Depends(security.get_current_user)):
+    try:
+        company_id = ObjectId(data.get("company_id"))
+        leg = leg.model_dump(exclude_unset=True)
+        leg['updatedAt'] = security.now_utc()
+        updated_leg = await legislations_collection.update_one({"_id": ObjectId(leg_id)}, {"$set": leg})
+
+        if updated_leg.matched_count == 0:
+            raise HTTPException(status_code=404, detail="legislation not found")
+        leg['_id'] = str(leg_id)
+        leg = jsonable_encoder(leg)
+
+        await manager.send_to_company(str(company_id), {
+            "type": "leg_updated",
+            "data": leg
+        })
+        return {"message": "updated successfully!", "updated_leg": leg}
+
+    except Exception as e:
+        print(e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/delete_legislation/{leg_id}")
+async def delete_legislation(leg_id: str, data: dict = Depends(security.get_current_user)):
+    try:
+        company_id = data.get("company_id")
+        result = await legislations_collection.delete_one({"_id": ObjectId(leg_id)})
+        if result.deleted_count == 1:
+            await manager.send_to_company(str(company_id), {
+                "type": "leg_deleted",
+                "data": {"_id": leg_id}
+            })
+            return {"message": "Element removed successfully!"}
+        else:
+            raise HTTPException(status_code=404, detail="Branch not found")
+
+    except Exception as error:
+        return {"message": str(error)}
+
+
+@router.post("/search_engine_for_legislations")
+async def search_engine_for_legislations(
+        filters: SearchModel,
+        data: dict = Depends(security.get_current_user)
+):
+    try:
+        company_id = ObjectId(data.get("company_id"))
+        match_stage: Any = {}
+        if company_id:
+            match_stage["company_id"] = company_id
+        if filters.name:
+            match_stage["name"] = {"$regex": filters.name, "$options": "i"}
+
+        legislations_elements_pipeline = [
+            {"$match": match_stage},
+            {"$set": {
+                "_id": {
+                    "$toString": "$_id"
+                }
+            }},
+            {"$project": {
+                "company_id": 0,
+
+            }}
+        ]
+        cursor = await legislations_collection.aggregate(legislations_elements_pipeline)
+        legislations_elements = await cursor.to_list(None)
+        return {"legislations_elements": legislations_elements if legislations_elements else []}
+    except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

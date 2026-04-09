@@ -103,7 +103,7 @@ main_screen_pipeline: list[dict[str, Any]] = [
             'job_title': 1,
             'location': 1,
             'all_ids': [
-                '$status', '$employer', '$department', '$job_title', '$location'
+                '$employer', '$department', '$job_title', '$location'
             ]
         }
     }, {
@@ -132,25 +132,6 @@ main_screen_pipeline: list[dict[str, Any]] = [
         }
     }, {
         '$addFields': {
-            'status_name': {
-                '$let': {
-                    'vars': {
-                        'match': {
-                            '$first': {
-                                '$filter': {
-                                    'input': '$lookup_data',
-                                    'cond': {
-                                        '$eq': [
-                                            '$$this._id', '$status'
-                                        ]
-                                    }
-                                }
-                            }
-                        }
-                    },
-                    'in': '$$match.name'
-                }
-            },
             'employer_name': {
                 '$let': {
                     'vars': {
@@ -230,9 +211,6 @@ main_screen_pipeline: list[dict[str, Any]] = [
             '_id': {
                 '$toString': '$_id'
             },
-            'status': {
-                '$toString': '$status'
-            },
             'employer': {
                 '$toString': '$employer'
             },
@@ -258,7 +236,7 @@ details_pipeline = [
     {
         '$addFields': {
             'all_ids': [
-                '$status', '$employer', '$department', '$job_title', '$location', '$gender', '$martial_status'
+             '$employer', '$department', '$job_title', '$location', '$gender', '$martial_status'
             ]
         }
     }, {
@@ -567,25 +545,6 @@ details_pipeline = [
         }
     }, {
         '$addFields': {
-            'status_name': {
-                '$let': {
-                    'vars': {
-                        'match': {
-                            '$first': {
-                                '$filter': {
-                                    'input': '$lookup_data',
-                                    'cond': {
-                                        '$eq': [
-                                            '$$this._id', '$status'
-                                        ]
-                                    }
-                                }
-                            }
-                        }
-                    },
-                    'in': '$$match.name'
-                }
-            },
             'gender_name': {
                 '$let': {
                     'vars': {
@@ -709,9 +668,6 @@ details_pipeline = [
             },
             '_id': {
                 '$toString': '$_id'
-            },
-            'status': {
-                '$toString': '$status'
             },
             'employer': {
                 '$toString': '$employer'
