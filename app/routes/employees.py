@@ -236,7 +236,7 @@ details_pipeline = [
     {
         '$addFields': {
             'all_ids': [
-             '$employer', '$department', '$job_title', '$location', '$gender', '$martial_status'
+                '$employer', '$department', '$job_title', '$location', '$gender', '$martial_status'
             ]
         }
     }, {
@@ -824,7 +824,7 @@ async def create_employee(full_name: str = Form(None), country_of_birth: str = F
             "gender": ObjectId(gender) if gender else None,
             "martial_status": ObjectId(martial_status) if martial_status else None,
             "person_type": person_type,
-            "status": ObjectId(status) if status else None,
+            "status": status,
             "employer": ObjectId(employer) if employer else None,
             "department": ObjectId(department) if department else None,
             "job_title": ObjectId(job_title) if job_title else None,
@@ -871,7 +871,7 @@ async def update_employee(employee_id: str, full_name: str = Form(None), country
             "gender": ObjectId(gender) if gender else None,
             "martial_status": ObjectId(martial_status) if martial_status else None,
             "person_type": person_type,
-            "status": ObjectId(status) if status else None,
+            "status": status,
             "employer": ObjectId(employer) if employer else None,
             "department": ObjectId(department) if department else None,
             "job_title": ObjectId(job_title) if job_title else None,
