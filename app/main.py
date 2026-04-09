@@ -9,7 +9,7 @@ from app.routes import brands_and_models, users, countries_and_cities, functions
     currencies, entity_information, ap_payment_types, banks_and_others, technician, invoice_items, job_cards, \
     quotation_cards, job_tasks, time_sheets, employees_performance, company_variables, ar_receipts, ap_payments, \
     ap_invoices, inventory_items, employees, receiving, inspection_reports, converters, issue_items, data_migration, \
-    job_cards_dashboard, to_do_list, account_transfers, batch_payment_process, attachment, legislation, payroll_elements
+    job_cards_dashboard, to_do_list, account_transfers, batch_payment_process, attachment, legislation, payroll_elements,public_holidays
 
 from app.routes.manzel_healthcare_task import medication_reminder_system
 
@@ -100,6 +100,7 @@ app.include_router(medication_reminder_system.router, prefix="/medication_remind
                    tags=["Medication Reminder"])
 app.include_router(legislation.router, prefix="/legislation", tags=["Legislation"])
 app.include_router(payroll_elements.router, prefix="/payroll_elements", tags=["Payroll Elements"])
+app.include_router(public_holidays.router, prefix="/public_holidays", tags=["Public Holidays"])
 
 
 # نقطة نهاية WebSocket العامة
