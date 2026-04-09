@@ -18,6 +18,7 @@ employees_address_collection = get_collection("employees_address")
 employees_nationality_collection = get_collection("employees_nationality")
 employees_phone_collection = get_collection("employees_phone")
 employees_email_collection = get_collection("employees_email")
+employees_bank_accounts_collection = get_collection("employees_bank_accounts")
 employees_contacts_and_relatives_collection = get_collection("employees_contacts_and_relatives")
 employees_payrolls_collection = get_collection("employees_payrolls")
 attachment_collection = get_collection("attachment")
@@ -313,8 +314,7 @@ details_pipeline = [
                         },
                         'name': {
                             '$toString': '$name'
-                        },
-
+                        }
                     }
                 }, {
                     '$project': {
@@ -325,6 +325,54 @@ details_pipeline = [
                 }
             ],
             'as': 'payrolls_details'
+        }
+    }, {
+        '$lookup': {
+            'from': 'employees_bank_accounts',
+            'let': {
+                'employee_id': '$_id'
+            },
+            'pipeline': [
+                {
+                    '$match': {
+                        '$expr': {
+                            '$eq': [
+                                '$employee_id', '$$employee_id'
+                            ]
+                        }
+                    }
+                }, {
+                    '$lookup': {
+                        'from': 'all_lists_values',
+                        'localField': 'bank_name',
+                        'foreignField': '_id',
+                        'as': 'bank_name_details'
+                    }
+                }, {
+                    '$addFields': {
+                        'bank_name_value': {
+                            '$ifNull': [
+                                {
+                                    '$first': '$bank_name_details.name'
+                                }, None
+                            ]
+                        },
+                        '_id': {
+                            '$toString': '$_id'
+                        },
+                        'bank_name': {
+                            '$toString': '$bank_name'
+                        }
+                    }
+                }, {
+                    '$project': {
+                        'bank_name_details': 0,
+                        'company_id': 0,
+                        'employee_id': 0
+                    }
+                }
+            ],
+            'as': 'bank_accounts_list'
         }
     }, {
         '$lookup': {
@@ -1878,3 +1926,130 @@ async def search_engine_for_employees(
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ==================== BANK ACCOUNTS SECTION ====================
+
+employee_bank_accounts_pipeline = [
+    {
+        '$lookup': {
+            'from': 'all_lists_values',
+            'localField': 'bank_name',
+            'foreignField': '_id',
+            'as': 'bank_name_details'
+        }
+    }, {
+        '$addFields': {
+            '_id': {
+                '$toString': '$_id'
+            },
+            'bank_name': {
+                '$toString': '$bank_name'
+            },
+            'company_id': {
+                '$toString': '$company_id'
+            },
+            'employee_id': {
+                '$toString': '$employee_id'
+            },
+            'bank_name_value': {
+                '$ifNull': [
+                    {
+                        '$first': '$bank_name_details.name'
+                    }, None
+                ]
+            }
+        }
+    }, {
+        '$project': {
+            'bank_name_details': 0
+        }
+    }
+]
+
+
+class EmployeeBankAccount(BaseModel):
+    bank_name: Optional[str] = None
+    account_number: Optional[str] = None
+    iban: Optional[str] = None
+    swift_code: Optional[str] = None
+
+
+async def get_employee_bank_account_details(account_id:ObjectId):
+    try:
+        new_pipeline: Any = copy.deepcopy(employee_bank_accounts_pipeline)
+        new_pipeline.insert(0, {
+            "$match": {
+                "_id": account_id
+            }
+        })
+        cursor = await employees_bank_accounts_collection.aggregate(new_pipeline)
+        result = await cursor.to_list(1)
+        return result[0] if result else None
+
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/add_employee_bank_account/{employee_id}")
+async def add_employee_bank_account(employee_id: str, bank: EmployeeBankAccount,
+                                    data: dict = Depends(security.get_current_user)):
+    try:
+        if not employee_id:
+            raise HTTPException(status_code=404, detail="Employee ID not found")
+        company_id = ObjectId(data.get("company_id"))
+        bank = bank.model_dump(exclude_unset=True)
+        if 'bank_name' in bank and bank.get('bank_name'):
+            bank['bank_name'] = ObjectId(bank['bank_name']) if bank['bank_name'] else None
+
+        bank['company_id'] = company_id
+        bank['employee_id'] = ObjectId(employee_id)
+        bank['createdAt'] = security.now_utc()
+        bank['updatedAt'] = security.now_utc()
+        added_bank_account = await employees_bank_accounts_collection.insert_one(bank)
+        if not added_bank_account.inserted_id:
+            raise HTTPException(status_code=500, detail="Failed to create bank account")
+
+        new_bank_account_details = await get_employee_bank_account_details(added_bank_account.inserted_id)
+        return {"new_bank_account": new_bank_account_details}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.patch("/edit_employee_bank_account/{account_id}")
+async def add_employee_bank_account(account_id: str, bank: EmployeeBankAccount,
+                                    _: dict = Depends(security.get_current_user)):
+    try:
+        if not account_id:
+            raise HTTPException(status_code=404, detail="Account ID not found")
+        bank = bank.model_dump(exclude_unset=True)
+        if 'bank_name' in bank and bank.get('bank_name'):
+            bank['bank_name'] = ObjectId(bank['bank_name']) if bank['bank_name'] else None
+
+        bank['updatedAt'] = security.now_utc()
+        updated_bank_account = await employees_bank_accounts_collection.update_one({"_id": ObjectId(account_id)}, {"$set": bank})
+        if  updated_bank_account.matched_count == 0:
+            raise HTTPException(status_code=500, detail="Failed to update bank account")
+
+        updated_bank_account_details = await get_employee_bank_account_details(ObjectId(account_id))
+        return {"updated_bank_account": updated_bank_account_details}
+
+    except Exception as e:
+        print(e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+
+@router.delete("/delete_employee_bank_account/{account_id}")
+async def delete_employee_email(account_id: str, _: dict = Depends(security.get_current_user)):
+    try:
+        if not account_id:
+            raise HTTPException(status_code=404, detail="account_id not found")
+        await employees_bank_accounts_collection.delete_one({"_id": ObjectId(account_id)})
+        return {"deleted_account_id": account_id}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
