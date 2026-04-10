@@ -55,6 +55,24 @@ async def add_new_holiday(holiday: PublicHolidaysModel, data: dict = Depends(sec
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.patch("/update_holiday/{holiday_id}")
+async def update_holiday(holiday_id: str, holiday: PublicHolidaysModel,
+                         _: dict = Depends(security.get_current_user)):
+    try:
+        holiday = holiday.model_dump(exclude_unset=True)
+        holiday['updatedAt'] = security.now_utc()
+        updated_element = await public_holidays_collection.update_one({"_id": ObjectId(holiday_id)}, {"$set": holiday})
+        if updated_element.matched_count == 0:
+            raise HTTPException(status_code=500,detail=f"Holiday ID not found")
+        holiday['_id'] = str(holiday_id)
+        updated_holiday = jsonable_encoder(holiday)
+
+        return {"updated_holiday": updated_holiday}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.delete("/delete_holiday/{holiday_id}")
 async def add_new_holiday(holiday_id: str, _: dict = Depends(security.get_current_user)):
     try:
