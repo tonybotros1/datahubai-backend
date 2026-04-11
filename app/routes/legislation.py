@@ -1,4 +1,4 @@
-from typing import Optional, Any
+from typing import Optional, Any, List
 from bson import ObjectId
 from fastapi import APIRouter, HTTPException, Depends
 from fastapi.encoders import jsonable_encoder
@@ -13,10 +13,12 @@ legislations_collection = get_collection("legislations")
 
 class LegislationModel(BaseModel):
     name: Optional[str] = None
+    weekend: Optional[List[str]] = None
 
 
 class SearchModel(BaseModel):
     name: Optional[str] = None
+
 
 
 @router.get("/get_all_legislations")
@@ -133,6 +135,7 @@ async def search_engine_for_legislations(
         ]
         cursor = await legislations_collection.aggregate(legislations_elements_pipeline)
         legislations_elements = await cursor.to_list(None)
+        print(legislations_elements)
         return {"legislations_elements": legislations_elements if legislations_elements else []}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

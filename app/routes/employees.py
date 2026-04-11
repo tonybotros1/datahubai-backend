@@ -5,7 +5,7 @@ from fastapi import APIRouter, HTTPException, Depends, Form, UploadFile, File, B
 from pydantic import BaseModel
 from app.core import security
 from app.database import get_collection
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from app.routes.car_trading import PyObjectId
 from app.routes.counters import create_custom_counter
@@ -19,9 +19,12 @@ employees_nationality_collection = get_collection("employees_nationality")
 employees_phone_collection = get_collection("employees_phone")
 employees_email_collection = get_collection("employees_email")
 employees_bank_accounts_collection = get_collection("employees_bank_accounts")
+employees_leaves_collection = get_collection("employees_leaves")
 employees_contacts_and_relatives_collection = get_collection("employees_contacts_and_relatives")
 employees_payrolls_collection = get_collection("employees_payrolls")
 attachment_collection = get_collection("attachment")
+legislations_collection = get_collection("legislations")
+public_holidays_collection = get_collection("public_holidays")
 
 
 def serializer(doc: dict) -> dict:
@@ -270,6 +273,13 @@ details_pipeline = [
             'localField': 'country_of_birth',
             'foreignField': '_id',
             'as': 'country_details'
+        }
+    }, {
+        '$lookup': {
+            'from': 'legislations',
+            'localField': 'legislation',
+            'foreignField': '_id',
+            'as': 'legislation_details'
         }
     }, {
         '$lookup': {
@@ -714,8 +724,18 @@ details_pipeline = [
                     }, None
                 ]
             },
+            'legislation_name': {
+                '$ifNull': [
+                    {
+                        '$first': '$legislation_details.name'
+                    }, None
+                ]
+            },
             '_id': {
                 '$toString': '$_id'
+            },
+            'legislation': {
+                '$toString': '$legislation'
             },
             'employer': {
                 '$toString': '$employer'
@@ -764,7 +784,8 @@ details_pipeline = [
             'lookup_data': 0,
             'all_ids': 0,
             'country_details': 0,
-            'reporting_manager_details': 0
+            'reporting_manager_details': 0,
+            'legislation_details': 0
         }
     }
 ]
@@ -853,6 +874,7 @@ async def create_employee(full_name: str = Form(None), country_of_birth: str = F
                           status: str = Form(None), employer: str = Form(None), department: str = Form(None),
                           job_title: str = Form(None), location: str = Form(None), hire_date: datetime = Form(None),
                           end_date: datetime = Form(None), reporting_manager: str = Form(None),
+                          legislation: str = Form(None),
                           person_image: UploadFile = File(None), data: dict = Depends(security.get_current_user)):
     try:
         company_id = ObjectId(data.get("company_id"))
@@ -867,6 +889,7 @@ async def create_employee(full_name: str = Form(None), country_of_birth: str = F
             "company_id": company_id,
             "full_name": full_name,
             "country_of_birth": ObjectId(country_of_birth) if country_of_birth else None,
+            "legislation": ObjectId(legislation) if legislation else None,
             "place_of_birth": place_of_birth,
             "date_of_birth": date_of_birth,
             "gender": ObjectId(gender) if gender else None,
@@ -908,6 +931,7 @@ async def update_employee(employee_id: str, full_name: str = Form(None), country
                           status: str = Form(None), employer: str = Form(None), department: str = Form(None),
                           job_title: str = Form(None), location: str = Form(None), hire_date: datetime = Form(None),
                           end_date: datetime = Form(None), reporting_manager: str = Form(None),
+                          legislation: str = Form(None),
                           person_image: UploadFile = File(None), data: dict = Depends(security.get_current_user)):
     try:
         company_id = data.get("company_id")
@@ -916,6 +940,7 @@ async def update_employee(employee_id: str, full_name: str = Form(None), country
             "country_of_birth": ObjectId(country_of_birth) if country_of_birth else None,
             "place_of_birth": place_of_birth,
             "date_of_birth": date_of_birth,
+            "legislation": ObjectId(legislation) if legislation else None,
             "gender": ObjectId(gender) if gender else None,
             "martial_status": ObjectId(martial_status) if martial_status else None,
             "person_type": person_type,
@@ -935,9 +960,9 @@ async def update_employee(employee_id: str, full_name: str = Form(None), country
                 person_image_public_id = current_employee.get("person_image_public_id")
                 if person_image_public_id:
                     await upload_images.delete_image_from_server(person_image_public_id)
-            result = await upload_images.upload_image(person_image, 'People')
-            employee_dict["person_image_url"] = result["url"]
-            employee_dict["person_image_public_id"] = result["public_id"]
+                result = await upload_images.upload_image(person_image, 'People')
+                employee_dict["person_image_url"] = result["url"]
+                employee_dict["person_image_public_id"] = result["public_id"]
 
         result = await employees_collection.update_one({"_id": ObjectId(employee_id)}, {"$set": employee_dict})
         if result.modified_count > 0:
@@ -1118,7 +1143,6 @@ async def add_new_employee_payroll(employee_id: str, payroll: EmployeePayrollMod
         added_payroll = await get_payroll_details(new_payroll.inserted_id)
         return {"new_payroll": added_payroll}
     except Exception as e:
-        print(e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -1140,10 +1164,8 @@ async def update_employee_payroll(payroll_id: str, payroll: EmployeePayrollModel
         if updated_payroll.matched_count == 0:
             raise HTTPException(status_code=500, detail="Failed to update payroll document")
         updated_payroll = await get_payroll_details(ObjectId(payroll_id))
-        print(updated_payroll)
         return {"updated_payroll": updated_payroll}
     except Exception as e:
-        print(e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -1385,7 +1407,7 @@ async def update_employee_contact_and_relative(contact_id: str, contact: Employe
 
 
 @router.delete("/delete_employee_contact_and_relative/{contact_id}")
-async def delete_employee_address(contact_id: str, _: dict = Depends(security.get_current_user)):
+async def delete_employee_contact_and_relative(contact_id: str, _: dict = Depends(security.get_current_user)):
     try:
         if not contact_id:
             raise HTTPException(status_code=404, detail="contact id not found")
@@ -1734,8 +1756,8 @@ async def add_employee_phone(employee_id: str, phone: EmployeePhoneModel,
 
 
 @router.patch("/edit_employee_phone/{phone_id}")
-async def add_employee_phone(phone_id: str, phone: EmployeePhoneModel,
-                             _: dict = Depends(security.get_current_user)):
+async def edit_employee_phone(phone_id: str, phone: EmployeePhoneModel,
+                              _: dict = Depends(security.get_current_user)):
     try:
         if not phone_id:
             raise HTTPException(status_code=404, detail="phone_id not found")
@@ -1975,7 +1997,7 @@ class EmployeeBankAccount(BaseModel):
     swift_code: Optional[str] = None
 
 
-async def get_employee_bank_account_details(account_id:ObjectId):
+async def get_employee_bank_account_details(account_id: ObjectId):
     try:
         new_pipeline: Any = copy.deepcopy(employee_bank_accounts_pipeline)
         new_pipeline.insert(0, {
@@ -2019,8 +2041,8 @@ async def add_employee_bank_account(employee_id: str, bank: EmployeeBankAccount,
 
 
 @router.patch("/edit_employee_bank_account/{account_id}")
-async def add_employee_bank_account(account_id: str, bank: EmployeeBankAccount,
-                                    _: dict = Depends(security.get_current_user)):
+async def edit_employee_bank_account(account_id: str, bank: EmployeeBankAccount,
+                                     _: dict = Depends(security.get_current_user)):
     try:
         if not account_id:
             raise HTTPException(status_code=404, detail="Account ID not found")
@@ -2029,21 +2051,20 @@ async def add_employee_bank_account(account_id: str, bank: EmployeeBankAccount,
             bank['bank_name'] = ObjectId(bank['bank_name']) if bank['bank_name'] else None
 
         bank['updatedAt'] = security.now_utc()
-        updated_bank_account = await employees_bank_accounts_collection.update_one({"_id": ObjectId(account_id)}, {"$set": bank})
-        if  updated_bank_account.matched_count == 0:
+        updated_bank_account = await employees_bank_accounts_collection.update_one({"_id": ObjectId(account_id)},
+                                                                                   {"$set": bank})
+        if updated_bank_account.matched_count == 0:
             raise HTTPException(status_code=500, detail="Failed to update bank account")
 
         updated_bank_account_details = await get_employee_bank_account_details(ObjectId(account_id))
         return {"updated_bank_account": updated_bank_account_details}
 
     except Exception as e:
-        print(e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
-
 @router.delete("/delete_employee_bank_account/{account_id}")
-async def delete_employee_email(account_id: str, _: dict = Depends(security.get_current_user)):
+async def delete_employee_bank_account(account_id: str, _: dict = Depends(security.get_current_user)):
     try:
         if not account_id:
             raise HTTPException(status_code=404, detail="account_id not found")
@@ -2053,3 +2074,241 @@ async def delete_employee_email(account_id: str, _: dict = Depends(security.get_
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
+# ==================== LEAVES  SECTION ====================
+class NumberOfDaysForWorkingDaysModel(BaseModel):
+    start_date: Optional[datetime] = None
+    end_date: Optional[datetime] = None
+
+
+class EmployeeLeavesModel(BaseModel):
+    start_date: Optional[datetime] = None
+    end_date: Optional[datetime] = None
+    status: Optional[str] = None
+    leave_type: Optional[str] = None
+    number_of_days: Optional[int] = None
+    note: Optional[str] = None
+
+
+employee_leave_details_pipeline = [
+    {
+        '$lookup': {
+            'from': 'leave_types',
+            'localField': 'leave_type',
+            'foreignField': '_id',
+            'as': 'leave_type_details'
+        }
+    }, {
+        '$addFields': {
+            '_id': {
+                '$toString': '$_id'
+            },
+            'leave_type': {
+                '$toString': '$leave_type'
+            },
+            'company_id': {
+                '$toString': '$company_id'
+            },
+            'employee_id': {
+                '$toString': '$employee_id'
+            },
+            'leave_type_name': {
+                '$ifNull': [
+                    {
+                        '$first': '$leave_type_details.name'
+                    }, None
+                ]
+            }
+        }
+    }, {
+        '$project': {
+            'leave_type_details': 0
+        }
+    }
+]
+
+
+async def get_employee_leave_details(leave_id: ObjectId):
+    try:
+        new_pipeline: Any = copy.deepcopy(employee_leave_details_pipeline)
+        new_pipeline.insert(0, {
+            "$match": {
+                "_id": leave_id
+            }
+        })
+
+        cursor = await employees_leaves_collection.aggregate(new_pipeline)
+        result = await cursor.to_list(None)
+        return result[0] if result else None
+
+    except Exception:
+        raise
+
+
+@router.post("/get_number_of_days_for_working_days/{employee_id}")
+async def get_number_of_days_for_working_days(
+        employee_id: str,
+        data: NumberOfDaysForWorkingDaysModel,
+        _: dict = Depends(security.get_current_user)
+):
+    try:
+        employee_id = ObjectId(employee_id)
+
+        employee_doc = await employees_collection.find_one({"_id": employee_id})
+        if not employee_doc:
+            raise HTTPException(status_code=404, detail="Employee not found")
+        # Default empty weekend
+        legislations_weekend = []
+        if "legislation" in employee_doc:
+            legislation = employee_doc["legislation"]
+            legislation_doc = await legislations_collection.find_one({"_id": legislation})
+            if not legislation_doc:
+                raise HTTPException(status_code=404, detail="Legislation not found")
+
+            legislations_weekend = legislation_doc.get("weekend", [])
+        start_date = data.start_date
+        end_date = data.end_date
+        if start_date > end_date:
+            raise HTTPException(status_code=400, detail="Invalid date range")
+        # Map weekday index to name
+        weekday_map = {
+            0: "Monday",
+            1: "Tuesday",
+            2: "Wednesday",
+            3: "Thursday",
+            4: "Friday",
+            5: "Saturday",
+            6: "Sunday"
+        }
+        company_id = employee_doc.get("company_id")
+        # Fetch holidays in range
+        holidays = await public_holidays_collection.find(
+            {
+                "company_id": company_id,
+                "date": {
+                    "$gte": start_date,
+                    "$lte": end_date
+                }
+            },
+            {"date": 1}
+        ).to_list(None)
+        holiday_dates = set(h["date"].date() for h in holidays)
+        # Calculate working days
+        total_days = 0
+        current_date = start_date
+
+        while current_date <= end_date:
+            day_name = weekday_map[current_date.weekday()]
+            # Skip weekends
+            if day_name not in legislations_weekend:
+                # Skip holidays
+                if current_date.date() not in holiday_dates:
+                    total_days += 1
+            current_date += timedelta(days=1)
+        return {
+            "working_days": total_days,
+            "total_days_including_weekends": (end_date - start_date).days + 1,
+            "holidays_count": len(holiday_dates),
+            "weekends": legislations_weekend
+        }
+
+    except Exception:
+        raise
+
+
+@router.get("/get_all_employee_leaves/{employee_id}")
+async def get_all_employee_leaves(data: dict = Depends(security.get_current_user)):
+    try:
+        company_id = ObjectId(data.get("company_id"))
+        new_pipeline: Any = copy.deepcopy(employee_leave_details_pipeline)
+        new_pipeline.insert(0, {
+            "$match": {
+                "company_id": company_id
+            }
+        })
+        new_pipeline.append({"$sort": {"start_date": 1}})
+        cursor = await employees_leaves_collection.aggregate(new_pipeline)
+        results = await cursor.to_list(None)
+        return {"all_leaves": results if results else []}
+
+    except Exception:
+        raise
+
+
+@router.post("/add_new_employee_leave/{employee_id}")
+async def add_new_employee_leave(employee_id: str, leave_data: EmployeeLeavesModel,
+                                 data: dict = Depends(security.get_current_user)):
+    try:
+        company_id = ObjectId(data.get("company_id"))
+        if not employee_id:
+            raise HTTPException(status_code=404, detail="Employee ID not found")
+        leave_data = leave_data.model_dump(exclude_unset=True)
+        if 'leave_type' in leave_data and leave_data.get('leave_type'):
+            leave_data['leave_type'] = ObjectId(leave_data['leave_type']) if leave_data['leave_type'] else None
+
+        leave_data['company_id'] = company_id
+        leave_data['status'] = "New"
+        leave_data['employee_id'] = ObjectId(employee_id)
+        leave_data['createdAt'] = security.now_utc()
+        leave_data['updatedAt'] = security.now_utc()
+        added_leave_details = await employees_leaves_collection.insert_one(leave_data)
+        if not added_leave_details.inserted_id:
+            raise HTTPException(status_code=500, detail="Failed to add employee leave")
+
+        added_leave = await get_employee_leave_details(added_leave_details.inserted_id)
+        print(added_leave)
+        return {"new_leave": added_leave}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.patch("/update_employee_leave/{leave_id}")
+async def update_employee_leave(leave_id: str, leave_data: EmployeeLeavesModel,
+                                _: dict = Depends(security.get_current_user)):
+    try:
+        if not leave_id:
+            raise HTTPException(status_code=404, detail="Leave ID not found")
+        leave_data = leave_data.model_dump(exclude_unset=True)
+        if 'leave_type' in leave_data and leave_data.get('leave_type'):
+            leave_data['leave_type'] = ObjectId(leave_data['leave_type']) if leave_data['leave_type'] else None
+
+        leave_data['updatedAt'] = security.now_utc()
+        updated_leave_details = await employees_leaves_collection.update_one({"_id": ObjectId(leave_id)},
+                                                                             {"$set": leave_data})
+        if updated_leave_details.matched_count == 0:
+            raise HTTPException(status_code=500, detail="Failed to update employee leave")
+
+        updated_leave = await get_employee_leave_details(ObjectId(leave_id))
+        print(updated_leave)
+        return {"update_leave": updated_leave}
+
+    except Exception as e:
+        print(e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/delete_employee_leave/{leave_id}")
+async def delete_employee_leave(leave_id: str, _: dict = Depends(security.get_current_user)):
+    try:
+        if not leave_id:
+            raise HTTPException(status_code=404, detail="leave_id not found")
+        await employees_leaves_collection.delete_one({"_id": ObjectId(leave_id)})
+        return {"deleted_leave_id": leave_id}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/get_employee_leave_status/{leave_id}")
+async def get_employee_leave_status(leave_id: str, _: dict = Depends(security.get_current_user)):
+    try:
+        leave_id = ObjectId(leave_id)
+        leave_doc = await employees_leaves_collection.find_one(({"_id": ObjectId(leave_id)}))
+        if not leave_doc:
+            raise HTTPException(status_code=404, detail="Leave not found")
+        status = leave_doc.get("status", "")
+        return {"status": status}
+
+    except Exception as e:
+        raise

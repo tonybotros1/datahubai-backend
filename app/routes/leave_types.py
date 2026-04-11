@@ -188,3 +188,22 @@ async def search_engine_for_leave_types(
         return {"leave_types": leave_types if leave_types else []}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/get_all_leave_types_for_lov")
+async def get_all_leave_types_for_lov(data: dict = Depends(security.get_current_user)):
+    try:
+        company_id = ObjectId(data.get("company_id"))
+        results = await leave_types_collection.find({"company_id": company_id} ,{
+            "name": 1,
+            "type": 1
+        }).to_list(None)
+        for leave_type in results:
+            leave_type["_id"] = str(leave_type["_id"])
+
+        return {"leave_types": results if results else []}
+
+
+    except Exception as e:
+        print(e)
+        raise HTTPException(status_code=500, detail=str(e))
