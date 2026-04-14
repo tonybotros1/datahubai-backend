@@ -4,7 +4,6 @@ from typing import Optional, Any
 from bson import ObjectId
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
-
 from app import database
 from app.core import security
 from app.database import get_collection
@@ -45,6 +44,11 @@ payroll_details_pipeline = [
                         'company_id': {
                             '$toString': '$company_id'
                         }
+                    }
+                },
+                {
+                    '$sort': {
+                        'period_name': -1
                     }
                 }
             ],

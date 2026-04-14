@@ -290,6 +290,13 @@ details_pipeline = [
         }
     }, {
         '$lookup': {
+            'from': 'payroll',
+            'localField': 'payroll',
+            'foreignField': '_id',
+            'as': 'payroll_details'
+        }
+    }, {
+        '$lookup': {
             'from': 'employees_payrolls',
             'let': {
                 'employee_id': '$_id'
@@ -764,6 +771,9 @@ details_pipeline = [
             'reporting_manager': {
                 '$toString': '$reporting_manager'
             },
+            'payroll': {
+                '$toString': '$payroll'
+            },
             'country_name': {
                 '$ifNull': [
                     {
@@ -777,6 +787,13 @@ details_pipeline = [
                         '$first': '$reporting_manager_details.full_name'
                     }, None
                 ]
+            },
+            'payroll_name': {
+                '$ifNull': [
+                    {
+                        '$first': '$payroll_details.name'
+                    }, None
+                ]
             }
         }
     }, {
@@ -785,7 +802,8 @@ details_pipeline = [
             'all_ids': 0,
             'country_details': 0,
             'reporting_manager_details': 0,
-            'legislation_details': 0
+            'legislation_details': 0,
+            'payroll_details': 0
         }
     }
 ]
@@ -874,6 +892,7 @@ async def create_employee(full_name: str = Form(None), country_of_birth: str = F
                           status: str = Form(None), employer: str = Form(None), department: str = Form(None),
                           job_title: str = Form(None), location: str = Form(None), hire_date: datetime = Form(None),
                           end_date: datetime = Form(None), reporting_manager: str = Form(None),
+                          payroll: str = Form(None),
                           legislation: str = Form(None),
                           person_image: UploadFile = File(None), data: dict = Depends(security.get_current_user)):
     try:
@@ -900,6 +919,7 @@ async def create_employee(full_name: str = Form(None), country_of_birth: str = F
             "department": ObjectId(department) if department else None,
             "job_title": ObjectId(job_title) if job_title else None,
             "location": ObjectId(location) if location else None,
+            "payroll": ObjectId(payroll) if payroll else None,
             "hire_date": hire_date,
             "end_date": end_date,
             "reporting_manager": ObjectId(reporting_manager) if reporting_manager else None,
@@ -931,6 +951,7 @@ async def update_employee(employee_id: str, full_name: str = Form(None), country
                           status: str = Form(None), employer: str = Form(None), department: str = Form(None),
                           job_title: str = Form(None), location: str = Form(None), hire_date: datetime = Form(None),
                           end_date: datetime = Form(None), reporting_manager: str = Form(None),
+                          payroll: str = Form(None),
                           legislation: str = Form(None),
                           person_image: UploadFile = File(None), data: dict = Depends(security.get_current_user)):
     try:
@@ -949,8 +970,9 @@ async def update_employee(employee_id: str, full_name: str = Form(None), country
             "department": ObjectId(department) if department else None,
             "job_title": ObjectId(job_title) if job_title else None,
             "location": ObjectId(location) if location else None,
-            "hire_date": hire_date,
-            "end_date": end_date,
+            "payroll": ObjectId(payroll) if payroll else None,
+            "hire_date": hire_date if hire_date else None,
+            "end_date": end_date if end_date else None,
             "reporting_manager": ObjectId(reporting_manager) if reporting_manager else None,
             "updatedAt": security.now_utc(),
         }
@@ -974,6 +996,7 @@ async def update_employee(employee_id: str, full_name: str = Form(None), country
             })
 
     except Exception as e:
+        print(e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
