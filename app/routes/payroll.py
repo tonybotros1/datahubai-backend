@@ -17,6 +17,7 @@ payroll_period_details_collection = get_collection("payroll_period_details")
 class PayrollModel(BaseModel):
     name: Optional[str] = None
     notes: Optional[str] = None
+    payment_type: Optional[str] = None
 
 
 class PeriodPayrollModel(BaseModel):
@@ -50,13 +51,35 @@ payroll_details_pipeline = [
             'as': 'details'
         }
     }, {
+        '$lookup': {
+            'from': 'ap_payment_types',
+            'localField': 'payment_type',
+            'foreignField': '_id',
+            'as': 'payment_type_details'
+        }
+    }, {
         '$set': {
             '_id': {
                 '$toString': '$_id'
             },
             'company_id': {
                 '$toString': '$company_id'
+            },
+            'payment_type': {
+                '$toString': '$payment_type'
+            },
+            'payment_type_name': {
+                '$ifNull': [
+                    {
+                        '$first': '$payment_type_details.type'
+                    }, None
+                ]
             }
+        }
+    },
+    {
+        '$project': {
+            'payment_type_details': 0
         }
     }
 ]
@@ -106,15 +129,37 @@ async def get_all_payrolls(data: dict = Depends(security.get_current_user)):
                 "$match": {"company_id": company_id}
             },
             {
+                '$lookup': {
+                    'from': 'ap_payment_types',
+                    'localField': 'payment_type',
+                    'foreignField': '_id',
+                    'as': 'payment_type_details'
+                }
+            },
+            {
+                '$set': {
+
+
+                    'payment_type_name': {
+                        '$ifNull': [
+                            {
+                                '$first': '$payment_type_details.type'
+                            }, None
+                        ]
+                    }
+                }
+            },
+
+            {
                 "$project": {
                     "_id": {"$toString": "$_id"},
                     "name": 1,
-                    "notes": 1
+                    "notes": 1,
+                    "payment_type_name":1
                 }
             }
         ])
         results = await cursor.to_list(None)
-        print(results)
 
         return {"all_payrolls": results if results else []}
 
@@ -133,6 +178,7 @@ async def create_new_payroll(payroll: PayrollModel, data: dict = Depends(securit
             "company_id": company_id,
             "name": name,
             "notes": payroll.get("notes"),
+            "payment_type": ObjectId(payroll.get("payment_type")) if payroll.get("payment_type") else None,
             "createdAt": now,
             "updatedAt": now,
         }
@@ -156,6 +202,7 @@ async def update_payroll(payroll_id: str, payroll: PayrollModel, _: dict = Depen
         payroll_dict = {
             "name": name,
             "notes": payroll.get("notes"),
+            "payment_type": ObjectId(payroll.get("payment_type")) if payroll.get("payment_type") else None,
             "updatedAt": now,
         }
         result = await payroll_collection.update_one({"_id": payroll_id}, {"$set": payroll_dict})
@@ -216,7 +263,6 @@ async def add_new_period(payroll_id: str, period: PeriodPayrollModel, data: dict
         }}
 
     except Exception as e:
-        print(e)
         raise
 
 
@@ -244,7 +290,6 @@ async def update_period(period_id: str, period: PeriodPayrollModel, _: dict = De
         }}
 
     except Exception as e:
-        print(e)
         raise
 
 
