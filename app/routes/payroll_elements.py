@@ -17,6 +17,7 @@ class PayrollElementsModel(BaseModel):
     type: Optional[str] = None
     priority: Optional[str] = None
     comments: Optional[str] = None
+    function: Optional[str] = None
     is_allow_override: Optional[bool] = None
     is_recurring: Optional[bool] = None
     is_entry_value: Optional[bool] = None
@@ -57,15 +58,15 @@ async def add_new_payroll_element(payroll_element: PayrollElementsModel,
 
 
 @router.patch("/update_payroll_element/{element_id}")
-async def add_new_payroll_element(element_id: str, payroll_element: PayrollElementsModel,
+async def update_payroll_element(element_id: str, payroll_element: PayrollElementsModel,
                                   data: dict = Depends(security.get_current_user)):
     try:
         company_id = ObjectId(data.get("company_id"))
         payroll_element = payroll_element.model_dump(exclude_unset=True)
         payroll_element['updatedAt'] = security.now_utc()
-        new_element = await payroll_elements_collection.update_one({"_id": ObjectId(element_id)},
+        updated_element = await payroll_elements_collection.update_one({"_id": ObjectId(element_id)},
                                                                    {"$set": payroll_element})
-        payroll_element['_id'] = str(new_element.inserted_id)
+        payroll_element['_id'] = str(element_id)
         payroll_element['company_id'] = str(company_id)
         added_element = jsonable_encoder(payroll_element)
 
@@ -77,6 +78,7 @@ async def add_new_payroll_element(element_id: str, payroll_element: PayrollEleme
 
 
     except Exception as e:
+        print(e)
         raise HTTPException(status_code=500, detail=str(e))
 
 

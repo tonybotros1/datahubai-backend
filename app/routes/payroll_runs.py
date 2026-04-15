@@ -89,15 +89,15 @@ async def run_payroll(run: PayrollRunModel, _: dict = Depends(security.get_curre
         if run.element_id:
             result = await payroll_elements_collection.find_one({"_id": run.element_id})
             if result:
-                statement: str = result.get("statement")
+                statement: str = result.get("function")
                 if statement.lower() == 'PY_INPUT_VALUE_FF':
-                    await calculate_basic_salary_value(run.employee_id, run.period_id, run.element_id)
+                    await py_input_value_ff(run.employee_id, run.period_id, run.element_id)
 
     except Exception:
         raise
 
 
-async def calculate_basic_salary_value(employee_id: ObjectId, period_id: ObjectId, element_id: ObjectId):
+async def py_input_value_ff(employee_id: ObjectId, period_id: ObjectId, element_id: ObjectId):
     try:
         period_document = await payroll_period_details_collection.find_one({"_id": period_id})
         period_start_date = period_document.get("start_date")
