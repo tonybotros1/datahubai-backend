@@ -9,6 +9,7 @@ from app.websocket_config import manager
 
 router = APIRouter()
 payroll_elements_collection = get_collection("payroll_elements")
+payroll_elements_based_elements_collection = get_collection("payroll_elements_based_elements")
 
 
 class PayrollElementsModel(BaseModel):
@@ -30,6 +31,11 @@ class SearchModel(BaseModel):
     type: Optional[str] = None
     priority: Optional[str] = None
     comments: Optional[str] = None
+
+
+class BasedElementsModel(BaseModel):
+    name: Optional[str] = None
+    type: Optional[str] = None
 
 
 @router.post("/add_new_payroll_element")
@@ -59,13 +65,13 @@ async def add_new_payroll_element(payroll_element: PayrollElementsModel,
 
 @router.patch("/update_payroll_element/{element_id}")
 async def update_payroll_element(element_id: str, payroll_element: PayrollElementsModel,
-                                  data: dict = Depends(security.get_current_user)):
+                                 data: dict = Depends(security.get_current_user)):
     try:
         company_id = ObjectId(data.get("company_id"))
         payroll_element = payroll_element.model_dump(exclude_unset=True)
         payroll_element['updatedAt'] = security.now_utc()
         updated_element = await payroll_elements_collection.update_one({"_id": ObjectId(element_id)},
-                                                                   {"$set": payroll_element})
+                                                                       {"$set": payroll_element})
         payroll_element['_id'] = str(element_id)
         payroll_element['company_id'] = str(company_id)
         added_element = jsonable_encoder(payroll_element)
@@ -157,3 +163,56 @@ async def get_payroll_elements_for_lov(data: dict = Depends(security.get_current
     except Exception as e:
         print(e)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/add_new_based_element/{payroll_element_id}")
+async def add_new_based_element(payroll_element_id: str, element: BasedElementsModel,
+                                data: dict = Depends(security.get_current_user)):
+    try:
+        company_id = ObjectId(data.get("company_id"))
+        payroll_element_id = ObjectId(payroll_element_id)
+        element_dict = {
+            "payroll_element_id": payroll_element_id,
+            "company_id": company_id,
+            "name": element.name,
+            "type": element.type,
+            "createdAt": security.now_utc(),
+            "updatedAt": security.now_utc(),
+        }
+        result = await payroll_elements_based_elements_collection.insert_one(element_dict)
+        if not result.inserted_id:
+            raise HTTPException(status_code=500, detail="Failed creating new element")
+        return {"added_based_element_id": str(result.inserted_id)}
+
+    except Exception:
+        raise
+
+
+@router.patch("/update_based_element/{element_id}")
+async def update_based_element(element_id: str, element: BasedElementsModel,
+                               _: dict = Depends(security.get_current_user)):
+    try:
+        element_id = ObjectId(element_id)
+        element_dict = {
+            "name": element.name,
+            "type": element.type,
+            "updatedAt": security.now_utc(),
+        }
+        result = await payroll_elements_based_elements_collection.update_one({"_id": element_id},
+                                                                             {"$set": element_dict})
+        if result.matched_count == 0:
+            raise HTTPException(status_code=500, detail="Failed updating element")
+        # return {"updated_based_element_id": str(result.inserted_id)}
+
+    except Exception:
+        raise
+
+
+@router.delete("/delete_based_element/{element_id}")
+async def delete_based_element(element_id: str, _: dict = Depends(security.get_current_user)):
+    try:
+        result = await payroll_elements_based_elements_collection.delete_one({"_id": ObjectId(element_id)})
+        if result.deleted_count == 0:
+            raise HTTPException(status_code=500, detail="Failed deleting element")
+    except Exception as error:
+        return {"message": str(error)}
