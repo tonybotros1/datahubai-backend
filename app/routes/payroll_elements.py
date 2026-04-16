@@ -23,6 +23,7 @@ class PayrollElementsModel(BaseModel):
     is_recurring: Optional[bool] = None
     is_entry_value: Optional[bool] = None
     is_standard_link: Optional[bool] = None
+    is_indirect: Optional[bool] = None
 
 
 class SearchModel(BaseModel):
@@ -84,7 +85,6 @@ async def update_payroll_element(element_id: str, payroll_element: PayrollElemen
 
 
     except Exception as e:
-        print(e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -150,7 +150,8 @@ async def search_engine_for_payroll_elements(
 async def get_payroll_elements_for_lov(data: dict = Depends(security.get_current_user)):
     try:
         company_id = ObjectId(data.get("company_id"))
-        results = await payroll_elements_collection.find({"company_id": company_id}, {"_id": 1, "name": 1}).to_list(
+        results = await payroll_elements_collection.find({"company_id": company_id, "is_indirect": False},
+                                                         {"_id": 1, "name": 1}).sort({"name": 1}).to_list(
             None)
         return {
             "elements": jsonable_encoder(
@@ -161,7 +162,25 @@ async def get_payroll_elements_for_lov(data: dict = Depends(security.get_current
 
 
     except Exception as e:
-        print(e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/get_payroll_elements_for_lov_for_payroll_elements")
+async def get_payroll_elements_for_lov_for_payroll_elements(data: dict = Depends(security.get_current_user)):
+    try:
+        company_id = ObjectId(data.get("company_id"))
+        results = await payroll_elements_collection.find({"company_id": company_id},
+                                                         {"_id": 1, "name": 1}).sort({"name": 1}).to_list(
+            None)
+        return {
+            "elements": jsonable_encoder(
+                results,
+                custom_encoder={ObjectId: str}
+            )
+        }
+
+
+    except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
