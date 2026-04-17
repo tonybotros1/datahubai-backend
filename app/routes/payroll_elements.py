@@ -1,3 +1,4 @@
+import copy
 from typing import Optional, Any
 from bson import ObjectId
 from fastapi import APIRouter, HTTPException, Depends
@@ -37,6 +38,143 @@ class SearchModel(BaseModel):
 class BasedElementsModel(BaseModel):
     name: Optional[str] = None
     type: Optional[str] = None
+
+
+payroll_element_details_pipeline = [
+    {
+        '$lookup': {
+            'from': 'payroll_elements_based_elements',
+            'let': {
+                'payroll_element_id': '$_id'
+            },
+            'pipeline': [
+                {
+                    '$match': {
+                        '$expr': {
+                            '$eq': [
+                                '$payroll_element_id', '$$payroll_element_id'
+                            ]
+                        }
+                    }
+                }, {
+                    '$lookup': {
+                        'from': 'payroll_elements',
+                        'localField': 'name',
+                        'foreignField': '_id',
+                        'as': 'element_details'
+                    }
+                }, {
+                    '$addFields': {
+                        '_id': {
+                            '$toString': '$_id'
+                        },
+                        'name': {
+                            '$toString': '$name'
+                        },
+                        'name_value': {
+                            '$ifNull': [
+                                {
+                                    '$first': '$element_details.name'
+                                }, None
+                            ]
+                        }
+                    }
+                }, {
+                    '$project': {
+                        '_id': 1,
+                        'name_value': 1,
+                        'name': 1,
+                        'type': 1
+                    }
+                }
+            ],
+            'as': 'element_details'
+        }
+    }, {
+        '$addFields': {
+            '_id': {
+                '$toString': '$_id'
+            }
+        }
+    }, {
+        '$project': {
+            'company_id': 0
+        }
+    }
+]
+
+based_element_details_pipeline = [
+    {
+        '$lookup': {
+            'from': 'payroll_elements',
+            'localField': 'payroll_element_id',
+            'foreignField': '_id',
+            'as': 'element_details'
+        }
+    }, {
+        '$addFields': {
+            '_id': {
+                '$toString': '$_id'
+            },
+            'name': {
+                '$toString': '$name'
+            },
+            'name_value': {
+                '$ifNull': [
+                    {
+                        '$first': '$element_details.name'
+                    }, None
+                ]
+            }
+        }
+    }, {
+        '$project': {
+            '_id': 1,
+            'name_value': 1,
+            'name': 1,
+            'type': 1
+        }
+    }
+]
+
+
+@router.get("/get_payroll_element_details/{element_id}")
+async def get_payroll_element_details(element_id: str, _: dict = Depends(security.get_current_user)):
+    try:
+        element_id = ObjectId(element_id)
+        new_pipeline: Any = copy.deepcopy(payroll_element_details_pipeline)
+        new_pipeline.insert(0,
+                            {
+                                '$match': {
+                                    '_id': element_id
+                                }
+
+                            })
+        cursor = await payroll_elements_collection.aggregate(new_pipeline)
+        result = await cursor.to_list(None)
+        return {"details": result[0] if result else None}
+    except Exception:
+        raise
+
+
+#
+# @router.get("/get_payroll_element_based_element_details/{element_id}")
+# async def get_payroll_element_based_element_details(element_id: str, _: dict = Depends(security.get_current_user)):
+#     try:
+#         element_id = ObjectId(element_id)
+#         new_pipeline: Any = copy.deepcopy(payroll_element_details_pipeline)
+#         new_pipeline.insert(0, {
+#             {
+#                 '$match': {
+#                     '_id': element_id
+#                 }
+#             },
+#         })
+#         cursor = await payroll_elements_collection.aggregate()
+#         result = await cursor.to_list(None)
+#         return {"details": result[0] if result else None}
+#     except Exception:
+#         raise
 
 
 @router.post("/add_new_payroll_element")
@@ -193,7 +331,7 @@ async def add_new_based_element(payroll_element_id: str, element: BasedElementsM
         element_dict = {
             "payroll_element_id": payroll_element_id,
             "company_id": company_id,
-            "name": element.name,
+            "name": ObjectId(element.name) if element.name else None,
             "type": element.type,
             "createdAt": security.now_utc(),
             "updatedAt": security.now_utc(),
@@ -213,7 +351,7 @@ async def update_based_element(element_id: str, element: BasedElementsModel,
     try:
         element_id = ObjectId(element_id)
         element_dict = {
-            "name": element.name,
+            "name": ObjectId(element.name) if element.name else None,
             "type": element.type,
             "updatedAt": security.now_utc(),
         }

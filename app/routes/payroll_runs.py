@@ -1,5 +1,5 @@
 import copy
-from datetime import datetime
+from datetime import datetime, timedelta, date
 from typing import Optional, Any, List
 from bson import ObjectId
 from fastapi import APIRouter, HTTPException, Depends
@@ -9,6 +9,7 @@ from app.core import security
 from app.database import get_collection
 from app.routes.car_trading import PyObjectId
 from app.routes.counters import create_custom_counter
+from app.routes.employees import get_number_of_days_for_working_days, NumberOfDaysForWorkingDaysModel
 
 router = APIRouter()
 payroll_runs_collection = get_collection("payroll_runs")
@@ -21,6 +22,7 @@ payroll_period_details_collection = get_collection("payroll_period_details")
 employees_collection = get_collection("employees")
 employees_payrolls_collection = get_collection("employees_payrolls")
 payroll_elements_collection = get_collection("payroll_elements")
+employees_leaves_collection = get_collection("employees_leaves")
 
 
 class PayrollRunModel(BaseModel):
@@ -52,10 +54,6 @@ async def save_payroll_run(payroll_id: ObjectId, period_id: ObjectId, descriptio
     async with database.client.start_session() as session:
         try:
             await session.start_transaction()
-            print(payroll_id)
-            print(period_id)
-            print(employee_ids)
-            print(elements_values_maps)
             company_id = ObjectId(data.get("company_id"))
             new_run_counter = await create_custom_counter("PRN", "R", description='Payroll Run Number', data=data,
                                                           session=session)
@@ -196,7 +194,6 @@ async def payroll_run(run: PayrollRunModel, data: dict = Depends(security.get_cu
                             elements_values_maps.append({
                                 employee_payroll.get("_id"): value
                             })
-            print(elements_values_maps)
         await save_payroll_run(payroll_id, period_id, description, [item["_id"] for item in all_employees],
                                elements_values_maps, data)
 
@@ -489,7 +486,13 @@ async def get_payroll_runs_details(run_id: str, data: dict = Depends(security.ge
         new_pipeline.insert(0, {"$match": {"company_id": company_id, "_id": run_id}})
         cursor = await payroll_runs_collection.aggregate(new_pipeline)
         results = await cursor.to_list(None)
-        print(results)
+
+        # # =================================================
+        # start = datetime(2026, 4, 1)
+        # end = datetime(2026, 4, 30)
+        # await get_leave_days(ObjectId("69cfa8718f07622eb9ce9b68"), start, end)
+        # # =================================================
+
         return {"payroll_runs_details": results[0] if len(results) > 0 else None}
 
     except Exception:

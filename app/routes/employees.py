@@ -2168,6 +2168,7 @@ async def get_employee_leave_details(leave_id: ObjectId):
         raise
 
 
+# this function is to calculate the number of holidays between 2 dates
 @router.post("/get_number_of_days_for_working_days/{employee_id}")
 async def get_number_of_days_for_working_days(
         employee_id: str,
