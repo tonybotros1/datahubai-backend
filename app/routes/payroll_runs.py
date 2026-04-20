@@ -9,7 +9,8 @@ from app.core import security
 from app.database import get_collection
 from app.routes.car_trading import PyObjectId
 from app.routes.counters import create_custom_counter
-from app.routes.employees import get_number_of_days_for_working_days, NumberOfDaysForWorkingDaysModel
+from app.routes.payroll_runs_widgets.helpers_functions import get_employee_element_value, get_leave_days, \
+    get_period_days
 
 router = APIRouter()
 payroll_runs_collection = get_collection("payroll_runs")
@@ -18,6 +19,7 @@ payroll_runs_employees_elements_collection = get_collection("payroll_runs_employ
 
 payroll_collection = get_collection("payroll")
 payroll_period_details_collection = get_collection("payroll_period_details")
+leave_types_collection = get_collection("leave_types")
 
 employees_collection = get_collection("employees")
 employees_payrolls_collection = get_collection("employees_payrolls")
@@ -48,17 +50,22 @@ async def is_element_processed(element_id: ObjectId, period_id: ObjectId) -> boo
         raise
 
 
-async def save_payroll_run(payroll_id: ObjectId, period_id: ObjectId, description: str,
-                           employee_ids: List[ObjectId], elements_values_maps: List[dict],
-                           data: dict = Depends(security.get_current_user)):
+async def save_payroll_run(payroll_id: ObjectId, period_id: ObjectId, description: str, employee_ids: list[ObjectId],
+                           elements_values_maps: dict, data: dict = Depends(security.get_current_user),
+                           ):
     async with database.client.start_session() as session:
         try:
             await session.start_transaction()
+
             company_id = ObjectId(data.get("company_id"))
-            new_run_counter = await create_custom_counter("PRN", "R", description='Payroll Run Number', data=data,
+
+            # === create run counter ===
+            new_run_counter = await create_custom_counter("PRN", "R", description="Payroll Run Number", data=data,
                                                           session=session)
+
             run_counter = new_run_counter["final_counter"] if new_run_counter["success"] else None
 
+            # === create payroll run ===
             run_dict = {
                 "company_id": company_id,
                 "run_number": run_counter,
@@ -69,9 +76,12 @@ async def save_payroll_run(payroll_id: ObjectId, period_id: ObjectId, descriptio
                 "createdAt": security.now_utc(),
                 "updatedAt": security.now_utc(),
             }
+
             run_result = await payroll_runs_collection.insert_one(run_dict, session=session)
             run_id = run_result.inserted_id
+            print(run_id)
 
+            # === loop employees ===
             for employee_id in employee_ids:
                 run_employee_dict = {
                     "company_id": company_id,
@@ -83,34 +93,65 @@ async def save_payroll_run(payroll_id: ObjectId, period_id: ObjectId, descriptio
                     "updatedAt": security.now_utc(),
                 }
 
-                run_employee_result = await payroll_runs_employees_collection.insert_one(run_employee_dict,
-                                                                                         session=session)
-                run_employee_id = run_employee_result.inserted_id
+                run_employee_result = await payroll_runs_employees_collection.insert_one(
+                    run_employee_dict,
+                    session=session,
+                )
 
-                for elements_values_map in elements_values_maps:
-                    element_id, value = next(iter(elements_values_map.items()))
+                run_employee_id = run_employee_result.inserted_id
+                print(run_employee_id)
+
+                # === get this employee elements ONLY ===
+                employee_elements = elements_values_maps.get(employee_id, [])
+
+                for element in employee_elements:
+                    element_id = element["element_id"]
+                    value = element["value"]
+                    payroll_element_id = element["payroll_element_id"]
+
+                    # 🔥 CHECK IF EXISTS (duplicate run rule)
+                    existing = await payroll_runs_employees_elements_collection.find_one(
+                        {
+                            "employee_id": employee_id,
+                            "element_id": element_id,
+                            "period_id": period_id,
+                            "payroll_id": payroll_id,
+                        }
+                    )
+
+                    if existing:
+                        value = 0  # 👈 your business rule
+
                     run_employee_element_dict = {
                         "company_id": company_id,
                         "run_employee_id": run_employee_id,
+                        "employee_id": employee_id,
                         "element_id": element_id,
                         "value": value,
+                        "payroll_element_id": payroll_element_id,
                         "run_id": run_id,
                         "period_id": period_id,
                         "payroll_id": payroll_id,
                         "createdAt": security.now_utc(),
                         "updatedAt": security.now_utc(),
                     }
-                    if run_employee_element_dict:
-                        run_employee_result = await payroll_runs_employees_elements_collection.insert_one(
-                            run_employee_element_dict,
-                            session=session)
-                        run_employee_element_id = run_employee_result.inserted_id
+
+                    await payroll_runs_employees_elements_collection.insert_one(
+                        run_employee_element_dict,
+                        session=session,
+                    )
 
             await session.commit_transaction()
 
-        except Exception:
+            return {
+                "success": True,
+                "run_id": str(run_id),
+                "message": "Payroll run created successfully",
+            }
+
+        except Exception as e:
             await session.abort_transaction()
-            raise
+            raise e
 
 
 @router.post("/payroll_run")
@@ -152,9 +193,10 @@ async def payroll_run(run: PayrollRunModel, data: dict = Depends(security.get_cu
 
         # === loop employees ===:
         description = ""
-        elements_values_maps = []
+        elements_values_maps = {}
         for employee in all_employees:
             current_employee_id = employee.get("_id")
+            elements_values_maps[current_employee_id] = []
             employee_hire_date = employee.get("hire_date") or datetime.min
             employee_end_date = employee.get("end_date") or datetime.max
             employee_name = employee.get("full_name") or None
@@ -182,7 +224,7 @@ async def payroll_run(run: PayrollRunModel, data: dict = Depends(security.get_cu
                 if not await is_element_processed(employee_payroll["_id"], period_id):
                     element_start = employee_payroll.get("start_date") or datetime.min
                     element_end = employee_payroll.get("end_date") or datetime.max
-                    element_value = employee_payroll.get("value", 0)
+                    element_value = await get_employee_element_value(employee_payroll.get("_id"), employee_id)
                     element_function = await payroll_elements_collection.find_one(
                         {"_id": employee_payroll.get("name")}, {"function": 1, "_id": 0})
                     element_function = element_function['function'] if element_function else None
@@ -191,9 +233,52 @@ async def payroll_run(run: PayrollRunModel, data: dict = Depends(security.get_cu
                             value = await py_input_value_ff(employee_hire_date, employee_end_date, element_start,
                                                             element_value,
                                                             element_end, period_start_date, period_end_date)
-                            elements_values_maps.append({
-                                employee_payroll.get("_id"): value
+                            elements_values_maps[current_employee_id].append({
+                                "element_id": employee_payroll.get("_id"),
+                                "value": value,
+                                "payroll_element_id": employee_payroll.get("name"),
                             })
+
+            # === employee leaves ===:
+            employee_leaves = await employees_leaves_collection.find(
+                {"employee_id": current_employee_id, "status": "Posted", "start_date": {
+                    "$gte": period_start_date,
+                    "$lte": period_end_date,
+                }}).to_list(None)
+            for leave in employee_leaves:
+                leave_type = leave.get("leave_type")
+                if not leave_type:
+                    continue
+
+                leave_type_doc = await leave_types_collection.find_one({"_id": leave_type})
+                if not leave_type_doc:
+                    continue
+
+                based_element_id = leave_type_doc.get("based_element")
+                number_of_days = leave.get("number_of_days")
+                if not based_element_id:
+                    continue
+
+                if not await is_element_processed(leave["_id"], period_id):
+                    payroll_element_doc = await payroll_elements_collection.find_one({"_id": based_element_id})
+                    function = payroll_element_doc.get("function") if payroll_element_doc else None
+                    if function.upper() == "PY_ANNUAL_LEAVE_FF":
+                        if not number_of_days:
+                            leave_type_name = leave_type_doc.get("name", "Selected leave type")
+                            raise HTTPException(
+                                status_code=400,
+                                detail=f"{leave_type_name} is missing number_of_days for annual leave calculation",
+                            )
+                        final_value = await py_annual_leave_ff(current_employee_id, period_start_date,
+                                                               period_end_date, based_element_id,
+                                                               number_of_days)
+
+                        elements_values_maps[current_employee_id].append({
+                            "element_id": leave["_id"],
+                            "value": final_value,
+                            "payroll_element_id": based_element_id,
+                        })
+
         await save_payroll_run(payroll_id, period_id, description, [item["_id"] for item in all_employees],
                                elements_values_maps, data)
 
@@ -210,7 +295,7 @@ async def py_input_value_ff(employee_hire_date: datetime, employee_end_date: dat
         date2 = min(employee_end_date, element_end, period_end_date)
 
         working_days = max((date2 - date1).days + 1, 0)
-        period_days = max((period_end_date - period_start_date).days + 1, 0)
+        period_days = get_period_days(period_start_date, period_end_date)
 
         if period_days == 0:
             final_value = 0
@@ -221,6 +306,19 @@ async def py_input_value_ff(employee_hire_date: datetime, employee_end_date: dat
 
     except Exception as e:
         raise e
+
+
+# ==== PY_ANNUAL_LEAVE_FF ====
+async def py_annual_leave_ff(employee_id: ObjectId, period_start_date: datetime, period_end_date: datetime,
+                             based_element_id: ObjectId, number_of_days: int):
+    try:
+        value = await get_employee_element_value(based_element_id, employee_id)
+        period_days = get_period_days(period_start_date, period_end_date)
+        final_value = round(((value or 0) * (number_of_days / period_days)), 2)
+        return final_value
+
+    except Exception:
+        raise
 
 
 ## ====================================================================================================================================================================================================
@@ -332,27 +430,6 @@ payroll_runs_details_pipeline = [
                         'foreignField': 'run_employee_id',
                         'pipeline': [
                             {
-                                '$lookup': {
-                                    'from': 'employees_payrolls',
-                                    'localField': 'element_id',
-                                    'foreignField': '_id',
-                                    'pipeline': [
-                                        {
-                                            '$project': {
-                                                '_id': 0,
-                                                'payroll_element_id': '$name'
-                                            }
-                                        }
-                                    ],
-                                    'as': 'employee_payroll_details'
-                                }
-                            }, {
-                                '$set': {
-                                    'payroll_element_id': {
-                                        '$first': '$employee_payroll_details.payroll_element_id'
-                                    }
-                                }
-                            }, {
                                 '$lookup': {
                                     'from': 'payroll_elements',
                                     'localField': 'payroll_element_id',
@@ -491,6 +568,10 @@ async def get_payroll_runs_details(run_id: str, data: dict = Depends(security.ge
         # start = datetime(2026, 4, 1)
         # end = datetime(2026, 4, 30)
         # await get_leave_days(ObjectId("69cfa8718f07622eb9ce9b68"), start, end)
+        # # =================================================
+
+        # # =================================================
+        # await get_payroll_element_value(ObjectId("69d64ad68fc5df07583ec9a8"),ObjectId("69cfa8718f07622eb9ce9b68"))
         # # =================================================
 
         return {"payroll_runs_details": results[0] if len(results) > 0 else None}

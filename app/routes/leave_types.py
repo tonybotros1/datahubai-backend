@@ -53,6 +53,7 @@ class LeaveTypesModel(BaseModel):
     code: Optional[str] = None
     type: Optional[str] = None
     based_element: Optional[str] = None
+    number_of_days: Optional[int] = None
 
 
 class SearchModel(BaseModel):

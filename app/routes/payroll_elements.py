@@ -1,7 +1,7 @@
 import copy
 from typing import Optional, Any
 from bson import ObjectId
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Body
 from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel
 from app.core import security
@@ -303,21 +303,35 @@ async def get_payroll_elements_for_lov(data: dict = Depends(security.get_current
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/get_payroll_elements_for_lov_for_payroll_elements")
-async def get_payroll_elements_for_lov_for_payroll_elements(data: dict = Depends(security.get_current_user)):
+class PayrollElementsForLOVForPayrollElementsModel(BaseModel):
+    element_id: Optional[str] = None
+
+
+@router.post("/get_payroll_elements_for_lov_for_payroll_elements")
+async def get_payroll_elements_for_lov_for_payroll_elements(
+        element_data: PayrollElementsForLOVForPayrollElementsModel,
+        data: dict = Depends(security.get_current_user)
+):
     try:
         company_id = ObjectId(data.get("company_id"))
-        results = await payroll_elements_collection.find({"company_id": company_id},
-                                                         {"_id": 1, "name": 1}).sort({"name": 1}).to_list(
-            None)
+
+        match_filter: Any = {"company_id": company_id}
+        if element_data.element_id:
+            match_filter["_id"] = {"$ne": ObjectId(element_data.element_id)}
+
+        result_pipeline = [
+            {"$match": match_filter},
+            {"$project": {"_id": 1, "name": 1}},
+            {"$set": {"_id": {"$toString": "$_id"}}},
+            {"$sort": {"name": 1}},
+        ]
+
+        cursor = await payroll_elements_collection.aggregate(result_pipeline)
+        results = await cursor.to_list(None)
+
         return {
-            "elements": jsonable_encoder(
-                results,
-                custom_encoder={ObjectId: str}
-            )
+            "elements": jsonable_encoder(results, custom_encoder={ObjectId: str})
         }
-
-
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

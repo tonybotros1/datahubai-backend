@@ -25,6 +25,7 @@ employees_payrolls_collection = get_collection("employees_payrolls")
 attachment_collection = get_collection("attachment")
 legislations_collection = get_collection("legislations")
 public_holidays_collection = get_collection("public_holidays")
+payroll_elements_collection = get_collection("payroll_elements")
 
 
 def serializer(doc: dict) -> dict:
@@ -2102,6 +2103,7 @@ async def delete_employee_bank_account(account_id: str, _: dict = Depends(securi
 class NumberOfDaysForWorkingDaysModel(BaseModel):
     start_date: Optional[datetime] = None
     end_date: Optional[datetime] = None
+    leave_type: Optional[str] = None
 
 
 class EmployeeLeavesModel(BaseModel):
@@ -2111,6 +2113,7 @@ class EmployeeLeavesModel(BaseModel):
     leave_type: Optional[str] = None
     number_of_days: Optional[int] = None
     note: Optional[str] = None
+    pay_in_advance: Optional[bool] = False
 
 
 employee_leave_details_pipeline = [
@@ -2169,14 +2172,25 @@ async def get_employee_leave_details(leave_id: ObjectId):
 
 
 # this function is to calculate the number of holidays between 2 dates
-@router.post("/get_number_of_days_for_working_days/{employee_id}")
-async def get_number_of_days_for_working_days(
+@router.post("/get_number_of_days/{employee_id}")
+async def get_number_of_days(
         employee_id: str,
         data: NumberOfDaysForWorkingDaysModel,
         _: dict = Depends(security.get_current_user)
 ):
     try:
         employee_id = ObjectId(employee_id)
+        leave_type = data.leave_type
+
+        if leave_type:
+            if leave_type.lower() == "calendar days":
+                return {
+                    "working_days": (data.end_date - data.start_date).days + 1,
+                    "total_days_including_weekends": (data.end_date - data.start_date).days + 1,
+                    "holidays_count": 0,
+                    "weekends": []
+                }
+                # return (data.end_date - data.start_date).days + 1
 
         employee_doc = await employees_collection.find_one({"_id": employee_id})
         if not employee_doc:
