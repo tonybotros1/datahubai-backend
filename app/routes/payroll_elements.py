@@ -275,7 +275,12 @@ async def search_engine_for_payroll_elements(
             {"$project": {
                 "company_id": 0,
 
-            }}
+            }},
+            {
+                "$sort": {
+                    "priority": 1
+                }
+            }
         ]
         cursor = await payroll_elements_collection.aggregate(payroll_elements_pipeline)
         payroll_elements = await cursor.to_list(None)

@@ -1,7 +1,8 @@
 import copy
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional, Any
 from bson import ObjectId
+from dateutil.relativedelta import relativedelta
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from app import database
@@ -24,6 +25,10 @@ class PeriodPayrollModel(BaseModel):
     start_date: Optional[datetime] = None
     end_date: Optional[datetime] = None
     status: Optional[str] = None
+
+
+class MonthlyPeriodsModel(BaseModel):
+    year_start_date: Optional[datetime] = None
 
 
 payroll_details_pipeline = [
@@ -119,7 +124,7 @@ async def get_current_payroll_details(payroll_id: str, _: dict = Depends(securit
         result = await cursor.to_list(None)
         return {"payroll_details": result[0] if result else None}
 
-    except Exception as e:
+    except Exception:
         raise
 
 
@@ -143,7 +148,6 @@ async def get_all_payrolls(data: dict = Depends(security.get_current_user)):
             {
                 '$set': {
 
-
                     'payment_type_name': {
                         '$ifNull': [
                             {
@@ -159,7 +163,7 @@ async def get_all_payrolls(data: dict = Depends(security.get_current_user)):
                     "_id": {"$toString": "$_id"},
                     "name": 1,
                     "notes": 1,
-                    "payment_type_name":1
+                    "payment_type_name": 1
                 }
             }
         ])
@@ -266,7 +270,7 @@ async def add_new_period(payroll_id: str, period: PeriodPayrollModel, data: dict
             "status": period_dict['status'],
         }}
 
-    except Exception as e:
+    except Exception:
         raise
 
 
@@ -293,7 +297,7 @@ async def update_period(period_id: str, period: PeriodPayrollModel, _: dict = De
             "status": period_dict['status'],
         }}
 
-    except Exception as e:
+    except Exception:
         raise
 
 
@@ -308,93 +312,117 @@ async def delete_period(period_id: str, _: dict = Depends(security.get_current_u
     except Exception:
         raise
 
-#
-# @router.post("/create_new_payroll")
-# async def create_new_payroll(payroll_details: PayrollModel, data: dict = Depends(security.get_current_user)):
-#     async with database.client.start_session() as session:
-#         try:
-#             await session.start_transaction()
-#             company_id = ObjectId(data.get("company_id"))
-#             payroll_details = payroll_details.model_dump(exclude_unset=True)
-#
-#             name = payroll_details.get("name")
-#             years = payroll_details.get("number_of_years")
-#             start_date = payroll_details.get("first_period_start_date")
-#             period_type = payroll_details.get("period_type")
-#
-#             now = security.now_utc()  # ✅ call once
-#
-#             payroll_dict = {
-#                 "company_id": company_id,
-#                 "name": name,
-#                 "period_type": period_type,
-#                 "first_period_start_date": start_date,
-#                 "number_of_years": years,
-#                 "notes": payroll_details.get("notes"),
-#                 "createdAt": now,
-#                 "updatedAt": now,
-#             }
-#             result = await payroll_collection.insert_one(payroll_dict, session=session)
-#             if not result.inserted_id:
-#                 raise HTTPException(status_code=500, detail="Failed to create Payroll")
-#
-#             if not years:
-#                 return {"message": "No periods created", "periods_created": []}
-#
-#             # ✅ Define behavior once
-#             config = {
-#                 "Yearly": {
-#                     "count": years,
-#                     "delta": lambda d: d + relativedelta(years=1) - timedelta(days=1),
-#                     "label": lambda d: f"{d.year} - {name}",
-#                 },
-#                 "Monthly": {
-#                     "count": years * 12,
-#                     "delta": lambda d: d + relativedelta(months=1) - timedelta(days=1),
-#                     "label": lambda d: f"({d.month}) {d.strftime('%B')} {d.strftime('%Y')} - {name}",
-#                 },
-#                 "Weekly": {
-#                     "count": years * 52,
-#                     "delta": lambda d: d + timedelta(weeks=1) - timedelta(days=1),
-#                     "label": lambda d: f"Week {d.isocalendar()[1]} {d.year} - {name}",
-#                 },
-#             }
-#
-#             if period_type not in config:
-#                 raise HTTPException(status_code=400, detail="Invalid period type")
-#
-#             cfg = config[period_type]
-#
-#             periods = []
-#             current_start = start_date
-#
-#             for _ in range(cfg["count"]):
-#                 period_start = current_start
-#                 period_end = cfg["delta"](period_start)
-#
-#                 periods.append({
-#                     "payroll_id": result.inserted_id,
-#                     "company_id": company_id,
-#                     "period": cfg["label"](period_start),
-#                     "start_date": period_start,
-#                     "end_date": period_end,
-#                     "status": True,
-#                     "createdAt": now,
-#                     "updatedAt": now,
-#                 })
-#
-#                 current_start = period_end + timedelta(days=1)
-#             await payroll_period_details_collection.insert_many(periods, session=session)
-#             await session.commit_transaction()
-#             inserter_payroll = await get_payroll_details(result.inserted_id)
-#             print(inserter_payroll)
-#
-#             return {
-#                 "message": "Payroll created successfully",
-#                 "periods_created": inserter_payroll
-#             }
-#
-#         except Exception as e:
-#             await session.abort_transaction()
-#             print(e)
-#             raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/generate_monthly_periods/{payroll_id}")
+async def generate_monthly_periods(
+        payroll_id: str,
+        gen_data: MonthlyPeriodsModel,
+        data: dict = Depends(security.get_current_user),
+):
+    try:
+        company_id = ObjectId(data.get("company_id"))
+        payroll_id = ObjectId(payroll_id)
+
+        if not gen_data.year_start_date:
+            raise HTTPException(status_code=400, detail="Year start date must be provided")
+
+        payroll_doc = await payroll_collection.find_one({"_id": payroll_id})
+        if not payroll_doc:
+            raise HTTPException(status_code=404, detail="Payroll not found")
+
+        payroll_name = payroll_doc.get("name", "Payroll")
+        payroll_start_date = gen_data.year_start_date
+        cycle_end_date = payroll_start_date + relativedelta(months=12)
+
+        # Check existing periods in the selected payroll year/cycle.
+        existing_periods = await payroll_period_details_collection.find(
+            {
+                "payroll_id": payroll_id,
+                "company_id": company_id,
+                "start_date": {
+                    "$gte": payroll_start_date,
+                    "$lt": cycle_end_date,
+                },
+            },
+            {
+                "start_date": 1,
+            },
+        ).to_list(length=None)
+
+        existing_months = {
+            (period["start_date"].year, period["start_date"].month)
+            for period in existing_periods
+            if period.get("start_date")
+        }
+
+        periods = []
+        current_start = payroll_start_date
+
+        for _ in range(12):
+            period_start = current_start
+            period_end = period_start + relativedelta(months=1) - timedelta(days=1)
+            month_key = (period_start.year, period_start.month)
+
+            if month_key not in existing_months:
+                periods.append(
+                    {
+                        "payroll_id": payroll_id,
+                        "company_id": company_id,
+                        "period_name": f"{period_start.strftime('%Y')}-{period_start.strftime('%m')}-{payroll_name}",
+                        "status": "Active",
+                        "start_date": period_start,
+                        "end_date": period_end,
+                        "createdAt": security.now_utc(),
+                        "updatedAt": security.now_utc(),
+                    }
+                )
+
+            current_start = period_end + timedelta(days=1)
+
+        if periods:
+            final_result = await payroll_period_details_collection.insert_many(periods)
+            if not final_result.inserted_ids:
+                raise HTTPException(status_code=500, detail="Failed to create Monthly Periods")
+
+        cursor = await payroll_period_details_collection.aggregate(
+            [
+                {
+                    "$match": {
+                        "payroll_id": payroll_id,
+                        "company_id": company_id,
+                        "status": "Active",
+                        "start_date": {
+                            "$gte": payroll_start_date,
+                            "$lt": cycle_end_date,
+                        },
+                    }
+                },
+                {
+                    "$sort": {
+                        "start_date": 1
+                    }
+                },
+                {
+                    "$set": {
+                        "_id": {
+                            "$toString": "$_id"
+                        }
+                    }
+                },
+                {
+                    "$project": {
+                        "company_id": 0,
+                        "payroll_id": 0,
+                        "createdAt": 0,
+                        "updatedAt": 0
+                    }
+                }
+            ]
+        )
+
+        added_periods = await cursor.to_list(length=None)
+        return {"periods": added_periods}
+
+    except Exception as e:
+        print(e)
+        raise

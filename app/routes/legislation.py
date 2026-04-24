@@ -14,6 +14,11 @@ legislations_collection = get_collection("legislations")
 class LegislationModel(BaseModel):
     name: Optional[str] = None
     weekend: Optional[List[str]] = None
+    number_of_paid_days_for_sick_leave: Optional[int] = None
+    number_of_half_paid_days_for_sick_leave: Optional[int] = None
+    number_of_unpaid_days_for_sick_leave: Optional[int] = None
+    number_of_paid_days_for_maternity_leave: Optional[int] = None
+    number_of_paid_days_for_compassionate_leave: Optional[int] = None
 
 
 class SearchModel(BaseModel):

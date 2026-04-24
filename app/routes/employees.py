@@ -26,6 +26,7 @@ attachment_collection = get_collection("attachment")
 legislations_collection = get_collection("legislations")
 public_holidays_collection = get_collection("public_holidays")
 payroll_elements_collection = get_collection("payroll_elements")
+leave_types_collection = get_collection("leave_types")
 
 
 def serializer(doc: dict) -> dict:
@@ -2150,6 +2151,11 @@ employee_leave_details_pipeline = [
         '$project': {
             'leave_type_details': 0
         }
+    },
+    {
+        "$sort": {
+            "start_date": -1
+        }
     }
 ]
 
@@ -2183,14 +2189,16 @@ async def get_number_of_days(
         leave_type = data.leave_type
 
         if leave_type:
-            if leave_type.lower() == "calendar days":
-                return {
-                    "working_days": (data.end_date - data.start_date).days + 1,
-                    "total_days_including_weekends": (data.end_date - data.start_date).days + 1,
-                    "holidays_count": 0,
-                    "weekends": []
-                }
-                # return (data.end_date - data.start_date).days + 1
+            result = await leave_types_collection.find_one({"_id": ObjectId(leave_type)})
+            if result:
+                leave_type: str = result.get("type", None)
+                if leave_type.lower() == "calendar days":
+                    return {
+                        "working_days": (data.end_date - data.start_date).days + 1,
+                        "total_days_including_weekends": (data.end_date - data.start_date).days + 1,
+                        "holidays_count": 0,
+                        "weekends": []
+                    }
 
         employee_doc = await employees_collection.find_one({"_id": employee_id})
         if not employee_doc:
