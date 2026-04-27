@@ -106,16 +106,16 @@ async def get_employee_element_value(element_id: ObjectId, employee_id: ObjectId
         raise
 
 
-async def get_used_sick_days(employee_id: ObjectId, leave_start_date: datetime, leave_end_date: datetime,
-                             period_start_date: datetime, period_end_date: datetime) -> float:
+async def get_used_leave_days(leave_code: str, employee_id: ObjectId, leave_start_date: datetime,
+                              period_start_date: datetime) -> float:
     year_start = datetime(leave_start_date.year, 1, 1)
     year_end = datetime(leave_start_date.year, 12, 31)
-    sick_leave_type = await leave_types_collection.find_one({"code": "SL"})
-    sick_leave_type_id = sick_leave_type["_id"]
+    leave_type = await leave_types_collection.find_one({"code": leave_code})
+    leave_type_id = leave_type["_id"]
 
     results = await employees_leaves_collection.find({
         'employee_id': employee_id,
-        'leave_type': sick_leave_type_id,
+        'leave_type': leave_type_id,
         'status': 'Posted',
         'start_date': {'$lt': leave_start_date},
         'end_date': {'$gte': year_start}
@@ -124,21 +124,12 @@ async def get_used_sick_days(employee_id: ObjectId, leave_start_date: datetime, 
     for result in results:
         l_s_d = result["start_date"]
         l_e_d = result["end_date"]
-        print(l_s_d)
-        print(l_e_d)
-        print("========================")
-        # if p
 
         date1 = max(year_start, l_s_d)
         date2 = min(year_end, l_e_d)
         total_days += max((date2 - date1).days + 1, 0)
-        print(date1)
-        print(date2)
-        print(total_days)
-        print("========================")
 
     total_days = total_days + get_current_leave_used_days(period_start_date, leave_start_date)
-    print(f"total_days: {total_days}")
 
     return total_days
 

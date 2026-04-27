@@ -11,7 +11,7 @@ from app.database import get_collection
 from app.routes.car_trading import PyObjectId
 from app.routes.counters import create_custom_counter
 from app.routes.payroll_runs_widgets.helpers_functions import get_employee_element_value, \
-    get_period_days, get_used_sick_days, get_current_leave_used_days
+    get_period_days, get_current_leave_used_days, get_used_leave_days
 
 router = APIRouter()
 payroll_runs_collection = get_collection("payroll_runs")
@@ -217,7 +217,6 @@ async def payroll_run(run: PayrollRunModel, data: dict = Depends(security.get_cu
                 payroll_elements = [element] if element else []
             else:
                 payroll_elements = await employees_payrolls_collection.find(element_filter).to_list(None)
-
             for employee_payroll in payroll_elements:
                 if not employee_payroll:
                     continue
@@ -247,6 +246,8 @@ async def payroll_run(run: PayrollRunModel, data: dict = Depends(security.get_cu
                  "end_date": {"$gte": period_start_date}}).to_list(None)
             for leave in employee_leaves:
                 leave_type = leave.get("leave_type")
+                leave_start_date = leave.get("start_date")
+                leave_end_date = leave.get("end_date")
                 if not leave_type:
                     continue
 
@@ -270,9 +271,10 @@ async def payroll_run(run: PayrollRunModel, data: dict = Depends(security.get_cu
                     payroll_element_doc = await payroll_elements_collection.find_one({"_id": based_element_id})
                     function = payroll_element_doc.get("function") if payroll_element_doc else None
                     if function.upper() == "PY_ANNUAL_LEAVE_FF":
+                        is_pay_in_advanced: bool = leave.get("pay_in_advance", False)
                         final_value = await py_annual_leave_ff(current_employee_id, period_start_date,
                                                                period_end_date, based_element_id,
-                                                               number_of_days)
+                                                               leave_start_date, leave_end_date, is_pay_in_advanced)
 
                         elements_values_maps[current_employee_id].append({
                             "element_id": leave["_id"],
@@ -283,7 +285,7 @@ async def payroll_run(run: PayrollRunModel, data: dict = Depends(security.get_cu
                     elif function.upper() == "PY_UNPAID_LEAVE_FF":
                         final_value = await py_unpaid_leave_ff(current_employee_id, period_start_date,
                                                                period_end_date, based_element_id,
-                                                               leave.get("start_date"), leave.get("end_date"))
+                                                               leave_start_date, leave_end_date)
 
                         elements_values_maps[current_employee_id].append({
                             "element_id": leave["_id"],
@@ -295,7 +297,7 @@ async def payroll_run(run: PayrollRunModel, data: dict = Depends(security.get_cu
                         final_value = await py_sick_leave_ff(current_employee_id, period_start_date,
                                                              period_end_date, based_element_id,
                                                              legislation,
-                                                             leave.get("start_date"), leave.get("end_date"))
+                                                             leave_start_date, leave_end_date)
 
                         elements_values_maps[current_employee_id].append({
                             "element_id": leave["_id"],
@@ -304,10 +306,24 @@ async def payroll_run(run: PayrollRunModel, data: dict = Depends(security.get_cu
                             "number": None
                         })
                     elif function.upper() == "PY_MATERNITY_LEAVE_FF":
+                        print("yes")
                         final_value = await py_maternity_leave_ff(current_employee_id, period_start_date,
-                                                             period_end_date, based_element_id,
-                                                             legislation,
-                                                             leave.get("start_date"), leave.get("end_date"))
+                                                                  period_end_date, based_element_id,
+                                                                  legislation,
+                                                                  leave_start_date, leave_end_date)
+
+                        elements_values_maps[current_employee_id].append({
+                            "element_id": leave["_id"],
+                            "value": final_value,
+                            "payroll_element_id": based_element_id,
+                            "number": None
+                        })
+                    elif function.upper() == "PY_COMPASSIONATE_LEAVE_FF":
+                        print("yes")
+                        final_value = await py_compassionate_leave_ff(current_employee_id, period_start_date,
+                                                                      period_end_date, based_element_id,
+                                                                      legislation,
+                                                                      leave_start_date, leave_end_date)
 
                         elements_values_maps[current_employee_id].append({
                             "element_id": leave["_id"],
@@ -355,11 +371,18 @@ async def py_input_value_ff(employee_hire_date: datetime, employee_end_date: dat
 
 # ==== PY_ANNUAL_LEAVE_FF ====
 async def py_annual_leave_ff(employee_id: ObjectId, period_start_date: datetime, period_end_date: datetime,
-                             based_element_id: ObjectId, number_of_days: int):
+                             based_element_id: ObjectId, leave_start_date: datetime, leave_end_date: datetime,
+                             is_pay_in_advanced: bool):
     try:
+        annual_leave_entitlement = 30
         value = await get_employee_element_value(based_element_id, employee_id)
         period_days = get_period_days(period_start_date, period_end_date)
-        final_value = round(((value or 0) * (number_of_days / period_days)), 2)
+
+        date1 = max(period_start_date, leave_start_date)
+        date2 = min(period_end_date, leave_end_date)
+        l_days = (date2 - date1).days + 1
+
+        final_value = round(((value or 0) * (l_days / period_days)), 2)
         return final_value
 
     except Exception:
@@ -401,8 +424,7 @@ async def py_sick_leave_ff(employee_id: ObjectId, period_start_date: datetime, p
         half_limit = legislation_doc.get("number_of_half_paid_days_for_sick_leave", 0)
 
         #  get previously used days
-        used_days_before = await get_used_sick_days(employee_id, leave_start_date, leave_end_date, period_start_date,
-                                                    period_end_date)
+        used_days_before = await get_used_leave_days("SL", employee_id, leave_start_date, period_start_date)
 
         date1 = max(period_start_date, leave_start_date)
         date2 = min(period_end_date, leave_end_date)
@@ -414,8 +436,6 @@ async def py_sick_leave_ff(employee_id: ObjectId, period_start_date: datetime, p
         # === FULL PAID ===
         remaining_full = max(0, full_limit - used_days_before)
         full_paid_days = min(remaining_days, remaining_full)
-
-        total_value += value * (full_paid_days / period_days) * 0
         remaining_days -= full_paid_days
 
         # === HALF PAID ===
@@ -451,34 +471,65 @@ async def py_maternity_leave_ff(employee_id: ObjectId, period_start_date: dateti
 
         full_limit = legislation_doc.get("number_of_paid_days_for_maternity_leave", 0)
 
-        #  get previously used days
         used_days_before = get_current_leave_used_days(period_start_date, leave_start_date)
 
         date1 = max(period_start_date, leave_start_date)
         date2 = min(period_end_date, leave_end_date)
-        l_days = (date2 - date1).days + 1
 
+        l_days = (date2 - date1).days + 1
         remaining_days = l_days
         total_value = 0
 
         # === FULL PAID ===
         remaining_full = max(0, full_limit - used_days_before)
         full_paid_days = min(remaining_days, remaining_full)
-
-        total_value += value * (full_paid_days / period_days) * 0
         remaining_days -= full_paid_days
 
-        # === UNPAID ===
-        remaining_unpaid = 0
-
-        unpaid_days = min(remaining_days, remaining_unpaid)
-
-        total_value += value * (unpaid_days / period_days) * 1.0
-        remaining_days -= unpaid_days
+        if remaining_days > 0:
+            total_value = value * (remaining_days / period_days)
 
         return round(total_value, 2)
 
-    except Exception:
+    except Exception as e:
+        print(e)
+        raise
+
+
+# ==== PY_COMPASSIONATE_LEAVE_FF ====
+async def py_compassionate_leave_ff(employee_id: ObjectId, period_start_date: datetime, period_end_date: datetime,
+                                    based_element_id: ObjectId, legislation: ObjectId, leave_start_date: datetime,
+                                    leave_end_date: datetime):
+    try:
+        value = await get_employee_element_value(based_element_id, employee_id)
+        period_days = get_period_days(period_start_date, period_end_date)
+
+        legislation_doc = await legislations_collection.find_one({"_id": legislation})
+        if not legislation_doc:
+            raise HTTPException(status_code=404, detail="Legislation not found")
+
+        full_limit = legislation_doc.get("number_of_paid_days_for_compassionate_leave", 0)
+
+        used_days_before = get_current_leave_used_days(period_start_date, leave_start_date)
+
+        date1 = max(period_start_date, leave_start_date)
+        date2 = min(period_end_date, leave_end_date)
+
+        l_days = (date2 - date1).days + 1
+        remaining_days = l_days
+        total_value = 0
+
+        # === FULL PAID ===
+        remaining_full = max(0, full_limit - used_days_before)
+        full_paid_days = min(remaining_days, remaining_full)
+        remaining_days -= full_paid_days
+
+        if remaining_days > 0:
+            total_value = value * (remaining_days / period_days)
+
+        return round(total_value, 2)
+
+    except Exception as e:
+        print(e)
         raise
 
 
