@@ -10,6 +10,7 @@ from app.core import security
 from app.database import get_collection
 from app.routes.car_trading import PyObjectId
 from app.routes.counters import create_custom_counter
+from app.routes.employees import get_number_of_days, NumberOfDaysForWorkingDaysModel
 from app.routes.payroll_runs_widgets.helpers_functions import get_employee_element_value, \
     get_period_days, get_current_leave_used_days, get_used_leave_days
 
@@ -240,11 +241,25 @@ async def payroll_run(run: PayrollRunModel, data: dict = Depends(security.get_cu
                                 "number": None
                             })
 
+                        if element_function.upper() == "PY_ANNUAL_LEAVE_ENTITLEMENT_FF":
+                            value = await py_annual_leave_entitlement_ff(employee_hire_date, employee_end_date,
+                                                                         element_start,
+                                                                         element_value,
+                                                                         element_end, period_start_date,
+                                                                         period_end_date)
+                            elements_values_maps[current_employee_id].append({
+                                "element_id": employee_payroll.get("_id"),
+                                "value": 0,
+                                "payroll_element_id": employee_payroll.get("name"),
+                                "number": value
+                            })
+
             # === employee leaves ===:
             employee_leaves = await employees_leaves_collection.find(
                 {"employee_id": current_employee_id, "status": "Posted", "start_date": {"$lte": period_end_date},
                  "end_date": {"$gte": period_start_date}}).to_list(None)
             for leave in employee_leaves:
+                leave_id = leave.get("_id")
                 leave_type = leave.get("leave_type")
                 leave_start_date = leave.get("start_date")
                 leave_end_date = leave.get("end_date")
@@ -272,15 +287,16 @@ async def payroll_run(run: PayrollRunModel, data: dict = Depends(security.get_cu
                     function = payroll_element_doc.get("function") if payroll_element_doc else None
                     if function.upper() == "PY_ANNUAL_LEAVE_FF":
                         is_pay_in_advanced: bool = leave.get("pay_in_advance", False)
-                        final_value = await py_annual_leave_ff(current_employee_id, period_start_date,
-                                                               period_end_date, based_element_id,
-                                                               leave_start_date, leave_end_date, is_pay_in_advanced)
+                        l_days, final_value = await py_annual_leave_ff(leave_id, current_employee_id, period_start_date,
+                                                                       period_end_date, based_element_id,
+                                                                       leave_start_date, leave_end_date,
+                                                                       is_pay_in_advanced)
 
                         elements_values_maps[current_employee_id].append({
                             "element_id": leave["_id"],
                             "value": final_value,
                             "payroll_element_id": based_element_id,
-                            "number": None
+                            "number": l_days
                         })
                     elif function.upper() == "PY_UNPAID_LEAVE_FF":
                         final_value = await py_unpaid_leave_ff(current_employee_id, period_start_date,
@@ -345,7 +361,8 @@ async def payroll_run(run: PayrollRunModel, data: dict = Depends(security.get_cu
 
 
 # ==== PY_INPUT_VALUE_FF ====
-async def py_input_value_ff(employee_hire_date: datetime, employee_end_date: datetime, element_start: datetime,
+async def py_input_value_ff(employee_hire_date: datetime, employee_end_date: datetime,
+                            element_start: datetime,
                             element_value: float, element_end: datetime, period_start_date: datetime,
                             period_end_date: datetime):
     try:
@@ -369,21 +386,54 @@ async def py_input_value_ff(employee_hire_date: datetime, employee_end_date: dat
         raise e
 
 
+# ==== PY_ANNUAL_LEAVE_ENTITLEMENT_FF ====
+async def py_annual_leave_entitlement_ff(employee_hire_date: datetime, employee_end_date: datetime,
+                                         element_start: datetime,
+                                         element_value: float, element_end: datetime, period_start_date: datetime,
+                                         period_end_date: datetime):
+    try:
+        date1 = max(employee_hire_date, element_start, period_start_date)
+        date2 = min(employee_end_date, element_end, period_end_date)
+        # number_of_leave_days_dict = await get_leave_days(employee_id, date1, date2, company_id)
+
+        # number_of_leave_days = number_of_leave_days_dict['number_of_leave_days']
+        # working_days = max((date2 - date1).days + 1, 0) - number_of_leave_days
+        working_days = max((date2 - date1).days + 1, 0)
+        period_days = get_period_days(period_start_date, period_end_date)
+
+        if period_days == 0:
+            l_days = 0
+        else:
+            l_days = element_value / 12 * (working_days / period_days)
+
+        return round(l_days, 2)
+
+    except Exception as e:
+        raise e
+
+
 # ==== PY_ANNUAL_LEAVE_FF ====
-async def py_annual_leave_ff(employee_id: ObjectId, period_start_date: datetime, period_end_date: datetime,
+async def py_annual_leave_ff(leave_id: ObjectId, employee_id: ObjectId, period_start_date: datetime,
+                             period_end_date: datetime,
                              based_element_id: ObjectId, leave_start_date: datetime, leave_end_date: datetime,
                              is_pay_in_advanced: bool):
     try:
-        annual_leave_entitlement = 30
         value = await get_employee_element_value(based_element_id, employee_id)
-        period_days = get_period_days(period_start_date, period_end_date)
+        # period_days = get_period_days(period_start_date, period_end_date)
 
         date1 = max(period_start_date, leave_start_date)
         date2 = min(period_end_date, leave_end_date)
-        l_days = (date2 - date1).days + 1
+        # l_days = (date2 - date1).days + 1
+        number_of_days = await get_number_of_days(str(employee_id),
+                                                  NumberOfDaysForWorkingDaysModel(start_date=date1,
+                                                                                  end_date=date2,
+                                                                                  leave_type=str(leave_id)))
+        l_days: int = number_of_days['working_days']
 
-        final_value = round(((value or 0) * (l_days / period_days)), 2)
-        return final_value
+        final_value = round(((value or 0) * (l_days * 12 / 365)), 2)
+        print(final_value)
+
+        return l_days, final_value
 
     except Exception:
         raise
@@ -730,12 +780,24 @@ payroll_runs_details_pipeline = [
                                                 ]
                                             }, '$value', 0
                                         ]
-                                    }
-                                }
-                            }, {
-                                '$match': {
-                                    'element_type': {
-                                        '$ne': 'Information'
+                                    },
+                                    'information': {
+                                        '$cond': [
+                                            {
+                                                '$eq': [
+                                                    '$element_type', 'Information'
+                                                ]
+                                            }, '$value', 0
+                                        ]
+                                    },
+                                    'number': {
+                                        '$cond': [
+                                            {
+                                                '$eq': [
+                                                    '$element_type', 'Information'
+                                                ]
+                                            }, '$number', 0
+                                        ]
                                     }
                                 }
                             }, {
@@ -767,6 +829,31 @@ payroll_runs_details_pipeline = [
                         }
                     }
                 }, {
+                    '$set': {
+                        'run_employee_information': {
+                            '$filter': {
+                                'input': '$run_employee_details',
+                                'as': 'el',
+                                'cond': {
+                                    '$eq': [
+                                        '$$el.element_type', 'Information'
+                                    ]
+                                }
+                            }
+                        },
+                        'run_employee_details': {
+                            '$filter': {
+                                'input': '$run_employee_details',
+                                'as': 'el',
+                                'cond': {
+                                    '$ne': [
+                                        '$$el.element_type', 'Information'
+                                    ]
+                                }
+                            }
+                        }
+                    }
+                }, {
                     '$project': {
                         '_id': {
                             '$toString': '$_id'
@@ -775,7 +862,8 @@ payroll_runs_details_pipeline = [
                         'total_payments': 1,
                         'total_deductions': 1,
                         'net_salary': 1,
-                        'run_employee_details': 1
+                        'run_employee_details': 1,
+                        'run_employee_information': 1
                     }
                 }, {
                     '$sort': {

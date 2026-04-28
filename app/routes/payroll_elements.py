@@ -1,7 +1,7 @@
 import copy
 from typing import Optional, Any
 from bson import ObjectId
-from fastapi import APIRouter, HTTPException, Depends, Body
+from fastapi import APIRouter, HTTPException, Depends
 from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel
 from app.core import security
@@ -227,7 +227,7 @@ async def update_payroll_element(element_id: str, payroll_element: PayrollElemen
 
 
 @router.delete("/delete_payroll_element/{element_id}")
-async def delete_branch(element_id: str, data: dict = Depends(security.get_current_user)):
+async def delete_payroll_element(element_id: str, data: dict = Depends(security.get_current_user)):
     try:
         company_id = data.get("company_id")
         result = await payroll_elements_collection.delete_one({"_id": ObjectId(element_id)})
@@ -238,7 +238,7 @@ async def delete_branch(element_id: str, data: dict = Depends(security.get_curre
             })
             return {"message": "Element removed successfully!"}
         else:
-            raise HTTPException(status_code=404, detail="Branch not found")
+            raise HTTPException(status_code=404, detail="Balance not found")
 
     except Exception as error:
         return {"message": str(error)}
