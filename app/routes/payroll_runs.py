@@ -12,7 +12,7 @@ from app.routes.car_trading import PyObjectId
 from app.routes.counters import create_custom_counter
 from app.routes.employees import get_number_of_days, NumberOfDaysForWorkingDaysModel
 from app.routes.payroll_runs_widgets.helpers_functions import get_employee_element_value, \
-    get_period_days, get_current_leave_used_days, get_used_leave_days
+    get_period_days, get_current_leave_used_days, get_used_leave_days, is_within_period
 
 router = APIRouter()
 payroll_runs_collection = get_collection("payroll_runs")
@@ -249,10 +249,45 @@ async def payroll_run(run: PayrollRunModel, data: dict = Depends(security.get_cu
                                                                          period_end_date)
                             elements_values_maps[current_employee_id].append({
                                 "element_id": employee_payroll.get("_id"),
-                                "value": 0,
+                                "value": value,
                                 "payroll_element_id": employee_payroll.get("name"),
-                                "number": value
+                                "number": 0
                             })
+                        if element_function.upper() == "PY_OVERTIME_NORMAL_FF":
+                            if is_within_period(element_start, element_end, period_start_date, period_end_date):
+                                value = await py_overtime_normal_ff(employee_payroll.get("employee_id"),
+                                                                    period_start_date, period_end_date,
+                                                                    employee_payroll.get("name"), legislation,
+                                                                    element_value)
+                                elements_values_maps[current_employee_id].append({
+                                    "element_id": employee_payroll.get("_id"),
+                                    "value": value,
+                                    "payroll_element_id": employee_payroll.get("name"),
+                                    "number": 0
+                                })
+                        if element_function.upper() == "PY_OVERTIME_HOLIDAYS_FF":
+                            if is_within_period(element_start, element_end, period_start_date, period_end_date):
+                                value = await py_overtime_holidays_ff(employee_payroll.get("employee_id"),
+                                                                      period_start_date, period_end_date,
+                                                                      employee_payroll.get("name"), legislation,
+                                                                      element_value)
+                                elements_values_maps[current_employee_id].append({
+                                    "element_id": employee_payroll.get("_id"),
+                                    "value": value,
+                                    "payroll_element_id": employee_payroll.get("name"),
+                                    "number": 0
+                                })
+                        if element_function.upper() == "PY_NONRECURRING_FF":
+                            if is_within_period(element_start, element_end, period_start_date, period_end_date):
+                                value = await py_nonrecurring_ff(period_start_date, period_end_date, element_start,
+                                                                 element_end, element_value)
+                                if value:
+                                    elements_values_maps[current_employee_id].append({
+                                        "element_id": employee_payroll.get("_id"),
+                                        "value": value,
+                                        "payroll_element_id": employee_payroll.get("name"),
+                                        "number": 0
+                                    })
 
             # === employee leaves ===:
             employee_leaves = await employees_leaves_collection.find(
@@ -324,6 +359,19 @@ async def payroll_run(run: PayrollRunModel, data: dict = Depends(security.get_cu
                     elif function.upper() == "PY_MATERNITY_LEAVE_FF":
                         print("yes")
                         final_value = await py_maternity_leave_ff(current_employee_id, period_start_date,
+                                                                  period_end_date, based_element_id,
+                                                                  legislation,
+                                                                  leave_start_date, leave_end_date)
+
+                        elements_values_maps[current_employee_id].append({
+                            "element_id": leave["_id"],
+                            "value": final_value,
+                            "payroll_element_id": based_element_id,
+                            "number": None
+                        })
+                    elif function.upper() == "PY_PATERNITY_LEAVE_FF":
+                        print("yes")
+                        final_value = await py_paternity_leave_ff(current_employee_id, period_start_date,
                                                                   period_end_date, based_element_id,
                                                                   legislation,
                                                                   leave_start_date, leave_end_date)
@@ -545,6 +593,44 @@ async def py_maternity_leave_ff(employee_id: ObjectId, period_start_date: dateti
         raise
 
 
+# ==== PY_PATERNITY_LEAVE_FF ====
+async def py_paternity_leave_ff(employee_id: ObjectId, period_start_date: datetime, period_end_date: datetime,
+                                based_element_id: ObjectId, legislation: ObjectId, leave_start_date: datetime,
+                                leave_end_date: datetime):
+    try:
+        value = await get_employee_element_value(based_element_id, employee_id)
+        period_days = get_period_days(period_start_date, period_end_date)
+
+        legislation_doc = await legislations_collection.find_one({"_id": legislation})
+        if not legislation_doc:
+            raise HTTPException(status_code=404, detail="Legislation not found")
+
+        full_limit = legislation_doc.get("number_of_paid_days_for_paternity_leave", 0)
+
+        used_days_before = get_current_leave_used_days(period_start_date, leave_start_date)
+
+        date1 = max(period_start_date, leave_start_date)
+        date2 = min(period_end_date, leave_end_date)
+
+        l_days = (date2 - date1).days + 1
+        remaining_days = l_days
+        total_value = 0
+
+        # === FULL PAID ===
+        remaining_full = max(0, full_limit - used_days_before)
+        full_paid_days = min(remaining_days, remaining_full)
+        remaining_days -= full_paid_days
+
+        if remaining_days > 0:
+            total_value = value * (remaining_days / period_days)
+
+        return round(total_value, 2)
+
+    except Exception as e:
+        print(e)
+        raise
+
+
 # ==== PY_COMPASSIONATE_LEAVE_FF ====
 async def py_compassionate_leave_ff(employee_id: ObjectId, period_start_date: datetime, period_end_date: datetime,
                                     based_element_id: ObjectId, legislation: ObjectId, leave_start_date: datetime,
@@ -581,6 +667,69 @@ async def py_compassionate_leave_ff(employee_id: ObjectId, period_start_date: da
     except Exception as e:
         print(e)
         raise
+
+
+# ==== PY_OVERTIME_NORMAL_FF ====
+async def py_overtime_normal_ff(employee_id: ObjectId, period_start_date: datetime, period_end_date: datetime,
+                                based_element_id: ObjectId, legislation: ObjectId, element_value: float):
+    try:
+        # Based Value
+        value = await get_employee_element_value(based_element_id, employee_id)
+        # No. of Month Days
+        period_days = get_period_days(period_start_date, period_end_date)
+
+        legislation_doc = await legislations_collection.find_one({"_id": legislation})
+        if not legislation_doc:
+            raise HTTPException(status_code=404, detail="Legislation not found")
+        # No. of working hours
+        working_hours = legislation_doc.get("number_of_working_hours_for_overtime_normal", 0)
+
+        total_value = element_value / working_hours / period_days * value
+        return round(total_value, 2)
+
+    except Exception as e:
+        raise e
+
+
+# ==== PY_OVERTIME_HOLIDAYS_FF ====
+async def py_overtime_holidays_ff(employee_id: ObjectId, period_start_date: datetime, period_end_date: datetime,
+                                  based_element_id: ObjectId, legislation: ObjectId, element_value: float):
+    try:
+        # Based Value
+        value = await get_employee_element_value(based_element_id, employee_id)
+        print("based_element_id", based_element_id)
+        print("employee_id", employee_id)
+        print("based value:", value)
+        # No. of Month Days
+        period_days = get_period_days(period_start_date, period_end_date)
+        print("period days:", period_days)
+
+        legislation_doc = await legislations_collection.find_one({"_id": legislation})
+        if not legislation_doc:
+            raise HTTPException(status_code=404, detail="Legislation not found")
+        # No. of working hours
+        working_hours = legislation_doc.get("number_of_working_hours_for_overtime_holidays", 0)
+        print("working_hours:", working_hours)
+
+        total_value = element_value / working_hours / period_days * value
+        print("total value:", total_value)
+        return round(total_value, 2)
+
+    except Exception as e:
+        raise e
+
+
+# ==== PY_NONRECURRING_FF ====
+async def py_nonrecurring_ff(period_start_date: datetime, period_end_date: datetime,
+                             element_start: datetime, element_end: datetime, element_value: float):
+    try:
+        if is_within_period(element_start, element_end, period_start_date, period_end_date):
+            return element_value
+        else:
+            return None
+
+    except Exception as e:
+        raise e
 
 
 # === ROLLBACK ===

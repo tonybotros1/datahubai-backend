@@ -1,3 +1,4 @@
+import calendar
 import copy
 from typing import Optional, List, Any
 from bson import ObjectId
@@ -1145,6 +1146,10 @@ class EmployeePayrollModel(BaseModel):
     notes: Optional[str] = None
 
 
+class PayrollFilterModel(BaseModel):
+    period: Optional[str] = None
+
+
 @router.post("/add_new_employee_payroll/{employee_id}")
 async def add_new_employee_payroll(employee_id: str, payroll: EmployeePayrollModel,
                                    data: dict = Depends(security.get_current_user)):
@@ -1204,6 +1209,47 @@ async def delete_employee_payroll(payroll_id: str, _: dict = Depends(security.ge
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/filter_employee_payrolls_on_period_date/{employee_id}")
+async def filter_employee_payrolls_on_period_date(period_filter: PayrollFilterModel, employee_id: str,
+                                                  _: dict = Depends(security.get_current_user)):
+    try:
+        new_pipeline: Any = copy.deepcopy(employee_payroll_pipeline)
+        employee_id = ObjectId(employee_id)
+        start_date = datetime.max
+        end_date = datetime.min
+        if period_filter.period:
+            year, month = map(int, period_filter.period.split("-"))
+            start_date = datetime(year, month, 1)
+            last_day = calendar.monthrange(year, month)[1]
+            end_date = datetime(year, month, last_day)
+
+        new_pipeline.insert(0, {
+            '$match': {
+                'employee_id': employee_id,
+                'start_date': {
+                    '$lte': end_date
+                },
+                '$or': [
+                    {
+                        'end_date': {
+                            '$gte': start_date
+                        }
+                    }, {
+                        'end_date': None
+                    }
+                ]
+            }
+        })
+
+        cursor = await employees_payrolls_collection.aggregate(new_pipeline)
+        result = await cursor.to_list(None)
+        return {"payrolls_elements": result if result else []}
+
+    except Exception as e:
+        print(e)
+        raise
 
 
 # ==================== CONTACTS AND RELATIVES SECTION ====================

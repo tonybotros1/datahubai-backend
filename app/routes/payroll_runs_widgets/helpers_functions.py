@@ -138,3 +138,17 @@ async def get_used_leave_days(leave_code: str, employee_id: ObjectId, leave_star
 def get_current_leave_used_days(period_start_date: datetime, leave_start_date: datetime) -> float:
     total_days = max((period_start_date - leave_start_date).days, 0)
     return total_days
+
+
+def is_within_period(
+        element_start: datetime,
+        element_end: datetime,
+        period_start: datetime,
+        period_end: datetime
+) -> bool:
+    if element_start > element_end:
+        raise ValueError("element_start must be <= element_end")
+    if period_start > period_end:
+        raise ValueError("period_start must be <= period_end")
+
+    return element_start <= period_end and element_end >= period_start

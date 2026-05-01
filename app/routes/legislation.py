@@ -19,11 +19,13 @@ class LegislationModel(BaseModel):
     number_of_unpaid_days_for_sick_leave: Optional[int] = None
     number_of_paid_days_for_maternity_leave: Optional[int] = None
     number_of_paid_days_for_compassionate_leave: Optional[int] = None
+    number_of_paid_days_for_paternity_leave: Optional[int] = None
+    number_of_working_hours_for_overtime_normal: Optional[float] = None
+    number_of_working_hours_for_overtime_holidays: Optional[float] = None
 
 
 class SearchModel(BaseModel):
     name: Optional[str] = None
-
 
 
 @router.get("/get_all_legislations")

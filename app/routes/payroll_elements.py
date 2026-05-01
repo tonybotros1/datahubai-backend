@@ -195,7 +195,7 @@ async def add_new_payroll_element(payroll_element: PayrollElementsModel,
             "type": "payroll_element_added",
             "data": added_element
         })
-        return {"message": "added successfully!", "added_element": added_element}
+        return {"message": "added successfully!", "added_element_id": str(new_element.inserted_id)}
 
 
     except Exception as e:
@@ -294,7 +294,8 @@ async def get_payroll_elements_for_lov(data: dict = Depends(security.get_current
     try:
         company_id = ObjectId(data.get("company_id"))
         results = await payroll_elements_collection.find({"company_id": company_id, "is_indirect": False},
-                                                         {"_id": 1, "name": 1}).sort({"name": 1}).to_list(
+                                                         {"_id": 1, "name": 1, "key": 11, "is_recurring": 1}).sort(
+            {"name": 1}).to_list(
             None)
         return {
             "elements": jsonable_encoder(
