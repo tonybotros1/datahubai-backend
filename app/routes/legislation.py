@@ -22,6 +22,11 @@ class LegislationModel(BaseModel):
     number_of_paid_days_for_paternity_leave: Optional[int] = None
     number_of_working_hours_for_overtime_normal: Optional[float] = None
     number_of_working_hours_for_overtime_holidays: Optional[float] = None
+    social_security_employee_percentage: Optional[float] = None
+    social_security_employer_percentage: Optional[float] = None
+    social_security_ceiling: Optional[float] = None
+    gratuity_first_5_years: Optional[int] = None
+    gratuity_after_5_years: Optional[int] = None
 
 
 class SearchModel(BaseModel):

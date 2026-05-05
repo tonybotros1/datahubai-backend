@@ -288,6 +288,41 @@ async def payroll_run(run: PayrollRunModel, data: dict = Depends(security.get_cu
                                         "payroll_element_id": employee_payroll.get("name"),
                                         "number": 0
                                     })
+                        if element_function.upper() == "PY_SOCIAL_SECURITY_EMPLOYEE_FF":
+                            if is_within_period(element_start, element_end, period_start_date, period_end_date):
+                                value = await py_social_security_employee_ff(ObjectId(current_employee_id),
+                                                                             employee_payroll.get("name"), legislation)
+                                if value:
+                                    elements_values_maps[current_employee_id].append({
+                                        "element_id": employee_payroll.get("_id"),
+                                        "value": value,
+                                        "payroll_element_id": employee_payroll.get("name"),
+                                        "number": 0
+                                    })
+                        if element_function.upper() == "PY_SOCIAL_SECURITY_EMPLOYER_FF":
+                            if is_within_period(element_start, element_end, period_start_date, period_end_date):
+                                value = await py_social_security_employer_ff(ObjectId(current_employee_id),
+                                                                             employee_payroll.get("name"), legislation)
+                                if value:
+                                    elements_values_maps[current_employee_id].append({
+                                        "element_id": employee_payroll.get("_id"),
+                                        "value": value,
+                                        "payroll_element_id": employee_payroll.get("name"),
+                                        "number": 0
+                                    })
+                        if element_function.upper() == "PY_GRATUITY_ACCRUAL_FF":
+                            if is_within_period(element_start, element_end, period_start_date, period_end_date):
+                                value = await py_gratuity_accrual_ff(ObjectId(current_employee_id), employee_hire_date,
+                                                                     employee_end_date, element_start, element_end,
+                                                                     period_start_date, period_end_date,
+                                                                     employee_payroll.get("name"), legislation)
+                                if value:
+                                    elements_values_maps[current_employee_id].append({
+                                        "element_id": employee_payroll.get("_id"),
+                                        "value": value,
+                                        "payroll_element_id": employee_payroll.get("name"),
+                                        "number": 0
+                                    })
 
             # === employee leaves ===:
             employee_leaves = await employees_leaves_collection.find(
@@ -697,22 +732,16 @@ async def py_overtime_holidays_ff(employee_id: ObjectId, period_start_date: date
     try:
         # Based Value
         value = await get_employee_element_value(based_element_id, employee_id)
-        print("based_element_id", based_element_id)
-        print("employee_id", employee_id)
-        print("based value:", value)
         # No. of Month Days
         period_days = get_period_days(period_start_date, period_end_date)
-        print("period days:", period_days)
 
         legislation_doc = await legislations_collection.find_one({"_id": legislation})
         if not legislation_doc:
             raise HTTPException(status_code=404, detail="Legislation not found")
         # No. of working hours
         working_hours = legislation_doc.get("number_of_working_hours_for_overtime_holidays", 0)
-        print("working_hours:", working_hours)
 
         total_value = element_value / working_hours / period_days * value
-        print("total value:", total_value)
         return round(total_value, 2)
 
     except Exception as e:
@@ -727,6 +756,83 @@ async def py_nonrecurring_ff(period_start_date: datetime, period_end_date: datet
             return element_value
         else:
             return None
+
+    except Exception as e:
+        raise e
+
+
+# ==== PY_SOCIAL_SECURITY_EMPLOYEE_FF ====
+async def py_social_security_employee_ff(employee_id: ObjectId, based_element_id: ObjectId, legislation: ObjectId):
+    try:
+        # Based Value
+        value = await get_employee_element_value(based_element_id, employee_id)
+
+        legislation_doc = await legislations_collection.find_one({"_id": legislation})
+        if not legislation_doc:
+            raise HTTPException(status_code=404, detail="Legislation not found")
+        # No. of working hours
+        social_security_employee_percentage = legislation_doc.get("social_security_employee_percentage", 0) / 100
+        social_security_ceiling = legislation_doc.get("social_security_ceiling", 0)
+        if not social_security_ceiling or social_security_ceiling == 0:
+            social_security_ceiling = value
+
+        social_security_employee = social_security_employee_percentage * min(value, social_security_ceiling)
+        return round(social_security_employee, 2)
+
+    except Exception as e:
+        raise e
+
+
+# ==== PY_SOCIAL_SECURITY_EMPLOYER_FF ====
+async def py_social_security_employer_ff(employee_id: ObjectId, based_element_id: ObjectId, legislation: ObjectId):
+    try:
+        # Based Value
+        value = await get_employee_element_value(based_element_id, employee_id)
+
+        legislation_doc = await legislations_collection.find_one({"_id": legislation})
+        if not legislation_doc:
+            raise HTTPException(status_code=404, detail="Legislation not found")
+        # No. of working hours
+        social_security_employer_percentage = legislation_doc.get("social_security_employer_percentage", 0) / 100
+        social_security_ceiling = legislation_doc.get("social_security_ceiling", 0)
+        if not social_security_ceiling or social_security_ceiling == 0:
+            social_security_ceiling = value
+
+        social_security_employer = social_security_employer_percentage * min(value, social_security_ceiling)
+        return round(social_security_employer, 2)
+
+    except Exception as e:
+        raise e
+
+
+# ==== PY_GRATUITY_ACCRUAL_FF ====
+async def py_gratuity_accrual_ff(employee_id: ObjectId, employee_hire_date: datetime, employee_end_date: datetime,
+                                 element_start: datetime, element_end: datetime, period_start_date: datetime,
+                                 period_end_date: datetime, based_element_id: ObjectId, legislation: ObjectId, ):
+    try:
+        value = await get_employee_element_value(based_element_id, employee_id)
+        legislation_doc = await legislations_collection.find_one({"_id": legislation})
+        if not legislation_doc:
+            raise HTTPException(status_code=404, detail="Legislation not found")
+
+        gratuity_first_5_years = legislation_doc.get("gratuity_first_5_years", 21)
+        gratuity_after_5_years = legislation_doc.get("gratuity_after_5_years", 30)
+
+        effective_service_days: int = (period_end_date - employee_hire_date).days + 1
+        service_years: float = effective_service_days / 365
+        entitlement_days: int = gratuity_first_5_years if service_years <= 5 else gratuity_after_5_years
+
+        date1 = max(employee_hire_date, element_start, period_start_date)
+        date2 = min(employee_end_date, element_end, period_end_date)
+        working_days: int = max((date2 - date1).days + 1, 0)
+        period_days: int = get_period_days(period_start_date, period_end_date)
+
+        if period_days == 0:
+            p_days = 0  # p_days refers to paid days
+        else:
+            p_days = entitlement_days / 12 * (working_days / period_days)
+        final_value = (p_days * value) / 30
+        return round(final_value, 2)
 
     except Exception as e:
         raise e

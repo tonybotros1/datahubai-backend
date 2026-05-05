@@ -241,6 +241,43 @@ main_screen_pipeline: list[dict[str, Any]] = [
 
 details_pipeline = [
     {
+        '$match': {
+            '_id': ObjectId('69cfa8718f07622eb9ce9b68')
+        }
+    }, {
+        '$addFields': {
+            'period_start_date': {
+                '$dateFromParts': {
+                    'year': {
+                        '$year': '$$NOW'
+                    },
+                    'month': {
+                        '$month': '$$NOW'
+                    },
+                    'day': 1
+                }
+            },
+            'period_end_date': {
+                '$subtract': [
+                    {
+                        '$dateFromParts': {
+                            'year': {
+                                '$year': '$$NOW'
+                            },
+                            'month': {
+                                '$add': [
+                                    {
+                                        '$month': '$$NOW'
+                                    }, 1
+                                ]
+                            },
+                            'day': 1
+                        }
+                    }, 1
+                ]
+            }
+        }
+    }, {
         '$addFields': {
             'all_ids': [
                 '$employer', '$department', '$job_title', '$location', '$gender', '$martial_status'
@@ -302,14 +339,36 @@ details_pipeline = [
         '$lookup': {
             'from': 'employees_payrolls',
             'let': {
-                'employee_id': '$_id'
+                'employee_id': '$_id',
+                'period_start_date': '$period_start_date',
+                'period_end_date': '$period_end_date'
             },
             'pipeline': [
                 {
                     '$match': {
                         '$expr': {
-                            '$eq': [
-                                '$employee_id', '$$employee_id'
+                            '$and': [
+                                {
+                                    '$eq': [
+                                        '$employee_id', '$$employee_id'
+                                    ]
+                                }, {
+                                    '$lte': [
+                                        '$start_date', '$$period_end_date'
+                                    ]
+                                }, {
+                                    '$or': [
+                                        {
+                                            '$gte': [
+                                                '$end_date', '$$period_start_date'
+                                            ]
+                                        }, {
+                                            '$eq': [
+                                                '$end_date', None
+                                            ]
+                                        }
+                                    ]
+                                }
                             ]
                         }
                     }
@@ -465,14 +524,36 @@ details_pipeline = [
         '$lookup': {
             'from': 'employees_nationality',
             'let': {
-                'employee_id': '$_id'
+                'employee_id': '$_id',
+                'period_start_date': '$period_start_date',
+                'period_end_date': '$period_end_date'
             },
             'pipeline': [
                 {
                     '$match': {
                         '$expr': {
-                            '$eq': [
-                                '$employee_id', '$$employee_id'
+                            '$and': [
+                                {
+                                    '$eq': [
+                                        '$employee_id', '$$employee_id'
+                                    ]
+                                }, {
+                                    '$lte': [
+                                        '$start_date', '$$period_end_date'
+                                    ]
+                                }, {
+                                    '$or': [
+                                        {
+                                            '$gte': [
+                                                '$end_date', '$$period_start_date'
+                                            ]
+                                        }, {
+                                            '$eq': [
+                                                '$end_date', None
+                                            ]
+                                        }
+                                    ]
+                                }
                             ]
                         }
                     }
@@ -806,7 +887,9 @@ details_pipeline = [
             'country_details': 0,
             'reporting_manager_details': 0,
             'legislation_details': 0,
-            'payroll_details': 0
+            'payroll_details': 0,
+            'period_start_date': 0,
+            'period_end_date': 0
         }
     }
 ]
@@ -1740,6 +1823,46 @@ async def delete_employee_nationality(nationality_id: str, _: dict = Depends(sec
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
+@router.post("/filter_employee_nationalities_on_period_date/{employee_id}")
+async def filter_employee_nationalities_on_period_date(period_filter: PayrollFilterModel, employee_id: str,
+                                                  _: dict = Depends(security.get_current_user)):
+    try:
+        new_pipeline: Any = copy.deepcopy(employee_nationality_pipeline)
+        employee_id = ObjectId(employee_id)
+        start_date = datetime.max
+        end_date = datetime.min
+        if period_filter.period:
+            year, month = map(int, period_filter.period.split("-"))
+            start_date = datetime(year, month, 1)
+            last_day = calendar.monthrange(year, month)[1]
+            end_date = datetime(year, month, last_day)
+
+        new_pipeline.insert(0, {
+            '$match': {
+                'employee_id': employee_id,
+                'start_date': {
+                    '$lte': end_date
+                },
+                '$or': [
+                    {
+                        'end_date': {
+                            '$gte': start_date
+                        }
+                    }, {
+                        'end_date': None
+                    }
+                ]
+            }
+        })
+
+        cursor = await employees_nationality_collection.aggregate(new_pipeline)
+        result = await cursor.to_list(None)
+        return {"nationality_elements": result if result else []}
+
+    except Exception as e:
+        print(e)
+        raise
 
 # ==================== PHONE SECTION ====================
 employee_phones_pipeline = [
