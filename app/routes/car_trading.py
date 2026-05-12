@@ -23,6 +23,31 @@ all_capitals_collection = get_collection("all_capitals")
 all_outstanding_collection = get_collection("all_outstanding")
 all_general_expenses_collection = get_collection("all_general_expenses")
 all_trades_transfers_collection = get_collection("all_trades_transfers")
+car_trading_indexes_ready = False
+
+
+async def ensure_car_trading_indexes():
+    global car_trading_indexes_ready
+    if car_trading_indexes_ready:
+        return
+
+    trade_filter_indexes = [
+        [("company_id", 1), ("status", 1)],
+        [("company_id", 1), ("car_brand", 1)],
+        [("company_id", 1), ("car_model", 1)],
+        [("company_id", 1), ("specification", 1)],
+        [("company_id", 1), ("engine_size", 1)],
+        [("company_id", 1), ("bought_from", 1)],
+        [("company_id", 1), ("bought_by", 1)],
+        [("company_id", 1), ("sold_by", 1)],
+        [("company_id", 1), ("sold_to", 1)],
+    ]
+    for index in trade_filter_indexes:
+        await all_trades_collection.create_index(index)
+
+    await all_trades_items_collection.create_index([("trade_id", 1), ("company_id", 1)])
+    await all_trades_purchase_agreement_items_collection.create_index([("trade_id", 1), ("company_id", 1)])
+    car_trading_indexes_ready = True
 
 
 class CapitalModel(BaseModel):
@@ -178,6 +203,55 @@ def bson_serializer(obj):
 
 def car_trade_search_serializer(trade: dict) -> dict:
     return bson_serializer(trade)
+
+
+def parse_object_id(value: Any, field_name: str = "id") -> ObjectId:
+    if value in (None, ""):
+        raise HTTPException(status_code=400, detail=f"{field_name} is required")
+    if isinstance(value, ObjectId):
+        return value
+    value = str(value)
+    if not ObjectId.is_valid(value):
+        raise HTTPException(status_code=400, detail=f"Invalid {field_name}")
+    return ObjectId(value)
+
+
+def optional_object_id(value: Any, field_name: str) -> Optional[ObjectId]:
+    if value in (None, ""):
+        return None
+    return parse_object_id(value, field_name)
+
+
+def require_payload_field(payload: dict, field_name: str, label: Optional[str] = None) -> Any:
+    value = payload.get(field_name)
+    if value in (None, ""):
+        raise HTTPException(status_code=400, detail=f"{label or field_name} is required")
+    return value
+
+
+def zero_if_none(value: Optional[float]) -> float:
+    return value if value is not None else 0
+
+
+def exclusive_date_end(value: datetime) -> datetime:
+    if (
+            value.hour == 0
+            and value.minute == 0
+            and value.second == 0
+            and value.microsecond == 0
+    ):
+        return value + timedelta(days=1)
+    return value
+
+
+async def ensure_trade_belongs_to_company(trade_id: ObjectId, company_id: ObjectId):
+    trade = await all_trades_collection.find_one(
+        {"_id": trade_id, "company_id": company_id},
+        {"_id": 1},
+    )
+    if not trade:
+        raise HTTPException(status_code=404, detail="Trade not found")
+    return trade
 
 
 def serialize(document: dict) -> dict:
@@ -404,10 +478,13 @@ async def get_all_transfers(data: dict = Depends(security.get_current_user)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-async def get_transfer_details(transfer_id: ObjectId):
+async def get_transfer_details(transfer_id: ObjectId, company_id: Optional[ObjectId] = None):
     try:
         details_pipeline: Any = copy.deepcopy(transfer_pipeline)
-        details_pipeline.insert(0, {"$match": {"_id": transfer_id}})
+        match_stage = {"_id": transfer_id}
+        if company_id is not None:
+            match_stage["company_id"] = company_id
+        details_pipeline.insert(0, {"$match": match_stage})
 
         cursor = await all_trades_transfers_collection.aggregate(details_pipeline)
         results = await cursor.to_list(length=1)
@@ -423,11 +500,23 @@ async def add_new_transfer(transfer_data: TransferModel, data: dict = Depends(se
     try:
         company_id = ObjectId(data.get("company_id"))
         transfer_data = transfer_data.model_dump(exclude_unset=True)
+        from_account = parse_object_id(
+            require_payload_field(transfer_data, "from_account", "From account"),
+            "from_account",
+        )
+        to_account = parse_object_id(
+            require_payload_field(transfer_data, "to_account", "To account"),
+            "to_account",
+        )
+        if from_account == to_account:
+            raise HTTPException(status_code=400, detail="From and to accounts must be different")
+        require_payload_field(transfer_data, "date", "Date")
 
         transfer_data.update({
             "company_id": company_id,
-            "from_account": ObjectId(transfer_data["from_account"]) if transfer_data["from_account"] else None,
-            "to_account": ObjectId(transfer_data["to_account"]) if transfer_data["to_account"] else None,
+            "from_account": from_account,
+            "to_account": to_account,
+            "amount": zero_if_none(transfer_data.get("amount")),
             "createdAt": security.now_utc(),
             "updatedAt": security.now_utc(),
         })
@@ -436,15 +525,17 @@ async def add_new_transfer(transfer_data: TransferModel, data: dict = Depends(se
         if not result.inserted_id:
             raise HTTPException(status_code=500, detail="Failed to insert transfer item")
 
-        added_transfer = await get_transfer_details(result.inserted_id)
+        added_transfer = await get_transfer_details(result.inserted_id, company_id)
 
         encoded_data = jsonable_encoder(added_transfer)
         await manager.send_to_company(str(company_id), {
             "type": "transfer_created",
             "data": encoded_data
         })
+        return {"message": "Transfer added successfully", "data": encoded_data}
 
-
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -454,27 +545,45 @@ async def update_new_transfer(transfer_id: str, transfer_data: TransferModel,
                               data: dict = Depends(security.get_current_user)):
     try:
         company_id = ObjectId(data.get("company_id"))
-        transfer_id = ObjectId(transfer_id)
+        transfer_id = parse_object_id(transfer_id, "transfer_id")
         transfer_data = transfer_data.model_dump(exclude_unset=True)
+        from_account = parse_object_id(
+            require_payload_field(transfer_data, "from_account", "From account"),
+            "from_account",
+        )
+        to_account = parse_object_id(
+            require_payload_field(transfer_data, "to_account", "To account"),
+            "to_account",
+        )
+        if from_account == to_account:
+            raise HTTPException(status_code=400, detail="From and to accounts must be different")
+        require_payload_field(transfer_data, "date", "Date")
 
         transfer_data.update({
-            "company_id": company_id,
-            "from_account": ObjectId(transfer_data["from_account"]) if transfer_data["from_account"] else None,
-            "to_account": ObjectId(transfer_data["to_account"]) if transfer_data["to_account"] else None,
-            "createdAt": security.now_utc(),
+            "from_account": from_account,
+            "to_account": to_account,
+            "amount": zero_if_none(transfer_data.get("amount")),
             "updatedAt": security.now_utc(),
         })
 
-        await all_trades_transfers_collection.update_one({"_id": transfer_id}, {"$set": transfer_data})
+        result = await all_trades_transfers_collection.update_one(
+            {"_id": transfer_id, "company_id": company_id},
+            {"$set": transfer_data},
+        )
+        if result.matched_count == 0:
+            raise HTTPException(status_code=404, detail="Transfer not found")
 
-        added_transfer = await get_transfer_details(transfer_id)
+        added_transfer = await get_transfer_details(transfer_id, company_id)
 
         encoded_data = jsonable_encoder(added_transfer)
         await manager.send_to_company(str(company_id), {
             "type": "transfer_updated",
             "data": encoded_data
         })
+        return {"message": "Transfer updated successfully", "data": encoded_data}
 
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -482,17 +591,22 @@ async def update_new_transfer(transfer_id: str, transfer_data: TransferModel,
 @router.delete("/delete_transfer/{transfer_id}")
 async def delete_transfer(transfer_id: str, data: dict = Depends(security.get_current_user)):
     try:
-        company_id = data.get("company_id")
-        transfer_id = ObjectId(transfer_id)
-        result = await all_trades_transfers_collection.delete_one({"_id": transfer_id})
+        company_id = ObjectId(data.get("company_id"))
+        transfer_id = parse_object_id(transfer_id, "transfer_id")
+        result = await all_trades_transfers_collection.delete_one(
+            {"_id": transfer_id, "company_id": company_id},
+        )
         if result.deleted_count == 0:
             raise HTTPException(status_code=404, detail="Transfer not found")
 
-        await manager.send_to_company(company_id, {
+        await manager.send_to_company(str(company_id), {
             "type": "transfer_deleted",
             "data": {"_id": str(transfer_id)}
         })
+        return {"message": "Transfer deleted successfully"}
 
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -501,13 +615,16 @@ async def delete_transfer(transfer_id: str, data: dict = Depends(security.get_cu
 
 @router.get("/get_purchase_agreement_for_current_trade/{trade_id}")
 async def get_purchase_agreement_for_current_trade(trade_id: str,
-                                                   _: dict = Depends(security.get_current_user)):
+                                                   data: dict = Depends(security.get_current_user)):
     try:
-        trade_id = ObjectId(trade_id)
+        company_id = ObjectId(data.get("company_id"))
+        trade_id = parse_object_id(trade_id, "trade_id")
+        await ensure_trade_belongs_to_company(trade_id, company_id)
         purchase_agreement_items_pipeline = [
             {
                 '$match': {
-                    'trade_id': trade_id
+                    'trade_id': trade_id,
+                    'company_id': company_id,
                 }
             }, {
                 '$sort': {
@@ -531,6 +648,8 @@ async def get_purchase_agreement_for_current_trade(trade_id: str,
         results = await cursor.to_list(None)
         return {'purchase_agreement_items': results if results else []}
 
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -541,18 +660,24 @@ async def add_purchase_agreement_item(purchase_agreement_item: PurchaseAgreement
     try:
         company_id = ObjectId(data.get('company_id'))
         purchase_agreement_item_dict = purchase_agreement_item.model_dump(exclude_unset=True)
-        trade_id = purchase_agreement_item_dict.get("trade_id")
-        if not trade_id:
-            raise HTTPException(status_code=400, detail="No trade id found")
+        trade_id = parse_object_id(
+            require_payload_field(purchase_agreement_item_dict, "trade_id", "Trade id"),
+            "trade_id",
+        )
+        await ensure_trade_belongs_to_company(trade_id, company_id)
+        require_payload_field(purchase_agreement_item_dict, "agreement_date", "Agreement date")
+        require_payload_field(purchase_agreement_item_dict, "seller_name", "Seller name")
+        require_payload_field(purchase_agreement_item_dict, "buyer_name", "Buyer name")
         new_purchase_agreement_counter = await create_custom_counter("CMP", "CM", data=data,
                                                                      description='Compass Motors Purchase Agreement')
 
         purchase_agreement_item_dict.update({
-            "trade_id": ObjectId(purchase_agreement_item_dict["trade_id"]) if purchase_agreement_item_dict[
-                "trade_id"] else None,
+            "trade_id": trade_id,
             "company_id": company_id,
             "createdAt": security.now_utc(),
             "updatedAt": security.now_utc(),
+            "agreement_amount": zero_if_none(purchase_agreement_item_dict.get("agreement_amount")),
+            "agreement_down_payment": zero_if_none(purchase_agreement_item_dict.get("agreement_down_payment")),
             "agreement_number": new_purchase_agreement_counter['final_counter'] if new_purchase_agreement_counter[
                 'success'] else None,
         })
@@ -572,8 +697,10 @@ async def add_purchase_agreement_item(purchase_agreement_item: PurchaseAgreement
             "type": "purchase_agreement_item_created",
             "data": encoded_data
         })
+        return {"message": "Sales agreement added successfully", "data": encoded_data}
 
-
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -582,12 +709,13 @@ async def add_purchase_agreement_item(purchase_agreement_item: PurchaseAgreement
 async def update_purchase_agreement_item(purchase_item_id: str, purchase_agreement_item: PurchaseAgreementModel,
                                          data: dict = Depends(security.get_current_user)):
     try:
-        company_id = data.get('company_id')
-        purchase_item_id = ObjectId(purchase_item_id)
+        company_id = ObjectId(data.get('company_id'))
+        purchase_item_id = parse_object_id(purchase_item_id, "purchase_item_id")
         purchase_agreement_item_details_pipeline = [
             {
                 '$match': {
-                    '_id': purchase_item_id
+                    '_id': purchase_item_id,
+                    'company_id': company_id,
                 }
             }, {
                 '$addFields': {
@@ -604,29 +732,40 @@ async def update_purchase_agreement_item(purchase_item_id: str, purchase_agreeme
             }
         ]
         purchase_agreement_item_dict = purchase_agreement_item.model_dump(exclude_unset=True)
-        purchase_agreement_item_dict.pop("trade_id")
+        purchase_agreement_item_dict.pop("trade_id", None)
+        require_payload_field(purchase_agreement_item_dict, "agreement_date", "Agreement date")
+        require_payload_field(purchase_agreement_item_dict, "seller_name", "Seller name")
+        require_payload_field(purchase_agreement_item_dict, "buyer_name", "Buyer name")
 
         purchase_agreement_item_dict.update({
+            "agreement_amount": zero_if_none(purchase_agreement_item_dict.get("agreement_amount")),
+            "agreement_down_payment": zero_if_none(purchase_agreement_item_dict.get("agreement_down_payment")),
             "updatedAt": security.now_utc(),
         })
 
-        result = await all_trades_purchase_agreement_items_collection.update_one({"_id": purchase_item_id},
-                                                                                 {"$set": purchase_agreement_item_dict})
+        result = await all_trades_purchase_agreement_items_collection.update_one(
+            {"_id": purchase_item_id, "company_id": company_id},
+            {"$set": purchase_agreement_item_dict},
+        )
 
-        if result.modified_count == 0:
+        if result.matched_count == 0:
             raise HTTPException(status_code=404, detail="Purchase Agreement Item not found")
 
         cursor = await all_trades_purchase_agreement_items_collection.aggregate(
             purchase_agreement_item_details_pipeline)
-        result = await cursor.next()
+        result = await cursor.to_list(length=1)
+        if not result:
+            raise HTTPException(status_code=404, detail="Purchase Agreement Item not found")
 
-        encoded_data = jsonable_encoder(result)
-        await manager.send_to_company(company_id, {
+        encoded_data = jsonable_encoder(result[0])
+        await manager.send_to_company(str(company_id), {
             "type": "purchase_agreement_item_updated",
             "data": encoded_data
         })
+        return {"message": "Sales agreement updated successfully", "data": encoded_data}
 
-
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -634,19 +773,23 @@ async def update_purchase_agreement_item(purchase_item_id: str, purchase_agreeme
 @router.delete("/delete_purchase_agreement_item/{purchase_id}")
 async def delete_purchase_agreement_item(purchase_id: str, data: dict = Depends(security.get_current_user)):
     try:
-        company_id = data.get('company_id')
-        result = await all_trades_purchase_agreement_items_collection.delete_one({"_id": ObjectId(purchase_id)})
+        company_id = ObjectId(data.get('company_id'))
+        purchase_id = parse_object_id(purchase_id, "purchase_id")
+        result = await all_trades_purchase_agreement_items_collection.delete_one(
+            {"_id": purchase_id, "company_id": company_id},
+        )
         if result.deleted_count == 1:
-            await manager.send_to_company(company_id, {
+            await manager.send_to_company(str(company_id), {
                 "type": "purchase_agreement_item_deleted",
-                "data": {"_id": purchase_id}
+                "data": {"_id": str(purchase_id)}
             })
             return {"message": "Purchase Agreement Item removed successfully!"}
-        else:
-            raise HTTPException(status_code=404, detail="item not found")
+        raise HTTPException(status_code=404, detail="item not found")
 
+    except HTTPException:
+        raise
     except Exception as error:
-        return {"message": str(error)}
+        raise HTTPException(status_code=500, detail=str(error))
 
 
 # =========================================== Capitals and Outstanding Section ===========================================
@@ -746,11 +889,18 @@ async def get_all_capitals_or_outstanding(get_type: str, data: dict = Depends(se
     }
 
 
-async def get_capital_or_outstanding_details(type_id: ObjectId, type_name: str):
+async def get_capital_or_outstanding_details(
+        type_id: ObjectId,
+        type_name: str,
+        company_id: Optional[ObjectId] = None,
+):
     try:
+        match_stage = {"_id": type_id}
+        if company_id is not None:
+            match_stage["company_id"] = company_id
         pipeline = [
             {
-                "$match": {"_id": type_id},
+                "$match": match_stage,
             },
             {
                 "$lookup": {
@@ -805,8 +955,12 @@ async def get_capital_or_outstanding_details(type_id: ObjectId, type_name: str):
             raise HTTPException(status_code=400, detail="Invalid summary_type.")
 
         result = await cursor.to_list(length=1)
+        if not result:
+            raise HTTPException(status_code=404, detail=f"{type_name.capitalize()} not found")
         return result[0]
 
+    except HTTPException:
+        raise
     except Exception as e:
         raise e
 
@@ -854,12 +1008,18 @@ async def add_new_capital_or_outstanding(add_type: str, capital: CapitalModel,
                                          data: dict = Depends(security.get_current_user)):
     try:
         company_id = ObjectId(data.get("company_id"))
+        if add_type not in ("capitals", "outstanding"):
+            raise HTTPException(status_code=400, detail="Invalid add_type.")
+        if capital.date is None:
+            raise HTTPException(status_code=400, detail="Date is required")
+        name_id = parse_object_id(capital.name, "name")
+        account_name_id = parse_object_id(capital.account_name, "account_name")
         capital_dict = {
             "company_id": company_id,
-            "name": ObjectId(capital.name) if capital.name else "",
-            "pay": capital.pay,
-            "account_name": ObjectId(capital.account_name) if capital.account_name else None,
-            "receive": capital.receive,
+            "name": name_id,
+            "pay": zero_if_none(capital.pay),
+            "account_name": account_name_id,
+            "receive": zero_if_none(capital.receive),
             "comment": capital.comment,
             "date": capital.date,
             "createdAt": security.now_utc(),
@@ -869,30 +1029,34 @@ async def add_new_capital_or_outstanding(add_type: str, capital: CapitalModel,
             result = await all_capitals_collection.insert_one(capital_dict)
         elif add_type == "outstanding":
             result = await all_outstanding_collection.insert_one(capital_dict)
-        else:
-            raise HTTPException(status_code=400, detail="Invalid add_type.")
-        new_capital_or_outstanding = await get_capital_or_outstanding_details(result.inserted_id, add_type)
+        new_capital_or_outstanding = await get_capital_or_outstanding_details(result.inserted_id, add_type, company_id)
         serialized = serialize(new_capital_or_outstanding)
         await manager.send_to_company(str(company_id), {
             "type": "capital_created" if add_type == "capitals" else "outstanding_created",
             "data": serialized
         })
-        # return {"message": "Capital created successfully!", "capital": serialized}
+        return {"message": f"{add_type.capitalize()} created successfully", "data": serialized}
 
-
+    except HTTPException:
+        raise
     except Exception as error:
-        raise error
+        raise HTTPException(status_code=500, detail=str(error))
 
 
 @router.delete("/delete_capital_or_outstanding/{type_name}/{type_id}")
 async def delete_capital_or_outstanding(type_name: str, type_id: str, data: dict = Depends(security.get_current_user)):
     try:
-        company_id = data.get("company_id")
+        company_id = ObjectId(data.get("company_id"))
+        type_object_id = parse_object_id(type_id, "type_id")
         if type_name == "capitals":
-            result = await all_capitals_collection.find_one_and_delete({"_id": ObjectId(type_id)})
+            result = await all_capitals_collection.find_one_and_delete(
+                {"_id": type_object_id, "company_id": company_id},
+            )
 
         elif type_name == "outstanding":
-            result = await all_outstanding_collection.find_one_and_delete({"_id": ObjectId(type_id)})
+            result = await all_outstanding_collection.find_one_and_delete(
+                {"_id": type_object_id, "company_id": company_id},
+            )
         else:
             raise HTTPException(status_code=400, detail="Invalid type.")
         if not result:
@@ -901,7 +1065,7 @@ async def delete_capital_or_outstanding(type_name: str, type_id: str, data: dict
             "pay": result.get("pay", 0),
             "receive": result.get("receive", 0),
         }
-        await manager.send_to_company(company_id, {
+        await manager.send_to_company(str(company_id), {
             "type": "capital_deleted" if type_name == "capitals" else "outstanding_deleted",
             "data": {"_id": type_id},
         })
@@ -910,8 +1074,10 @@ async def delete_capital_or_outstanding(type_name: str, type_id: str, data: dict
             "totals": totals
         }
 
+    except HTTPException:
+        raise
     except Exception as error:
-        raise error
+        raise HTTPException(status_code=500, detail=str(error))
 
 
 @router.patch("/update_capital_or_outstanding/{type_name}/{type_id}")
@@ -921,29 +1087,27 @@ async def update_capital_or_outstanding(type_name: str, type_id: str, capital: C
     try:
         update_data = capital.model_dump(exclude_unset=True)
         company_id = ObjectId(data.get("company_id"))
+        type_object_id = parse_object_id(type_id, "type_id")
 
-        if "name" in update_data and update_data["name"] is not None and update_data["name"] != '':
-            try:
-                update_data["name"] = ObjectId(update_data["name"])
-            except Exception:
-                raise HTTPException(status_code=400, detail="Invalid name id, must be a valid ObjectId")
-        if "account_name" in update_data and update_data["account_name"] is not None and update_data[
-            "account_name"] != '':
-            try:
-                update_data["account_name"] = ObjectId(update_data["account_name"])
-            except Exception:
-                raise HTTPException(status_code=400, detail="Invalid account_name id, must be a valid ObjectId")
+        if "name" in update_data:
+            update_data["name"] = parse_object_id(update_data["name"], "name")
+        if "account_name" in update_data:
+            update_data["account_name"] = parse_object_id(update_data["account_name"], "account_name")
+        if "pay" in update_data:
+            update_data["pay"] = zero_if_none(update_data["pay"])
+        if "receive" in update_data:
+            update_data["receive"] = zero_if_none(update_data["receive"])
 
         update_data["updatedAt"] = security.now_utc()
 
         if type_name == "capitals":
             result = await all_capitals_collection.update_one(
-                {"_id": ObjectId(type_id)},
+                {"_id": type_object_id, "company_id": company_id},
                 {"$set": update_data}
             )
         elif type_name == "outstanding":
             result = await all_outstanding_collection.update_one(
-                {"_id": ObjectId(type_id)},
+                {"_id": type_object_id, "company_id": company_id},
                 {"$set": update_data}
             )
         else:
@@ -951,12 +1115,12 @@ async def update_capital_or_outstanding(type_name: str, type_id: str, capital: C
 
         if result.matched_count == 0:
             raise HTTPException(status_code=404, detail=f"{type_name.capitalize()} not found")
-        updated_capital = await get_capital_or_outstanding_details(ObjectId(type_id), type_name)
+        updated_capital = await get_capital_or_outstanding_details(type_object_id, type_name, company_id)
         serialized = serialize(updated_capital)
 
         totals_pipeline = [
             {
-                "$match": {"company_id": ObjectId(company_id)},
+                "$match": {"company_id": company_id},
             },
             {
                 "$group": {
@@ -994,8 +1158,10 @@ async def update_capital_or_outstanding(type_name: str, type_id: str, capital: C
             "totals": totals
         }
 
+    except HTTPException:
+        raise
     except Exception as e:
-        raise e
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # =========================================== General Expenses Section ===========================================
@@ -1091,11 +1257,14 @@ async def get_all_general_expenses(data: dict = Depends(security.get_current_use
     }
 
 
-async def get_general_expenses_details(type_id: ObjectId):
+async def get_general_expenses_details(type_id: ObjectId, company_id: Optional[ObjectId] = None):
     try:
+        match_stage = {"_id": type_id}
+        if company_id is not None:
+            match_stage["company_id"] = company_id
         pipeline = [
             {
-                "$match": {"_id": type_id},
+                "$match": match_stage,
             },
             {
                 "$lookup": {
@@ -1144,8 +1313,12 @@ async def get_general_expenses_details(type_id: ObjectId):
         ]
         cursor = await all_general_expenses_collection.aggregate(pipeline)
         result = await cursor.to_list(length=1)
+        if not result:
+            raise HTTPException(status_code=404, detail="General expenses not found")
         return result[0]
 
+    except HTTPException:
+        raise
     except Exception as e:
         raise e
 
@@ -1168,12 +1341,12 @@ async def get_general_expenses_summary(filter_expenses: ExpensesSearchModel,
 
     elif filter_expenses.this_month:
         start = datetime(now.year, now.month, 1, tzinfo=timezone.utc)
-        end = datetime(now.year + (now.month // 12), ((now.month % 12) + 1), 1)
+        end = datetime(now.year + (now.month // 12), ((now.month % 12) + 1), 1, tzinfo=timezone.utc)
         date_filter[date_field] = {"$gte": start, "$lt": end}
 
     elif filter_expenses.this_year:
         start = datetime(now.year, 1, 1, tzinfo=timezone.utc)
-        end = datetime(now.year + 1, 1, 1)
+        end = datetime(now.year + 1, 1, 1, tzinfo=timezone.utc)
         date_filter[date_field] = {"$gte": start, "$lt": end}
 
     elif filter_expenses.from_date or filter_expenses.to_date:
@@ -1181,7 +1354,7 @@ async def get_general_expenses_summary(filter_expenses: ExpensesSearchModel,
         if filter_expenses.from_date:
             date_filter[date_field]["$gte"] = filter_expenses.from_date
         if filter_expenses.to_date:
-            date_filter[date_field]["$lte"] = filter_expenses.to_date
+            date_filter[date_field]["$lt"] = exclusive_date_end(filter_expenses.to_date)
 
     if date_filter:
         expenses_search_pipeline.append({"$match": date_filter})
@@ -1420,6 +1593,75 @@ async def get_general_expenses_summary(filter_expenses: ExpensesSearchModel,
         "count": 0,
         "net_profit": 0
     }
+    sell_item_conditions = [{'$eq': ['$$item.item_detail.name', 'SELL']}]
+    date_range = date_filter.get("date", {})
+    if "$gte" in date_range:
+        sell_item_conditions.append({'$gte': ['$$item.date', date_range["$gte"]]})
+    if "$lt" in date_range:
+        sell_item_conditions.append({'$lt': ['$$item.date', date_range["$lt"]]})
+    if "$lte" in date_range:
+        sell_item_conditions.append({'$lte': ['$$item.date', date_range["$lte"]]})
+    trade_net_pipeline = [
+        {'$match': {'company_id': company_id, 'status': 'Sold'}},
+        {
+            '$lookup': {
+                'from': 'all_trades_items',
+                'let': {'trade_id': '$_id'},
+                'pipeline': [
+                    {'$match': {'$expr': {'$eq': ['$trade_id', '$$trade_id']}}},
+                    {
+                        '$lookup': {
+                            'from': 'all_lists_values',
+                            'localField': 'item',
+                            'foreignField': '_id',
+                            'as': 'item_detail',
+                        }
+                    },
+                    {'$unwind': {'path': '$item_detail', 'preserveNullAndEmptyArrays': True}},
+                ],
+                'as': 'trade_items',
+            }
+        },
+    ]
+    if date_filter:
+        trade_net_pipeline.append({
+            '$match': {
+                '$expr': {
+                    '$gt': [
+                        {
+                            '$size': {
+                                '$filter': {
+                                    'input': '$trade_items',
+                                    'as': 'item',
+                                    'cond': {'$and': sell_item_conditions},
+                                }
+                            }
+                        },
+                        0,
+                    ]
+                }
+            }
+        })
+    trade_net_pipeline.extend([
+        {'$unwind': '$trade_items'},
+        {
+            '$group': {
+                '_id': None,
+                'total_trades_pay': {'$sum': {'$ifNull': ['$trade_items.pay', 0]}},
+                'total_trades_receive': {'$sum': {'$ifNull': ['$trade_items.receive', 0]}},
+            }
+        },
+        {
+            '$project': {
+                '_id': 0,
+                'total_trades_net': {'$subtract': ['$total_trades_receive', '$total_trades_pay']},
+            }
+        },
+    ])
+    trade_cursor = await all_trades_collection.aggregate(trade_net_pipeline)
+    trade_result = await trade_cursor.to_list(length=1)
+    trade_net = trade_result[0]["total_trades_net"] if trade_result else 0
+    summary["net_profit"] = trade_net + summary.get("total_net", 0)
 
     return {"summary": summary}
 
@@ -1429,12 +1671,16 @@ async def add_new_general_expenses(general: GeneralExpensesModel,
                                    data: dict = Depends(security.get_current_user)):
     try:
         company_id = ObjectId(data.get("company_id"))
+        if general.date is None:
+            raise HTTPException(status_code=400, detail="Date is required")
+        item_id = parse_object_id(general.item, "item")
+        account_name_id = parse_object_id(general.account_name, "account_name")
         capital_dict = {
             "company_id": company_id,
-            "item": ObjectId(general.item) if general.item else "",
-            "pay": general.pay,
-            "receive": general.receive,
-            "account_name": ObjectId(general.account_name) if general.account_name else None,
+            "item": item_id,
+            "pay": zero_if_none(general.pay),
+            "receive": zero_if_none(general.receive),
+            "account_name": account_name_id,
             "comment": general.comment,
             "date": general.date,
             "createdAt": security.now_utc(),
@@ -1443,30 +1689,35 @@ async def add_new_general_expenses(general: GeneralExpensesModel,
 
         result = await all_general_expenses_collection.insert_one(capital_dict)
 
-        new_capital_or_outstanding = await get_general_expenses_details(result.inserted_id)
+        new_capital_or_outstanding = await get_general_expenses_details(result.inserted_id, company_id)
         serialized = general_expenses_serialize(new_capital_or_outstanding)
         await manager.send_to_company(str(company_id), {
             "type": "general_expenses_created",
             "data": serialized
         })
+        return {"message": "General expenses created successfully", "data": serialized}
 
-
+    except HTTPException:
+        raise
     except Exception as error:
-        raise error
+        raise HTTPException(status_code=500, detail=str(error))
 
 
 @router.delete("/delete_general_expenses/{type_id}")
 async def delete_general_expenses(type_id: str, data: dict = Depends(security.get_current_user)):
     try:
-        company_id = data.get("company_id")
-        result = await all_general_expenses_collection.find_one_and_delete({"_id": ObjectId(type_id)})
+        company_id = ObjectId(data.get("company_id"))
+        type_object_id = parse_object_id(type_id, "type_id")
+        result = await all_general_expenses_collection.find_one_and_delete(
+            {"_id": type_object_id, "company_id": company_id},
+        )
         if not result:
             raise HTTPException(status_code=404, detail="General expenses not found.")
         totals = {
             "pay": result.get("pay", 0),
             "receive": result.get("receive", 0),
         }
-        await manager.send_to_company(company_id, {
+        await manager.send_to_company(str(company_id), {
             "type": "general_expenses_deleted",
             "data": {"_id": type_id},
         })
@@ -1475,8 +1726,10 @@ async def delete_general_expenses(type_id: str, data: dict = Depends(security.ge
             "totals": totals
         }
 
+    except HTTPException:
+        raise
     except Exception as error:
-        raise error
+        raise HTTPException(status_code=500, detail=str(error))
 
 
 @router.patch("/update_generale_expenses/{type_id}")
@@ -1486,34 +1739,32 @@ async def update_generale_expenses(type_id: str, general: GeneralExpensesModel,
     try:
         update_data = general.model_dump(exclude_unset=True)
         company_id = ObjectId(data.get("company_id"))
+        type_object_id = parse_object_id(type_id, "type_id")
 
-        if "item" in update_data and update_data["item"] is not None and update_data["item"] != '':
-            try:
-                update_data["item"] = ObjectId(update_data["item"])
-            except Exception:
-                raise HTTPException(status_code=400, detail="Invalid item id, must be a valid ObjectId")
-        if "account_name" in update_data and update_data["account_name"] is not None and update_data[
-            "account_name"] != '':
-            try:
-                update_data["account_name"] = ObjectId(update_data["account_name"])
-            except Exception:
-                raise HTTPException(status_code=400, detail="Invalid account_name id, must be a valid ObjectId")
+        if "item" in update_data:
+            update_data["item"] = parse_object_id(update_data["item"], "item")
+        if "account_name" in update_data:
+            update_data["account_name"] = parse_object_id(update_data["account_name"], "account_name")
+        if "pay" in update_data:
+            update_data["pay"] = zero_if_none(update_data["pay"])
+        if "receive" in update_data:
+            update_data["receive"] = zero_if_none(update_data["receive"])
 
         update_data["updatedAt"] = security.now_utc()
 
         result = await all_general_expenses_collection.update_one(
-            {"_id": ObjectId(type_id)},
+            {"_id": type_object_id, "company_id": company_id},
             {"$set": update_data}
         )
 
         if result.matched_count == 0:
             raise HTTPException(status_code=404, detail="General expenses not found")
-        updated_capital = await get_general_expenses_details(ObjectId(type_id))
+        updated_capital = await get_general_expenses_details(type_object_id, company_id)
         serialized = general_expenses_serialize(updated_capital)
 
         totals_pipeline = [
             {
-                "$match": {"company_id": ObjectId(company_id)},
+                "$match": {"company_id": company_id},
             },
             {
                 "$group": {
@@ -1546,8 +1797,10 @@ async def update_generale_expenses(type_id: str, general: GeneralExpensesModel,
             "totals": totals
         }
 
+    except HTTPException:
+        raise
     except Exception as e:
-        raise e
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # =========================================== Car Trading Section ===========================================
@@ -1556,6 +1809,12 @@ async def update_generale_expenses(type_id: str, general: GeneralExpensesModel,
 async def add_new_trade(trade: CarTradingModel, data: dict = Depends(security.get_current_user)):
     try:
         company_id = ObjectId(data.get("company_id"))
+        if trade.date is None:
+            raise HTTPException(status_code=400, detail="Transaction date is required")
+        if not trade.car_brand:
+            raise HTTPException(status_code=400, detail="Car brand is required")
+        if not trade.car_model:
+            raise HTTPException(status_code=400, detail="Car model is required")
         trade_dict = {
             "company_id": company_id if company_id else "",
             "date": trade.date,
@@ -1591,9 +1850,12 @@ async def add_new_trade(trade: CarTradingModel, data: dict = Depends(security.ge
         raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
 
 
-async def get_trade_item_details(item_id: ObjectId):
+async def get_trade_item_details(item_id: ObjectId, company_id: Optional[ObjectId] = None):
     item_details_pipeline: Any = copy.deepcopy(trade_item_details_pipeline)
-    item_details_pipeline.insert(0, {"$match": {"_id": ObjectId(item_id)}})
+    match_stage = {"_id": ObjectId(item_id)}
+    if company_id is not None:
+        match_stage["company_id"] = company_id
+    item_details_pipeline.insert(0, {"$match": match_stage})
     cursor = await all_trades_items_collection.aggregate(item_details_pipeline)
     result = await cursor.to_list(length=1)
     return result[0] if result else None
@@ -1604,23 +1866,42 @@ async def add_trade_item(item_model: CarTradingItemsModel, data: dict = Depends(
     try:
         company_id = ObjectId(data.get("company_id"))
         item_model = item_model.model_dump(exclude_unset=True)
+        trade_id = parse_object_id(
+            require_payload_field(item_model, "trade_id", "Trade id"),
+            "trade_id",
+        )
+        await ensure_trade_belongs_to_company(trade_id, company_id)
+        item_id = parse_object_id(
+            require_payload_field(item_model, "item", "Item"),
+            "item",
+        )
+        account_name_id = parse_object_id(
+            require_payload_field(item_model, "account_name", "Account name"),
+            "account_name",
+        )
+        require_payload_field(item_model, "date", "Date")
         item_model.update({
-            "item": ObjectId(item_model['item']) if item_model['item'] else "",
-            "trade_id": ObjectId(item_model['trade_id']) if item_model['trade_id'] else "",
-            "account_name": ObjectId(item_model['account_name']) if item_model['account_name'] else "",
-            "company_id": company_id if company_id else None,
+            "item": item_id,
+            "trade_id": trade_id,
+            "account_name": account_name_id,
+            "company_id": company_id,
+            "pay": zero_if_none(item_model.get("pay")),
+            "receive": zero_if_none(item_model.get("receive")),
             "createdAt": security.now_utc(),
             "updatedAt": security.now_utc()
         })
         result = await all_trades_items_collection.insert_one(item_model)
-        added_item = await get_trade_item_details(result.inserted_id)
+        added_item = await get_trade_item_details(result.inserted_id, company_id)
         encoded_data = jsonable_encoder(added_item)
 
         await manager.send_to_company(str(company_id), {
             "type": "trade_item_added",
             "data": encoded_data
         })
+        return {"message": "Trade item added successfully", "data": encoded_data}
 
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
 
@@ -1629,24 +1910,43 @@ async def add_trade_item(item_model: CarTradingItemsModel, data: dict = Depends(
 async def update_trade_item(item_id: str, item_model: CarTradingItemsModel,
                             data: dict = Depends(security.get_current_user)):
     try:
-        company_id = data.get("company_id")
-        item_id = ObjectId(item_id)
+        company_id = ObjectId(data.get("company_id"))
+        item_id = parse_object_id(item_id, "item_id")
         item_model = item_model.model_dump(exclude_unset=True)
-        item_model.pop("trade_id")
+        item_model.pop("trade_id", None)
+        parsed_item_id = parse_object_id(
+            require_payload_field(item_model, "item", "Item"),
+            "item",
+        )
+        account_name_id = parse_object_id(
+            require_payload_field(item_model, "account_name", "Account name"),
+            "account_name",
+        )
+        require_payload_field(item_model, "date", "Date")
         item_model.update({
-            "item": ObjectId(item_model['item']) if item_model['item'] else "",
-            "account_name": ObjectId(item_model['account_name']) if item_model['account_name'] else "",
+            "item": parsed_item_id,
+            "account_name": account_name_id,
+            "pay": zero_if_none(item_model.get("pay")),
+            "receive": zero_if_none(item_model.get("receive")),
             "updatedAt": security.now_utc()
         })
-        await all_trades_items_collection.update_one({"_id": item_id}, {"$set": item_model})
-        added_item = await get_trade_item_details(item_id)
+        result = await all_trades_items_collection.update_one(
+            {"_id": item_id, "company_id": company_id},
+            {"$set": item_model},
+        )
+        if result.matched_count == 0:
+            raise HTTPException(status_code=404, detail="Trade item not found")
+        added_item = await get_trade_item_details(item_id, company_id)
         encoded_data = jsonable_encoder(added_item)
 
-        await manager.send_to_company(company_id, {
+        await manager.send_to_company(str(company_id), {
             "type": "trade_item_updated",
             "data": encoded_data
         })
+        return {"message": "Trade item updated successfully", "data": encoded_data}
 
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
 
@@ -1654,28 +1954,50 @@ async def update_trade_item(item_id: str, item_model: CarTradingItemsModel,
 @router.delete("/delete_trade_item/{item_id}")
 async def delete_trade_item(item_id: str, data: dict = Depends(security.get_current_user)):
     try:
-        company_id = data.get("company_id")
-        item_id = ObjectId(item_id)
-        await all_trades_items_collection.delete_one({"_id": item_id})
-        await manager.send_to_company(company_id, {
+        company_id = ObjectId(data.get("company_id"))
+        item_id = parse_object_id(item_id, "item_id")
+        result = await all_trades_items_collection.delete_one(
+            {"_id": item_id, "company_id": company_id},
+        )
+        if result.deleted_count == 0:
+            raise HTTPException(status_code=404, detail="Trade item not found")
+        await manager.send_to_company(str(company_id), {
             "type": "trade_item_deleted",
             "data": {"_id": str(item_id)}
         })
+        return {"message": "Trade item deleted successfully"}
 
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
 
 
 @router.patch("/update_trade/{trade_id}")
 async def update_trade(trade_id: str, trade: CarTradingModel,
-                       _: dict = Depends(security.get_current_user)):
+                       data: dict = Depends(security.get_current_user)):
     try:
+        company_id = ObjectId(data.get("company_id"))
+        trade_object_id = parse_object_id(trade_id, "trade_id")
         updated_trade = trade.model_dump(exclude_unset=True)
+        if "date" in updated_trade and updated_trade["date"] is None:
+            raise HTTPException(status_code=400, detail="Transaction date is required")
+        if "car_brand" in updated_trade and updated_trade["car_brand"] in (None, ""):
+            raise HTTPException(status_code=400, detail="Car brand is required")
+        if "car_model" in updated_trade and updated_trade["car_model"] in (None, ""):
+            raise HTTPException(status_code=400, detail="Car model is required")
 
         updated_trade["updatedAt"] = security.now_utc()
-        await all_trades_collection.update_one({"_id": ObjectId(trade_id)}, {"$set": updated_trade})
+        result = await all_trades_collection.update_one(
+            {"_id": trade_object_id, "company_id": company_id},
+            {"$set": updated_trade},
+        )
+        if result.matched_count == 0:
+            raise HTTPException(status_code=404, detail="Trade not found")
 
         return {"message": "Trade updated successfully", "trade_id": trade_id}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
 
@@ -1686,15 +2008,9 @@ async def search_engine_for_car_trading(
         data: dict = Depends(security.get_current_user)
 ):
     try:
+        await ensure_car_trading_indexes()
         company_id = ObjectId(data.get("company_id"))
-        pipeline: list[dict] = []
-
-        # -------------------------------
-        # Initial match stage
-        # -------------------------------
-        match_stage = {}
-        if company_id:
-            match_stage["company_id"] = company_id
+        match_stage: Any = {"company_id": company_id}
         if filter_trades.car_brand:
             match_stage["car_brand"] = filter_trades.car_brand
         if filter_trades.car_model:
@@ -1714,171 +2030,6 @@ async def search_engine_for_car_trading(
         if filter_trades.status:
             match_stage["status"] = filter_trades.status
 
-        pipeline.append({"$match": match_stage})
-
-        # -------------------------------
-        # Lookups for brand/model/etc
-        # -------------------------------
-        lookups = [
-            ("car_brand", "all_brands"),
-            ("car_model", "all_brand_models"),
-            ("color_in", "all_lists_values"),
-            ("color_out", "all_lists_values"),
-            ("specification", "all_lists_values"),
-            ("engine_size", "all_lists_values"),
-            ("year", "all_lists_values"),
-            ("bought_from", "all_lists_values"),
-            ("sold_to", "all_lists_values"),
-            ("sold_by", "all_lists_values"),
-            ("bought_by", "all_lists_values"),
-        ]
-
-        for local_field, collection in lookups:
-            pipeline.append({
-                "$lookup": {
-                    "from": collection,
-                    "let": {"field_id": f"${local_field}"},
-                    "pipeline": [
-                        {"$match": {"$expr": {"$eq": ["$_id", "$$field_id"]}}},
-                        {"$project": {"name": 1}}
-                    ],
-                    "as": local_field
-                }
-            })
-            pipeline.append({"$unwind": {"path": f"${local_field}", "preserveNullAndEmptyArrays": True}})
-
-        # -------------------------------
-        # Lookup trade items
-        # -------------------------------
-        pipeline.append({
-            "$lookup": {
-                "from": "all_trades_items",
-                "localField": "_id",
-                "foreignField": "trade_id",
-                "as": "trade_items"
-            }
-        })
-        pipeline.append({"$unwind": {"path": "$trade_items", "preserveNullAndEmptyArrays": True}})
-
-        # Lookup item name
-        pipeline.append({
-            "$lookup": {
-                "from": "all_lists_values",
-                "let": {"item_id": "$trade_items.item"},
-                "pipeline": [
-                    {"$match": {"$expr": {"$eq": ["$_id", "$$item_id"]}}},
-                    {"$project": {"name": 1}}
-                ],
-                "as": "item_detail"
-            }
-        })
-        pipeline.append({"$unwind": {"path": "$item_detail", "preserveNullAndEmptyArrays": True}})
-
-        pipeline.append({
-            "$lookup": {
-                "from": "all_lists_values",
-                "let": {"account_name_id": "$trade_items.account_name"},
-                "pipeline": [
-                    {"$match": {"$expr": {"$eq": ["$_id", "$$account_name_id"]}}},
-                    {"$project": {"name": 1}}
-                ],
-                "as": "account_name_detail"
-            }
-        })
-        pipeline.append({"$unwind": {"path": "$account_name_detail", "preserveNullAndEmptyArrays": True}})
-
-        # -------------------------------
-        # Add temporary fields for BUY/SELL dates
-        # -------------------------------
-        pipeline.append({
-            "$addFields": {
-                "buy_date_tmp": {
-                    "$cond": [
-                        {"$eq": ["$item_detail.name", "BUY"]},
-                        "$trade_items.date",
-                        None
-                    ]
-                },
-                "sell_date_tmp": {
-                    "$cond": [
-                        {"$eq": ["$item_detail.name", "SELL"]},
-                        "$trade_items.date",
-                        None
-                    ]
-                }
-            }
-        })
-
-        # -------------------------------
-        # Group per trade
-        # -------------------------------
-        pipeline.append({
-            "$group": {
-                "_id": "$_id",
-                "date": {"$first": "$date"},
-                "warranty_end_date": {"$first": "$warranty_end_date"},
-                "service_contract_end_date": {"$first": "$service_contract_end_date"},
-                "note": {"$first": "$note"},
-                "status": {"$first": "$status"},
-                "mileage": {"$first": "$mileage"},
-                "car_brand": {"$first": "$car_brand"},
-                "car_model": {"$first": "$car_model"},
-                "car_year": {"$first": "$year"},
-                "vin": {"$first": "$vin"},
-                "car_color_in": {"$first": "$color_in"},
-                "car_color_out": {"$first": "$color_out"},
-                "car_specification": {"$first": "$specification"},
-                "car_engine_size": {"$first": "$engine_size"},
-                "car_bought_from": {"$first": "$bought_from"},
-                "car_sold_to": {"$first": "$sold_to"},
-                "car_sold_by": {"$first": "$sold_by"},
-                "car_bought_by": {"$first": "$bought_by"},
-                "trade_items": {
-                    "$push": {
-                        "$cond": [
-                            {"$ifNull": ["$trade_items._id", False]},
-                            {
-                                "_id": "$trade_items._id",
-                                "company_id": "$trade_items.company_id",
-                                "trade_id": "$trade_items.trade_id",
-                                "date": "$trade_items.date",
-                                "item_id": "$item_detail._id",
-                                "item": "$item_detail.name",
-                                "account_name": "$account_name_detail.name",
-                                "account_name_id": "$account_name_detail._id",
-                                "pay": "$trade_items.pay",
-                                "receive": "$trade_items.receive",
-                                "comment": "$trade_items.comment",
-                                "createdAt": "$trade_items.createdAt",
-                                "updatedAt": "$trade_items.updatedAt"
-                            },
-                            "$$REMOVE"
-                        ]
-                    }
-                },
-
-                "buy_date": {"$min": "$buy_date_tmp"},
-                "sell_date": {"$min": "$sell_date_tmp"},
-                "total_pay": {"$sum": {"$ifNull": ["$trade_items.pay", 0]}},
-                "total_receive": {"$sum": {"$ifNull": ["$trade_items.receive", 0]}}
-            }
-        })
-
-        pipeline.append({
-            "$addFields": {
-                "date_field_to_filter": {
-                    "$cond": [
-                        {"$eq": ["$status", "Sold"]},
-                        "$sell_date",
-                        "$buy_date"
-                    ]
-                }
-            }
-        })
-
-        # -------------------------------
-        # Date filtering after group
-        # -------------------------------
         now = security.now_utc()
         date_field = "date_field_to_filter"
         if filter_trades.status and filter_trades.status.lower() == "sold":
@@ -1894,12 +2045,12 @@ async def search_engine_for_car_trading(
 
         elif filter_trades.this_month:
             start = datetime(now.year, now.month, 1, tzinfo=timezone.utc)
-            end = datetime(now.year + (now.month // 12), ((now.month % 12) + 1), 1)
+            end = datetime(now.year + (now.month // 12), ((now.month % 12) + 1), 1, tzinfo=timezone.utc)
             date_filter[date_field] = {"$gte": start, "$lt": end}
 
         elif filter_trades.this_year:
             start = datetime(now.year, 1, 1, tzinfo=timezone.utc)
-            end = datetime(now.year + 1, 1, 1)
+            end = datetime(now.year + 1, 1, 1, tzinfo=timezone.utc)
             date_filter[date_field] = {"$gte": start, "$lt": end}
 
         elif filter_trades.from_date or filter_trades.to_date:
@@ -1907,52 +2058,244 @@ async def search_engine_for_car_trading(
             if filter_trades.from_date:
                 date_filter[date_field]["$gte"] = filter_trades.from_date
             if filter_trades.to_date:
-                date_filter[date_field]["$lte"] = filter_trades.to_date
+                date_filter[date_field]["$lt"] = exclusive_date_end(filter_trades.to_date)
+
+        pipeline: list[dict] = [
+            {"$match": match_stage},
+            {
+                "$lookup": {
+                    "from": "all_trades_items",
+                    "let": {"trade_id": "$_id", "company_id": "$company_id"},
+                    "pipeline": [
+                        {
+                            "$match": {
+                                "$expr": {
+                                    "$and": [
+                                        {"$eq": ["$trade_id", "$$trade_id"]},
+                                        {"$eq": ["$company_id", "$$company_id"]},
+                                    ]
+                                }
+                            }
+                        },
+                        {"$sort": {"date": 1}},
+                        {
+                            "$lookup": {
+                                "from": "all_lists_values",
+                                "let": {"ids": ["$item", "$account_name"]},
+                                "pipeline": [
+                                    {"$match": {"$expr": {"$in": ["$_id", "$$ids"]}}},
+                                    {"$project": {"name": 1}},
+                                ],
+                                "as": "item_details",
+                            }
+                        },
+                        {
+                            "$project": {
+                                "_id": 1,
+                                "company_id": 1,
+                                "trade_id": 1,
+                                "date": 1,
+                                "item_id": "$item",
+                                "item": {
+                                    "$ifNull": [
+                                        {
+                                            "$let": {
+                                                "vars": {
+                                                    "match": {
+                                                        "$first": {
+                                                            "$filter": {
+                                                                "input": "$item_details",
+                                                                "as": "detail",
+                                                                "cond": {"$eq": ["$$detail._id", "$item"]},
+                                                            }
+                                                        }
+                                                    }
+                                                },
+                                                "in": "$$match.name",
+                                            }
+                                        },
+                                        "",
+                                    ]
+                                },
+                                "account_name_id": "$account_name",
+                                "account_name": {
+                                    "$ifNull": [
+                                        {
+                                            "$let": {
+                                                "vars": {
+                                                    "match": {
+                                                        "$first": {
+                                                            "$filter": {
+                                                                "input": "$item_details",
+                                                                "as": "detail",
+                                                                "cond": {"$eq": ["$$detail._id", "$account_name"]},
+                                                            }
+                                                        }
+                                                    }
+                                                },
+                                                "in": "$$match.name",
+                                            }
+                                        },
+                                        "",
+                                    ]
+                                },
+                                "pay": {"$ifNull": ["$pay", 0]},
+                                "receive": {"$ifNull": ["$receive", 0]},
+                                "comment": {"$ifNull": ["$comment", ""]},
+                                "createdAt": 1,
+                                "updatedAt": 1,
+                            }
+                        },
+                    ],
+                    "as": "trade_items",
+                }
+            },
+            {
+                "$set": {
+                    "buy_date": {
+                        "$min": {
+                            "$map": {
+                                "input": {
+                                    "$filter": {
+                                        "input": "$trade_items",
+                                        "as": "item",
+                                        "cond": {"$eq": ["$$item.item", "BUY"]},
+                                    }
+                                },
+                                "as": "item",
+                                "in": "$$item.date",
+                            }
+                        }
+                    },
+                    "sell_date": {
+                        "$min": {
+                            "$map": {
+                                "input": {
+                                    "$filter": {
+                                        "input": "$trade_items",
+                                        "as": "item",
+                                        "cond": {"$eq": ["$$item.item", "SELL"]},
+                                    }
+                                },
+                                "as": "item",
+                                "in": "$$item.date",
+                            }
+                        }
+                    },
+                    "total_pay": {"$sum": "$trade_items.pay"},
+                    "total_receive": {"$sum": "$trade_items.receive"},
+                }
+            },
+            {
+                "$set": {
+                    "date_field_to_filter": {
+                        "$cond": [
+                            {"$eq": ["$status", "Sold"]},
+                            "$sell_date",
+                            "$buy_date",
+                        ]
+                    }
+                }
+            },
+        ]
 
         if date_filter:
             pipeline.append({"$match": date_filter})
 
-        # -------------------------------
-        # Final projection
-        # -------------------------------
+        entity_lookups = [
+            ("car_brand", "all_brands", "car_brand_detail"),
+            ("car_model", "all_brand_models", "car_model_detail"),
+        ]
+        for local_field, collection, as_field in entity_lookups:
+            pipeline.append({
+                "$lookup": {
+                    "from": collection,
+                    "localField": local_field,
+                    "foreignField": "_id",
+                    "as": as_field,
+                }
+            })
+
+        pipeline.append({
+            "$lookup": {
+                "from": "all_lists_values",
+                "let": {
+                    "ids": [
+                        "$color_in",
+                        "$color_out",
+                        "$specification",
+                        "$engine_size",
+                        "$year",
+                        "$bought_from",
+                        "$sold_to",
+                        "$sold_by",
+                        "$bought_by",
+                    ]
+                },
+                "pipeline": [
+                    {"$match": {"$expr": {"$in": ["$_id", "$$ids"]}}},
+                    {"$project": {"name": 1}},
+                ],
+                "as": "list_details",
+            }
+        })
+
+        def list_name(field: str) -> dict:
+            return {
+                "$ifNull": [
+                    {
+                        "$let": {
+                            "vars": {
+                                "match": {
+                                    "$first": {
+                                        "$filter": {
+                                            "input": "$list_details",
+                                            "as": "detail",
+                                            "cond": {"$eq": ["$$detail._id", f"${field}"]},
+                                        }
+                                    }
+                                }
+                            },
+                            "in": "$$match.name",
+                        }
+                    },
+                    "",
+                ]
+            }
+
         pipeline.append({
             "$project": {
-                "_id": 1,  # usually always present
-                "car_brand_id": {"$ifNull": ["$car_brand._id", ""]},
-                "car_brand": {"$ifNull": ["$car_brand.name", ""]},
-                "car_model_id": {"$ifNull": ["$car_model._id", ""]},
-                "car_model": {"$ifNull": ["$car_model.name", ""]},
-                "year_id": {"$ifNull": ["$car_year._id", ""]},
-                "year": {"$ifNull": ["$car_year.name", ""]},
+                "_id": 1,
+                "car_brand_id": {"$ifNull": ["$car_brand", ""]},
+                "car_brand": {"$ifNull": [{"$arrayElemAt": ["$car_brand_detail.name", 0]}, ""]},
+                "car_model_id": {"$ifNull": ["$car_model", ""]},
+                "car_model": {"$ifNull": [{"$arrayElemAt": ["$car_model_detail.name", 0]}, ""]},
+                "year_id": {"$ifNull": ["$year", ""]},
+                "year": list_name("year"),
                 "status": {"$ifNull": ["$status", ""]},
-                "color_in_id": {"$ifNull": ["$car_color_in._id", ""]},
-                "color_in": {"$ifNull": ["$car_color_in.name", ""]},
-                "color_out_id": {"$ifNull": ["$car_color_out._id", ""]},
-                "color_out": {"$ifNull": ["$car_color_out.name", ""]},
-                "specification_id": {"$ifNull": ["$car_specification._id", ""]},
-                "specification": {"$ifNull": ["$car_specification.name", ""]},
-                "engine_size_id": {"$ifNull": ["$car_engine_size._id", ""]},
-                "engine_size": {"$ifNull": ["$car_engine_size.name", ""]},
+                "color_in_id": {"$ifNull": ["$color_in", ""]},
+                "color_in": list_name("color_in"),
+                "color_out_id": {"$ifNull": ["$color_out", ""]},
+                "color_out": list_name("color_out"),
+                "specification_id": {"$ifNull": ["$specification", ""]},
+                "specification": list_name("specification"),
+                "engine_size_id": {"$ifNull": ["$engine_size", ""]},
+                "engine_size": list_name("engine_size"),
                 "mileage": {"$ifNull": ["$mileage", 0]},
                 "vin": {"$ifNull": ["$vin", ""]},
-                "bought_from_id": {"$ifNull": ["$car_bought_from._id", ""]},
-                "bought_from": {"$ifNull": ["$car_bought_from.name", ""]},
-                "sold_to_id": {"$ifNull": ["$car_sold_to._id", ""]},
-                "sold_to": {"$ifNull": ["$car_sold_to.name", ""]},
-                "sold_by": {"$ifNull": ["$car_sold_by.name", ""]},
-                "bought_by": {"$ifNull": ["$car_bought_by.name", ""]},
-                "sold_by_id": {"$ifNull": ["$car_sold_by._id", ""]},
-                "bought_by_id": {"$ifNull": ["$car_bought_by._id", ""]},
+                "bought_from_id": {"$ifNull": ["$bought_from", ""]},
+                "bought_from": list_name("bought_from"),
+                "sold_to_id": {"$ifNull": ["$sold_to", ""]},
+                "sold_to": list_name("sold_to"),
+                "sold_by": list_name("sold_by"),
+                "bought_by": list_name("bought_by"),
+                "sold_by_id": {"$ifNull": ["$sold_by", ""]},
+                "bought_by_id": {"$ifNull": ["$bought_by", ""]},
                 "note": {"$ifNull": ["$note", ""]},
                 "date": {"$ifNull": ["$date", ""]},
                 "warranty_end_date": {"$ifNull": ["$warranty_end_date", ""]},
                 "service_contract_end_date": {"$ifNull": ["$service_contract_end_date", ""]},
-                "trade_items": {
-                    "$sortArray": {
-                        "input": {"$ifNull": ["$trade_items", []]},
-                        "sortBy": {"date": 1}  # 1 = ASC, -1 = DESC
-                    }
-                },
+                "trade_items": {"$ifNull": ["$trade_items", []]},
                 "buy_date": {"$ifNull": ["$buy_date", ""]},
                 "sell_date": {"$ifNull": ["$sell_date", ""]},
                 "total_pay": {"$toDouble": {"$ifNull": ["$total_pay", 0]}},
@@ -1967,63 +2310,87 @@ async def search_engine_for_car_trading(
             }
         })
 
-        # -------------------------------
-        # Sorting
-        # -------------------------------
         sort_field = "sell_date" if (filter_trades.status and filter_trades.status.lower() == "sold") else "buy_date"
-        pipeline.append({"$sort": {sort_field: -1}})
-
-        # -------------------------------
-        # Grand totals
-        # -------------------------------
         pipeline.append({
-            "$group": {
-                "_id": None,
-                "trades": {"$push": "$$ROOT"},
-                "grand_total_pay": {"$sum": "$total_pay"},
-                "grand_total_receive": {"$sum": "$total_receive"},
-                "grand_net": {"$sum": "$net"}
+            "$facet": {
+                "trades": [{"$sort": {sort_field: -1}}],
+                "totals": [
+                    {
+                        "$group": {
+                            "_id": None,
+                            "grand_total_pay": {"$sum": "$total_pay"},
+                            "grand_total_receive": {"$sum": "$total_receive"},
+                            "grand_net": {"$sum": "$net"}
+                        }
+                    }
+                ]
+            }
+        })
+        pipeline.append({
+            "$project": {
+                "trades": 1,
+                "grand_total_pay": {
+                    "$ifNull": [{"$arrayElemAt": ["$totals.grand_total_pay", 0]}, 0]
+                },
+                "grand_total_receive": {
+                    "$ifNull": [{"$arrayElemAt": ["$totals.grand_total_receive", 0]}, 0]
+                },
+                "grand_net": {
+                    "$ifNull": [{"$arrayElemAt": ["$totals.grand_net", 0]}, 0]
+                }
             }
         })
 
-        # Execute aggregation
-        cursor = await all_trades_collection.aggregate(pipeline)
+        cursor = await all_trades_collection.aggregate(pipeline, allowDiskUse=True)
         results = await cursor.to_list(None)
 
         if results:
             return [car_trade_search_serializer(r) for r in results]
-        else:
-            return [{"trades": [], "grand_total_pay": 0, "grand_total_receive": 0, "grand_net": 0}]
+        return [{"trades": [], "grand_total_pay": 0, "grand_total_receive": 0, "grand_net": 0}]
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
 
 
 @router.delete("/delete_trade/{trade_id}")
-async def delete_trade(trade_id: str, _: dict = Depends(security.get_current_user)):
+async def delete_trade(trade_id: str, data: dict = Depends(security.get_current_user)):
     try:
-        # Validate ObjectId
-        if not ObjectId.is_valid(trade_id):
-            raise HTTPException(status_code=400, detail="Invalid trade ID")
+        company_id = ObjectId(data.get("company_id"))
+        trade_object_id = parse_object_id(trade_id, "trade_id")
 
         async with database.client.start_session() as session:
-            await session.start_transaction()  # <-- await, not async with
-            result1 = await all_trades_collection.delete_one(
-                {"_id": ObjectId(trade_id)}, session=session
-            )
-            await all_trades_items_collection.delete_many(
-                {"trade_id": ObjectId(trade_id)}, session=session
-            )
-            await all_trades_purchase_agreement_items_collection.delete_many(
-                {"trade_id": ObjectId(trade_id)}, session=session
-            )
-            await session.commit_transaction()  # commit the transaction
-
-            if result1.deleted_count == 0:
-                raise HTTPException(status_code=404, detail="Trade not found")
+            try:
+                await session.start_transaction()
+                current_trade = await all_trades_collection.find_one(
+                    {"_id": trade_object_id, "company_id": company_id},
+                    {"_id": 1},
+                    session=session,
+                )
+                if not current_trade:
+                    raise HTTPException(status_code=404, detail="Trade not found")
+                result1 = await all_trades_collection.delete_one(
+                    {"_id": trade_object_id, "company_id": company_id},
+                    session=session,
+                )
+                if result1.deleted_count == 0:
+                    raise HTTPException(status_code=404, detail="Trade not found")
+                await all_trades_items_collection.delete_many(
+                    {"trade_id": trade_object_id, "company_id": company_id},
+                    session=session,
+                )
+                await all_trades_purchase_agreement_items_collection.delete_many(
+                    {"trade_id": trade_object_id, "company_id": company_id},
+                    session=session,
+                )
+                await session.commit_transaction()
+            except Exception:
+                await session.abort_transaction()
+                raise
 
         return {"message": "Trade and its items deleted successfully"}
 
+    except HTTPException:
+        raise
     except PyMongoError as e:
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
     except Exception as e:
@@ -2473,7 +2840,8 @@ async def get_cash_on_hand_or_bank_balance(data: dict = Depends(security.get_cur
             }
         ]
         cursor = await all_trades_collection.aggregate(cash_on_hand_pipeline)
-        result = await cursor.next()
+        results = await cursor.to_list(length=1)
+        result = results[0] if results else {"all_accounts": [], "total_final_net": 0}
         return {"totals": result}
 
     except PyMongoError as e:
@@ -2486,10 +2854,9 @@ async def get_cash_on_hand_or_bank_balance(data: dict = Depends(security.get_cur
 async def get_last_changes(data_filter: LastChangesFilter, data: dict = Depends(security.get_current_user)):
     try:
         company_id = ObjectId(data.get("company_id"))
-        from datetime import datetime
 
-        from_date = datetime.strptime('2000-01-01 00:00:00', '%Y-%m-%d %H:%M:%S')
-        to_date = datetime.strptime('2100-12-31 00:00:00', '%Y-%m-%d %H:%M:%S')
+        from_date = datetime(2000, 1, 1, tzinfo=timezone.utc)
+        to_date = datetime(2100, 12, 31, tzinfo=timezone.utc)
         account = None
         if data_filter.account is not None:
             account = data_filter.account
@@ -2497,7 +2864,7 @@ async def get_last_changes(data_filter: LastChangesFilter, data: dict = Depends(
         if data_filter.from_date:
             from_date = data_filter.from_date
         if data_filter.to_date:
-            to_date = data_filter.to_date
+            to_date = exclusive_date_end(data_filter.to_date)
         amount_filter = {}
         if data_filter.min_amount is not None:
             amount_filter['$gte'] = data_filter.min_amount
@@ -2587,7 +2954,7 @@ async def get_last_changes(data_filter: LastChangesFilter, data: dict = Depends(
                 '$match': {
                     'updatedAt': {
                         '$gte': from_date,
-                        '$lte': to_date
+                        '$lt': to_date
                     }
                 }
             }, {
@@ -2681,7 +3048,7 @@ async def get_last_changes(data_filter: LastChangesFilter, data: dict = Depends(
                                 'company_id': company_id,
                                 'updatedAt': {
                                     '$gte': from_date,
-                                    '$lte': to_date
+                                    '$lt': to_date
                                 }
                             }
                         }, {
@@ -2740,7 +3107,7 @@ async def get_last_changes(data_filter: LastChangesFilter, data: dict = Depends(
                                 'company_id': company_id,
                                 'updatedAt': {
                                     '$gte': from_date,
-                                    '$lte': to_date
+                                    '$lt': to_date
                                 }
                             }
                         }, {
@@ -2799,7 +3166,7 @@ async def get_last_changes(data_filter: LastChangesFilter, data: dict = Depends(
                                 'company_id': company_id,
                                 'updatedAt': {
                                     '$gte': from_date,
-                                    '$lte': to_date
+                                    '$lt': to_date
                                 }
                             }
                         }, {
@@ -2858,7 +3225,7 @@ async def get_last_changes(data_filter: LastChangesFilter, data: dict = Depends(
                                 'company_id': company_id,
                                 'updatedAt': {
                                     '$gte': from_date,
-                                    '$lte': to_date
+                                    '$lt': to_date
                                 }
                             }
                         }, {
@@ -2927,7 +3294,7 @@ async def get_last_changes(data_filter: LastChangesFilter, data: dict = Depends(
             match_map['$or'] = [
                 {'pay': amount_filter},
                 {'receive': amount_filter}
-            ],
+            ]
         if account:
             match_map['account_name'] = account
 
