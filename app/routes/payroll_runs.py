@@ -29,6 +29,9 @@ payroll_elements_collection = get_collection("payroll_elements")
 employees_leaves_collection = get_collection("employees_leaves")
 legislations_collection = get_collection("legislations")
 
+balances_collection = get_collection("balances")
+balances_based_elements_collection = get_collection("balances_based_elements")
+
 
 class PayrollRunModel(BaseModel):
     payroll_id: Optional[PyObjectId] = None
@@ -242,16 +245,18 @@ async def payroll_run(run: PayrollRunModel, data: dict = Depends(security.get_cu
                             })
 
                         if element_function.upper() == "PY_ANNUAL_LEAVE_ENTITLEMENT_FF":
-                            value = await py_annual_leave_entitlement_ff(employee_hire_date, employee_end_date,
-                                                                         element_start,
-                                                                         element_value,
-                                                                         element_end, period_start_date,
-                                                                         period_end_date)
+                            number, value = await py_annual_leave_entitlement_ff(employee_hire_date, employee_end_date,
+                                                                                 element_start,
+                                                                                 element_value,
+                                                                                 element_end, period_start_date,
+                                                                                 period_end_date,
+                                                                                 employee_payroll.get("name"),
+                                                                                 current_employee_id)
                             elements_values_maps[current_employee_id].append({
                                 "element_id": employee_payroll.get("_id"),
                                 "value": value,
                                 "payroll_element_id": employee_payroll.get("name"),
-                                "number": 0
+                                "number": number
                             })
                         if element_function.upper() == "PY_OVERTIME_NORMAL_FF":
                             if is_within_period(element_start, element_end, period_start_date, period_end_date):
@@ -392,7 +397,6 @@ async def payroll_run(run: PayrollRunModel, data: dict = Depends(security.get_cu
                             "number": None
                         })
                     elif function.upper() == "PY_MATERNITY_LEAVE_FF":
-                        print("yes")
                         final_value = await py_maternity_leave_ff(current_employee_id, period_start_date,
                                                                   period_end_date, based_element_id,
                                                                   legislation,
@@ -405,7 +409,6 @@ async def payroll_run(run: PayrollRunModel, data: dict = Depends(security.get_cu
                             "number": None
                         })
                     elif function.upper() == "PY_PATERNITY_LEAVE_FF":
-                        print("yes")
                         final_value = await py_paternity_leave_ff(current_employee_id, period_start_date,
                                                                   period_end_date, based_element_id,
                                                                   legislation,
@@ -418,7 +421,6 @@ async def payroll_run(run: PayrollRunModel, data: dict = Depends(security.get_cu
                             "number": None
                         })
                     elif function.upper() == "PY_COMPASSIONATE_LEAVE_FF":
-                        print("yes")
                         final_value = await py_compassionate_leave_ff(current_employee_id, period_start_date,
                                                                       period_end_date, based_element_id,
                                                                       legislation,
@@ -439,7 +441,7 @@ async def payroll_run(run: PayrollRunModel, data: dict = Depends(security.get_cu
         return {"added_run": details["payroll_runs_details"]}
 
 
-    except Exception:
+    except Exception as e:
         raise
 
 
@@ -473,14 +475,13 @@ async def py_input_value_ff(employee_hire_date: datetime, employee_end_date: dat
 async def py_annual_leave_entitlement_ff(employee_hire_date: datetime, employee_end_date: datetime,
                                          element_start: datetime,
                                          element_value: float, element_end: datetime, period_start_date: datetime,
-                                         period_end_date: datetime):
+                                         period_end_date: datetime, based_element_id: ObjectId, employee_id: ObjectId):
     try:
+        value = await get_employee_element_value(based_element_id, employee_id)
         date1 = max(employee_hire_date, element_start, period_start_date)
         date2 = min(employee_end_date, element_end, period_end_date)
-        # number_of_leave_days_dict = await get_leave_days(employee_id, date1, date2, company_id)
-
-        # number_of_leave_days = number_of_leave_days_dict['number_of_leave_days']
-        # working_days = max((date2 - date1).days + 1, 0) - number_of_leave_days
+        if date2 < date1:
+            return 0, 0
         working_days = max((date2 - date1).days + 1, 0)
         period_days = get_period_days(period_start_date, period_end_date)
 
@@ -488,8 +489,8 @@ async def py_annual_leave_entitlement_ff(employee_hire_date: datetime, employee_
             l_days = 0
         else:
             l_days = element_value / 12 * (working_days / period_days)
-
-        return round(l_days, 2)
+        final_value = l_days / 30 * value
+        return round(l_days, 2), round(final_value, 2)
 
     except Exception as e:
         raise e
@@ -805,37 +806,152 @@ async def py_social_security_employer_ff(employee_id: ObjectId, based_element_id
         raise e
 
 
+#
+# # ==== PY_GRATUITY_ACCRUAL_FF ====
+# async def py_gratuity_accrual_ff(employee_id: ObjectId, employee_hire_date: datetime, employee_end_date: datetime,
+#                                  element_start: datetime, element_end: datetime, period_start_date: datetime,
+#                                  period_end_date: datetime, based_element_id: ObjectId, legislation: ObjectId, ):
+#     try:
+#         value = await get_employee_element_value(based_element_id, employee_id)
+#         legislation_doc = await legislations_collection.find_one({"_id": legislation})
+#         if not legislation_doc:
+#             raise HTTPException(status_code=404, detail="Legislation not found")
+#
+#         gratuity_first_5_years = legislation_doc.get("gratuity_first_5_years", 21)
+#         gratuity_after_5_years = legislation_doc.get("gratuity_after_5_years", 30)
+#
+#         effective_service_days: int = (period_end_date - employee_hire_date).days + 1
+#         service_years: float = effective_service_days / 365
+#         entitlement_days: int = gratuity_first_5_years if service_years <= 5 else gratuity_after_5_years
+#
+#         date1 = max(employee_hire_date, element_start, period_start_date)
+#         date2 = min(employee_end_date, element_end, period_end_date)
+#         working_days: int = max((date2 - date1).days + 1, 0)
+#         period_days: int = get_period_days(period_start_date, period_end_date)
+#
+#         if period_days == 0:
+#             p_days = 0  # p_days refers to paid days
+#         else:
+#             p_days = entitlement_days / 12 * (working_days / period_days)
+#         final_value = (p_days * value) / 30
+#         return round(final_value, 2)
+#
+#     except Exception as e:
+#         raise e
+
 # ==== PY_GRATUITY_ACCRUAL_FF ====
 async def py_gratuity_accrual_ff(employee_id: ObjectId, employee_hire_date: datetime, employee_end_date: datetime,
                                  element_start: datetime, element_end: datetime, period_start_date: datetime,
-                                 period_end_date: datetime, based_element_id: ObjectId, legislation: ObjectId, ):
+                                 period_end_date: datetime, based_element_id: ObjectId, legislation: ObjectId):
     try:
-        value = await get_employee_element_value(based_element_id, employee_id)
+        basic_salary = await get_employee_element_value(based_element_id, employee_id)
         legislation_doc = await legislations_collection.find_one({"_id": legislation})
+
         if not legislation_doc:
             raise HTTPException(status_code=404, detail="Legislation not found")
 
         gratuity_first_5_years = legislation_doc.get("gratuity_first_5_years", 21)
         gratuity_after_5_years = legislation_doc.get("gratuity_after_5_years", 30)
 
-        effective_service_days: int = (period_end_date - employee_hire_date).days + 1
-        service_years: float = effective_service_days / 365
-        entitlement_days: int = gratuity_first_5_years if service_years <= 5 else gratuity_after_5_years
-
-        date1 = max(employee_hire_date, element_start, period_start_date)
+        date1 = max(employee_hire_date, element_start)
         date2 = min(employee_end_date, element_end, period_end_date)
-        working_days: int = max((date2 - date1).days + 1, 0)
-        period_days: int = get_period_days(period_start_date, period_end_date)
 
-        if period_days == 0:
-            p_days = 0  # p_days refers to paid days
-        else:
-            p_days = entitlement_days / 12 * (working_days / period_days)
-        final_value = (p_days * value) / 30
-        return round(final_value, 2)
+        if date2 < date1:
+            return 0
 
+        total_service_days = (date2 - employee_hire_date).days + 1
+        first_5_years_days = min(total_service_days, 5 * 365)
+        after_5_years_days = max(total_service_days - (5 * 365), 0)
+        gratuity_days_first_5 = (first_5_years_days / 365) * gratuity_first_5_years
+        gratuity_days_after_5 = (after_5_years_days / 365) * gratuity_after_5_years
+        total_gratuity_days = gratuity_days_first_5 + gratuity_days_after_5
+        total_gratuity_liability = (total_gratuity_days * basic_salary) / 30
+        previous_accrued_amount = await get_previous_gratuity_accrual(
+            employee_id=employee_id,
+        )
+        print(previous_accrued_amount)
+        current_period_accrual = (total_gratuity_liability - previous_accrued_amount)
+        return round(current_period_accrual, 2)
     except Exception as e:
         raise e
+
+
+async def get_previous_gratuity_accrual(employee_id: ObjectId):
+    cursor = await balances_collection.aggregate([
+        {
+            "$match": {
+                "name": "Gratuity Balance"
+            }
+        },
+        {
+            "$lookup": {
+                "from": "balances_based_elements",
+                "localField": "_id",
+                "foreignField": "balance_id",
+                "as": "based_elements"
+            }
+        },
+        {
+            "$unwind": "$based_elements"
+        },
+        {
+            "$lookup": {
+                "from": "payroll_runs_employees_elements",
+                "let": {
+                    "based_element_id": "$based_elements.name"
+                },
+                "pipeline": [
+                    {
+                        "$match": {
+                            "$expr": {
+                                "$and": [
+                                    {"$eq": ["$employee_id", employee_id]},
+                                    {"$eq": ["$payroll_element_id", "$$based_element_id"]}
+                                ]
+                            }
+                        }
+                    }
+                ],
+                "as": "payroll_results"
+            }
+        },
+        {
+            "$unwind": {
+                "path": "$payroll_results",
+                "preserveNullAndEmptyArrays": True
+            }
+        },
+        {
+            "$group": {
+                "_id": None,
+                "total": {
+                    "$sum": {
+                        "$switch": {
+                            "branches": [
+                                {
+                                    "case": {"$eq": ["$based_elements.type", "Add"]},
+                                    "then": {"$ifNull": ["$payroll_results.value", 0]}
+                                },
+                                {
+                                    "case": {"$eq": ["$based_elements.type", "Subtract"]},
+                                    "then": {
+                                        "$multiply": [
+                                            {"$ifNull": ["$payroll_results.value", 0]},
+                                            -1
+                                        ]
+                                    }
+                                }
+                            ],
+                            "default": 0
+                        }
+                    }
+                }
+            }
+        }
+    ])
+
+    result = await cursor.to_list(None)
+    return result[0]["total"] if result else 0
 
 
 # === ROLLBACK ===

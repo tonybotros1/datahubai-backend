@@ -240,11 +240,12 @@ main_screen_pipeline: list[dict[str, Any]] = [
 ]
 
 details_pipeline = [
+    # {
+    #     '$match': {
+    #         '_id': ObjectId('69cfa8718f07622eb9ce9b68')
+    #     }
+    # },
     {
-        '$match': {
-            '_id': ObjectId('69cfa8718f07622eb9ce9b68')
-        }
-    }, {
         '$addFields': {
             'period_start_date': {
                 '$dateFromParts': {

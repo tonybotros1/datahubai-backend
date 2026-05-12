@@ -328,6 +328,9 @@ trade_item_details_pipeline = [
         }
     }, {
         '$addFields': {
+            'account_name_id': {
+                '$toString': '$account_name'
+            },
             'item_id': {
                 '$toString': '$item'
             },

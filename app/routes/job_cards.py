@@ -948,7 +948,7 @@ async def copy_job_card(job_id: str, data: dict = Depends(security.get_current_u
             original_job['job_status_2'] = "New"
             original_job['invoice_number'] = ""
             original_job['invoice_date'] = None
-            new_job_counter = await create_custom_counter("JCN", "J", description='Job Cards Number', date=data,
+            new_job_counter = await create_custom_counter("JCN", "J", description='Job Cards Number', data=data,
                                                           session=session)
             original_job["job_number"] = new_job_counter["final_counter"] if new_job_counter["success"] else None
             warranty_end_date = original_job['job_warranty_end_date'] if original_job["job_warranty_end_date"] else None
@@ -978,6 +978,7 @@ async def copy_job_card(job_id: str, data: dict = Depends(security.get_current_u
             raise
 
         except Exception as e:
+            print(e)
             await session.abort_transaction()
             raise HTTPException(status_code=500, detail=f"Delete failed: {str(e)}")
 
