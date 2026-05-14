@@ -31,6 +31,9 @@ async def upload_file(file: UploadFile = File(...), folder: str = "general"):
 
 
 async def delete_file_from_server(public_id: str) -> bool:
+    if not public_id:
+        return True
+
     try:
         for resource_type in ["image", "video", "raw"]:
             result = await asyncio.to_thread(
