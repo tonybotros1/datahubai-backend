@@ -35,13 +35,16 @@ async def delete_file_from_server(public_id: str) -> bool:
         return True
 
     try:
+        saw_not_found = False
         for resource_type in ["image", "video", "raw"]:
             result = await asyncio.to_thread(
-                lambda: cloudinary.uploader.destroy(public_id, resource_type=resource_type)
+                lambda rt=resource_type: cloudinary.uploader.destroy(public_id, resource_type=rt)
             )
-            if result.get("result") in ["ok", "not_found"]:
+            if result.get("result") == "ok":
                 return True
-        return False
+            if result.get("result") == "not_found":
+                saw_not_found = True
+        return saw_not_found
     except Exception as e:
         print(f"Error deleting file from Cloudinary: {e}")
         return False
