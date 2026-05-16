@@ -24,6 +24,7 @@ employees_bank_accounts_collection = get_collection("employees_bank_accounts")
 employees_leaves_collection = get_collection("employees_leaves")
 employees_contacts_and_relatives_collection = get_collection("employees_contacts_and_relatives")
 employees_payrolls_collection = get_collection("employees_payrolls")
+employees_loan_and_advances_collection = get_collection("employees_loan_and_advances")
 attachment_collection = get_collection("attachment")
 legislations_collection = get_collection("legislations")
 public_holidays_collection = get_collection("public_holidays")
@@ -434,6 +435,113 @@ details_pipeline = [
                 }
             ],
             'as': 'payrolls_details'
+        }
+    }, {
+        '$lookup': {
+            'from': 'employees_loan_and_advances',
+            'let': {
+                'employee_id': '$_id'
+            },
+            'pipeline': [
+                {
+                    '$match': {
+                        '$expr': {
+                            '$eq': [
+                                '$employee_id', '$$employee_id'
+                            ]
+                        }
+                    }
+                }, {
+                    '$lookup': {
+                        'from': 'loan_and_advances_types',
+                        'localField': 'type',
+                        'foreignField': '_id',
+                        'as': 'type_details'
+                    }
+                }, {
+                    '$lookup': {
+                        'from': 'payroll_runs_employees_elements',
+                        'let': {
+                            'loan_id': '$_id',
+                            'company_id': '$company_id'
+                        },
+                        'pipeline': [
+                            {
+                                '$match': {
+                                    '$expr': {
+                                        '$and': [
+                                            {
+                                                '$eq': [
+                                                    '$element_id', '$$loan_id'
+                                                ]
+                                            }, {
+                                                '$eq': [
+                                                    '$company_id', '$$company_id'
+                                                ]
+                                            }
+                                        ]
+                                    }
+                                }
+                            }, {
+                                '$group': {
+                                    '_id': None,
+                                    'paid_to_date': {
+                                        '$sum': {
+                                            '$ifNull': [
+                                                '$value', 0
+                                            ]
+                                        }
+                                    }
+                                }
+                            }
+                        ],
+                        'as': 'paid_to_date_details'
+                    }
+                }, {
+                    '$addFields': {
+                        'paid_to_date': {
+                            '$ifNull': [
+                                {
+                                    '$first': '$paid_to_date_details.paid_to_date'
+                                }, 0
+                            ]
+                        },
+                        'type_name': {
+                            '$ifNull': [
+                                {
+                                    '$first': '$type_details.name'
+                                }, None
+                            ]
+                        },
+                        '_id': {
+                            '$toString': '$_id'
+                        },
+                        'type': {
+                            '$toString': '$type'
+                        }
+                    }
+                }, {
+                    '$addFields': {
+                        'remaining_amount': {
+                            '$subtract': [
+                                {
+                                    '$ifNull': [
+                                        '$total_amount', 0
+                                    ]
+                                }, '$paid_to_date'
+                            ]
+                        }
+                    }
+                }, {
+                    '$project': {
+                        'type_details': 0,
+                        'paid_to_date_details': 0,
+                        'company_id': 0,
+                        'employee_id': 0
+                    }
+                }
+            ],
+            'as': 'loan_and_advances_details'
         }
     }, {
         '$lookup': {
@@ -1579,10 +1687,49 @@ async def filter_employee_payrolls_on_period_date(period_filter: PayrollFilterMo
 employee_loan_and_advances_pipeline = [
     {
         '$lookup': {
-            'from': 'payroll_elements',
-            'localField': 'name',
+            'from': 'loan_and_advances_types',
+            'localField': 'type',
             'foreignField': '_id',
-            'as': 'name_details'
+            'as': 'type_details'
+        }
+    }, {
+        '$lookup': {
+            'from': 'payroll_runs_employees_elements',
+            'let': {
+                'loan_id': '$_id',
+                'company_id': '$company_id'
+            },
+            'pipeline': [
+                {
+                    '$match': {
+                        '$expr': {
+                            '$and': [
+                                {
+                                    '$eq': [
+                                        '$element_id', '$$loan_id'
+                                    ]
+                                }, {
+                                    '$eq': [
+                                        '$company_id', '$$company_id'
+                                    ]
+                                }
+                            ]
+                        }
+                    }
+                }, {
+                    '$group': {
+                        '_id': None,
+                        'paid_to_date': {
+                            '$sum': {
+                                '$ifNull': [
+                                    '$value', 0
+                                ]
+                            }
+                        }
+                    }
+                }
+            ],
+            'as': 'paid_to_date_details'
         }
     }, {
         '$addFields': {
@@ -1598,31 +1745,54 @@ employee_loan_and_advances_pipeline = [
             'employee_id': {
                 '$toString': '$employee_id'
             },
-            'name_value': {
+            'type': {
+                '$toString': '$type'
+            },
+            'type_name': {
                 '$ifNull': [
                     {
-                        '$first': '$name_details.name'
+                        '$first': '$type_details.name'
                     }, None
+                ]
+            },
+            'paid_to_date': {
+                '$ifNull': [
+                    {
+                        '$first': '$paid_to_date_details.paid_to_date'
+                    }, 0
+                ]
+            }
+        }
+    }, {
+        '$addFields': {
+            'remaining_amount': {
+                '$subtract': [
+                    {
+                        '$ifNull': [
+                            '$total_amount', 0
+                        ]
+                    }, '$paid_to_date'
                 ]
             }
         }
     }, {
         '$project': {
-            'name_details': 0
+            'type_details': 0,
+            'paid_to_date_details': 0
         }
     }
 ]
 
 
-async def get_load_and_advances_details(payroll_id: ObjectId):
+async def get_loan_and_advances_details(loan_id: ObjectId):
     try:
-        new_pipeline: Any = copy.deepcopy(employee_payroll_pipeline)
+        new_pipeline: Any = copy.deepcopy(employee_loan_and_advances_pipeline)
         new_pipeline.insert(0, {
             "$match": {
-                "_id": payroll_id
+                "_id": loan_id
             }
         })
-        cursor = await employees_payrolls_collection.aggregate(new_pipeline)
+        cursor = await employees_loan_and_advances_collection.aggregate(new_pipeline)
         result = await cursor.to_list(1)
         return result[0] if result else None
 
@@ -1631,131 +1801,119 @@ async def get_load_and_advances_details(payroll_id: ObjectId):
 
 
 class EmployeeLoanAndAdvancesModel(BaseModel):
-    name: Optional[str] = None
-    value: Optional[float] = None
-    start_date: Optional[datetime] = None
-    end_date: Optional[datetime] = None
-    notes: Optional[str] = None
+    type: Optional[str] = None
+    total_amount: Optional[float] = None
+    monthly_installment: Optional[float] = None
+    deduction_date: Optional[datetime] = None
+    note: Optional[str] = None
 
 
-class PayrollFilterModel(BaseModel):
-    period: Optional[str] = None
+def build_loan_and_advances_doc(
+        loan: dict,
+        company_id: ObjectId,
+        employee_id: Optional[ObjectId] = None,
+        existing: Optional[dict] = None,
+) -> dict:
+    total_amount = float(loan.get("total_amount", existing.get("total_amount", 0) if existing else 0) or 0)
+    monthly_installment = float(
+        loan.get("monthly_installment", existing.get("monthly_installment", 0) if existing else 0) or 0
+    )
+    if "type" in loan:
+        loan_type = ObjectId(loan["type"]) if loan.get("type") else None
+    else:
+        loan_type = existing.get("type") if existing else None
+
+    doc = {
+        "company_id": company_id,
+        "type": loan_type,
+        "total_amount": total_amount,
+        "monthly_installment": monthly_installment,
+        "deduction_date": loan.get("deduction_date", existing.get("deduction_date") if existing else None),
+        "note": loan.get("note", existing.get("note", "") if existing else ""),
+        "updatedAt": security.now_utc(),
+    }
+    if employee_id is not None:
+        doc["employee_id"] = employee_id
+    return doc
 
 
-@router.post("/add_new_employee_payroll/{employee_id}")
-async def add_new_employee_payroll(employee_id: str, payroll: EmployeePayrollModel,
-                                   data: dict = Depends(security.get_current_user)):
+@router.post("/add_new_employee_loan_and_advances/{employee_id}")
+async def add_new_employee_loan_and_advances(employee_id: str, loan: EmployeeLoanAndAdvancesModel,
+                                             data: dict = Depends(security.get_current_user)):
     try:
         company_id = ObjectId(data.get("company_id"))
-        payroll = payroll.model_dump(exclude_unset=True)
-        payroll['company_id'] = company_id
-        payroll['name'] = ObjectId(payroll['name']) if payroll['name'] else None
-        payroll['employee_id'] = ObjectId(employee_id) if employee_id else None
-        payroll['value'] = payroll['value']
-        payroll['start_date'] = payroll['start_date']
-        payroll['end_date'] = payroll['end_date']
-        payroll['notes'] = payroll['notes']
-        payroll['createdAt'] = security.now_utc()
-        payroll['updatedAt'] = security.now_utc()
+        loan_dict = loan.model_dump(exclude_unset=True)
+        loan_doc = build_loan_and_advances_doc(
+            loan_dict,
+            company_id,
+            ObjectId(employee_id) if employee_id else None,
+        )
+        loan_doc["createdAt"] = security.now_utc()
 
-        new_payroll = await employees_payrolls_collection.insert_one(payroll)
+        new_loan = await employees_loan_and_advances_collection.insert_one(loan_doc)
 
-        if not new_payroll.inserted_id:
-            raise HTTPException(status_code=500, detail="Failed to create new payroll document")
-        added_payroll = await get_payroll_details(new_payroll.inserted_id)
-        return {"new_payroll": added_payroll}
+        if not new_loan.inserted_id:
+            raise HTTPException(status_code=500, detail="Failed to create new loan and advances document")
+        added_loan = await get_loan_and_advances_details(new_loan.inserted_id)
+        return {"new_loan_and_advances": added_loan}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.patch("/update_employee_payroll/{payroll_id}")
-async def update_employee_payroll(payroll_id: str, payroll: EmployeePayrollModel,
-                                  data: dict = Depends(security.get_current_user)):
+@router.patch("/update_employee_loan_and_advances/{loan_id}")
+async def update_employee_loan_and_advances(loan_id: str, loan: EmployeeLoanAndAdvancesModel,
+                                            data: dict = Depends(security.get_current_user)):
     try:
         company_id = ObjectId(data.get("company_id"))
-        payroll = payroll.model_dump(exclude_unset=True)
-        payroll['name'] = ObjectId(payroll['name']) if payroll['name'] else None
-        payroll['value'] = payroll['value']
-        payroll['start_date'] = payroll['start_date']
-        payroll['end_date'] = payroll['end_date']
-        payroll['notes'] = payroll['notes']
-        payroll['updatedAt'] = security.now_utc()
+        loan_object_id = ObjectId(loan_id)
+        existing = await employees_loan_and_advances_collection.find_one({
+            "_id": loan_object_id,
+            "company_id": company_id
+        })
+        if not existing:
+            raise HTTPException(status_code=404, detail="Loan and advances document not found")
 
-        updated_payroll = await employees_payrolls_collection.update_one(
-            {"_id": ObjectId(payroll_id), "company_id": company_id},
-            {"$set": payroll},
+        loan_dict = loan.model_dump(exclude_unset=True)
+        loan_doc = build_loan_and_advances_doc(loan_dict, company_id, existing=existing)
+
+        updated_loan = await employees_loan_and_advances_collection.update_one(
+            {"_id": loan_object_id, "company_id": company_id},
+            {
+                "$set": loan_doc,
+                "$unset": {
+                    "paid_to_date": "",
+                    "remaining_amount": "",
+                },
+            },
         )
 
-        if updated_payroll.matched_count == 0:
-            raise HTTPException(status_code=404, detail="Payroll document not found")
-        updated_payroll = await get_payroll_details(ObjectId(payroll_id))
-        return {"updated_payroll": updated_payroll}
+        if updated_loan.matched_count == 0:
+            raise HTTPException(status_code=404, detail="Loan and advances document not found")
+        updated_loan = await get_loan_and_advances_details(loan_object_id)
+        return {"updated_loan_and_advances": updated_loan}
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.delete("/delete_employee_payroll/{payroll_id}")
-async def delete_employee_payroll(payroll_id: str, data: dict = Depends(security.get_current_user)):
+@router.delete("/delete_employee_loan_and_advances/{loan_id}")
+async def delete_employee_loan_and_advances(loan_id: str, data: dict = Depends(security.get_current_user)):
     try:
-        if not payroll_id:
-            raise HTTPException(status_code=404, detail="payroll id not found")
+        if not loan_id:
+            raise HTTPException(status_code=404, detail="loan and advances id not found")
         company_id = ObjectId(data.get("company_id"))
-        result = await employees_payrolls_collection.delete_one(
-            {"_id": ObjectId(payroll_id), "company_id": company_id},
+        result = await employees_loan_and_advances_collection.delete_one(
+            {"_id": ObjectId(loan_id), "company_id": company_id},
         )
         if result.deleted_count == 0:
-            raise HTTPException(status_code=404, detail="Payroll document not found")
-        return {"deleted_payroll_id": payroll_id}
+            raise HTTPException(status_code=404, detail="Loan and advances document not found")
+        return {"deleted_loan_and_advances_id": loan_id}
 
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.post("/filter_employee_payrolls_on_period_date/{employee_id}")
-async def filter_employee_payrolls_on_period_date(period_filter: PayrollFilterModel, employee_id: str,
-                                                  data: dict = Depends(security.get_current_user)):
-    try:
-        company_id = ObjectId(data.get("company_id"))
-        new_pipeline: Any = copy.deepcopy(employee_payroll_pipeline)
-        employee_id = ObjectId(employee_id)
-        start_date = datetime.max
-        end_date = datetime.min
-        if period_filter.period:
-            year, month = map(int, period_filter.period.split("-"))
-            start_date = datetime(year, month, 1)
-            last_day = calendar.monthrange(year, month)[1]
-            end_date = datetime(year, month, last_day)
-
-        new_pipeline.insert(0, {
-            '$match': {
-                'employee_id': employee_id,
-                'company_id': company_id,
-                'start_date': {
-                    '$lte': end_date
-                },
-                '$or': [
-                    {
-                        'end_date': {
-                            '$gte': start_date
-                        }
-                    }, {
-                        'end_date': None
-                    }
-                ]
-            }
-        })
-
-        cursor = await employees_payrolls_collection.aggregate(new_pipeline)
-        result = await cursor.to_list(None)
-        return {"payrolls_elements": result if result else []}
-
-    except Exception as e:
-        print(e)
-        raise
 
 
 # ==================== CONTACTS AND RELATIVES SECTION ====================
@@ -2856,11 +3014,10 @@ async def get_employee_leave_details(leave_id: ObjectId):
 
 
 # this function is to calculate the number of holidays between 2 dates
-@router.post("/get_number_of_days/{employee_id}")
-async def get_number_of_days(
+async def calculate_number_of_days(
         employee_id: str,
         data: NumberOfDaysForWorkingDaysModel,
-        user_data: dict = Depends(security.get_current_user)
+        user_data: dict,
 ):
     try:
         company_id = ObjectId(user_data.get("company_id"))
@@ -2942,6 +3099,15 @@ async def get_number_of_days(
 
     except Exception:
         raise
+
+
+@router.post("/get_number_of_days/{employee_id}")
+async def get_number_of_days(
+        employee_id: str,
+        data: NumberOfDaysForWorkingDaysModel,
+        user_data: dict = Depends(security.get_current_user),
+):
+    return await calculate_number_of_days(employee_id, data, user_data)
 
 
 @router.get("/get_all_employee_leaves/{employee_id}")

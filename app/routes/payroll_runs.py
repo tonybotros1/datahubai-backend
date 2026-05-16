@@ -10,7 +10,7 @@ from app.core import security
 from app.database import get_collection
 from app.routes.car_trading import PyObjectId
 from app.routes.counters import create_custom_counter
-from app.routes.employees import get_number_of_days, NumberOfDaysForWorkingDaysModel
+from app.routes.employees import calculate_number_of_days, NumberOfDaysForWorkingDaysModel
 from app.routes.payroll_runs_widgets.helpers_functions import get_employee_element_value, \
     get_period_days, get_current_leave_used_days, get_used_leave_days, is_within_period, get_previous_gratuity_accrual
 
@@ -366,7 +366,7 @@ async def payroll_run(run: PayrollRunModel, data: dict = Depends(security.get_cu
                         l_days, final_value = await py_annual_leave_ff(leave_id, current_employee_id, period_start_date,
                                                                        period_end_date, based_element_id,
                                                                        leave_start_date, leave_end_date,
-                                                                       is_pay_in_advanced)
+                                                                       is_pay_in_advanced, data)
 
                         elements_values_maps[current_employee_id].append({
                             "element_id": leave["_id"],
@@ -454,10 +454,11 @@ async def payroll_run(run: PayrollRunModel, data: dict = Depends(security.get_cu
                 if not await is_element_processed(loan_and_advances_id, period_id):
                     payroll_element_doc = await payroll_elements_collection.find_one({"_id": based_element_id})
                     function = payroll_element_doc.get("function") if payroll_element_doc else None
-                    if function.upper() == "PY_ANNUAL_LEAVE_FF":
+                    if function and function.upper() == "PY_LOAN_AND_ADVANCES_FF":
                         final_value = await py_loan_and_advances_ff(loan_and_advances_id, total_amount,
                                                                     monthly_installment)
-
+                        if final_value == 0:
+                            continue
                         elements_values_maps[current_employee_id].append({
                             "element_id": loan_and_advances_id,
                             "value": final_value,
@@ -532,7 +533,7 @@ async def py_annual_leave_entitlement_ff(employee_hire_date: datetime, employee_
 async def py_annual_leave_ff(leave_id: ObjectId, employee_id: ObjectId, period_start_date: datetime,
                              period_end_date: datetime,
                              based_element_id: ObjectId, leave_start_date: datetime, leave_end_date: datetime,
-                             is_pay_in_advanced: bool):
+                             is_pay_in_advanced: bool, user_data: dict):
     try:
         value = await get_employee_element_value(based_element_id, employee_id)
         # period_days = get_period_days(period_start_date, period_end_date)
@@ -540,14 +541,14 @@ async def py_annual_leave_ff(leave_id: ObjectId, employee_id: ObjectId, period_s
         date1 = max(period_start_date, leave_start_date)
         date2 = min(period_end_date, leave_end_date)
         # l_days = (date2 - date1).days + 1
-        number_of_days = await get_number_of_days(str(employee_id),
-                                                  NumberOfDaysForWorkingDaysModel(start_date=date1,
-                                                                                  end_date=date2,
-                                                                                  leave_type=str(leave_id)))
+        number_of_days = await calculate_number_of_days(str(employee_id),
+                                                        NumberOfDaysForWorkingDaysModel(start_date=date1,
+                                                                                        end_date=date2,
+                                                                                        leave_type=str(leave_id)),
+                                                        user_data)
         l_days: int = number_of_days['working_days']
 
         final_value = round(((value or 0) * (l_days * 12 / 365)), 2)
-        print(final_value)
 
         return l_days, final_value
 
@@ -656,8 +657,7 @@ async def py_maternity_leave_ff(employee_id: ObjectId, period_start_date: dateti
 
         return round(total_value, 2)
 
-    except Exception as e:
-        print(e)
+    except Exception:
         raise
 
 
@@ -694,8 +694,7 @@ async def py_paternity_leave_ff(employee_id: ObjectId, period_start_date: dateti
 
         return round(total_value, 2)
 
-    except Exception as e:
-        print(e)
+    except Exception:
         raise
 
 
@@ -732,8 +731,7 @@ async def py_compassionate_leave_ff(employee_id: ObjectId, period_start_date: da
 
         return round(total_value, 2)
 
-    except Exception as e:
-        print(e)
+    except Exception:
         raise
 
 
@@ -901,7 +899,6 @@ async def py_gratuity_accrual_ff(employee_id: ObjectId, employee_hire_date: date
         previous_accrued_amount = await get_previous_gratuity_accrual(
             employee_id=employee_id,
         )
-        print(previous_accrued_amount)
         current_period_accrual = (total_gratuity_liability - previous_accrued_amount)
         return round(current_period_accrual, 2)
     except Exception as e:
@@ -911,9 +908,31 @@ async def py_gratuity_accrual_ff(employee_id: ObjectId, employee_hire_date: date
 # ==== PY_LOAN_AND_ADVANCES_FF ====
 async def py_loan_and_advances_ff(loan_id: ObjectId, total_amount: float, monthly_installment: float):
     try:
-        print()
+        paid_cursor = await payroll_runs_employees_elements_collection.aggregate([
+            {
+                "$match": {
+                    "element_id": loan_id,
+                }
+            },
+            {
+                "$group": {
+                    "_id": None,
+                    "paid_to_date": {
+                        "$sum": {
+                            "$ifNull": [
+                                "$value", 0
+                            ]
+                        }
+                    }
+                }
+            }
+        ])
+        paid_result = await paid_cursor.to_list(1)
 
-
+        paid_to_date = paid_result[0]["paid_to_date"] if paid_result else 0
+        print(paid_to_date)
+        remaining_amount = max((total_amount or 0) - paid_to_date, 0)
+        return round(min(monthly_installment or 0, remaining_amount), 2)
 
     except Exception as e:
         raise e
