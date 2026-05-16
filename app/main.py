@@ -10,7 +10,7 @@ from app.routes import brands_and_models, users, countries_and_cities, functions
     quotation_cards, job_tasks, time_sheets, employees_performance, company_variables, ar_receipts, ap_payments, \
     ap_invoices, inventory_items, employees, receiving, inspection_reports, converters, issue_items, data_migration, \
     job_cards_dashboard, to_do_list, account_transfers, batch_payment_process, attachment, legislation, \
-    payroll_elements, public_holidays, leave_types, payroll, payroll_runs, balances
+    payroll_elements, public_holidays, leave_types, payroll, payroll_runs, balances, loan_and_advances_types
 
 from app.routes.manzel_healthcare_task import medication_reminder_system
 
@@ -106,6 +106,8 @@ app.include_router(leave_types.router, prefix="/leave_types", tags=["Leave Types
 app.include_router(payroll.router, prefix="/payroll", tags=["Payroll"])
 app.include_router(payroll_runs.router, prefix="/payroll_runs", tags=["Payroll Runs"])
 app.include_router(balances.router, prefix="/balance", tags=["Balance"])
+app.include_router(loan_and_advances_types.router, prefix="/loan_and_advances_types", tags=["Loan and Advances Types"])
+
 
 # نقطة نهاية WebSocket العامة
 @app.websocket("/ws/{company_id}/{user_id}")

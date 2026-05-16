@@ -30,6 +30,8 @@ class BalanceModel(BaseModel):
     show_on_payroll: Optional[bool] = None
     show_on_assignment: Optional[bool] = None
     show_on_leave: Optional[bool] = None
+    balance_dimension: Optional[str] = None
+
 
 
 balance_details_pipeline = [

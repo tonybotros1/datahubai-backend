@@ -270,12 +270,11 @@ main_screen_pipeline: list[dict[str, Any]] = [
 ]
 
 details_pipeline = [
-    # {
-    #     '$match': {
-    #         '_id': ObjectId('69cfa8718f07622eb9ce9b68')
-    #     }
-    # },
     {
+        '$match': {
+            '_id': ObjectId('69cfa8718f07622eb9ce9b68')
+        }
+    }, {
         '$addFields': {
             'period_start_date': {
                 '$dateFromParts': {
@@ -555,36 +554,14 @@ details_pipeline = [
         '$lookup': {
             'from': 'employees_nationality',
             'let': {
-                'employee_id': '$_id',
-                'period_start_date': '$period_start_date',
-                'period_end_date': '$period_end_date'
+                'employee_id': '$_id'
             },
             'pipeline': [
                 {
                     '$match': {
                         '$expr': {
-                            '$and': [
-                                {
-                                    '$eq': [
-                                        '$employee_id', '$$employee_id'
-                                    ]
-                                }, {
-                                    '$lte': [
-                                        '$start_date', '$$period_end_date'
-                                    ]
-                                }, {
-                                    '$or': [
-                                        {
-                                            '$gte': [
-                                                '$end_date', '$$period_start_date'
-                                            ]
-                                        }, {
-                                            '$eq': [
-                                                '$end_date', None
-                                            ]
-                                        }
-                                    ]
-                                }
+                            '$eq': [
+                                '$employee_id', '$$employee_id'
                             ]
                         }
                     }
@@ -722,6 +699,176 @@ details_pipeline = [
                 }
             ],
             'as': 'email_list'
+        }
+    }, {
+        '$lookup': {
+            'from': 'balances',
+            'let': {
+                'company_id': '$company_id',
+                'employee_id': '$_id'
+            },
+            'pipeline': [
+                {
+                    '$match': {
+                        '$expr': {
+                            '$and': [
+                                {
+                                    '$eq': [
+                                        '$company_id', '$$company_id'
+                                    ]
+                                }, {
+                                    '$eq': [
+                                        '$show_on_assignment', True
+                                    ]
+                                }
+                            ]
+                        }
+                    }
+                }, {
+                    '$lookup': {
+                        'from': 'balances_based_elements',
+                        'let': {
+                            'balance_id': '$_id',
+                            'company_id': '$company_id'
+                        },
+                        'pipeline': [
+                            {
+                                '$match': {
+                                    '$expr': {
+                                        '$and': [
+                                            {
+                                                '$eq': [
+                                                    '$balance_id', '$$balance_id'
+                                                ]
+                                            }, {
+                                                '$eq': [
+                                                    '$company_id', '$$company_id'
+                                                ]
+                                            }
+                                        ]
+                                    }
+                                }
+                            }, {
+                                '$project': {
+                                    'name': 1,
+                                    'type': 1
+                                }
+                            }
+                        ],
+                        'as': 'based_elements'
+                    }
+                }, {
+                    '$lookup': {
+                        'from': 'payroll_runs_employees_elements',
+                        'let': {
+                            'employee_id': '$$employee_id',
+                            'based_elements': '$based_elements',
+                            'balance_type': '$type'
+                        },
+                        'pipeline': [
+                            {
+                                '$match': {
+                                    '$expr': {
+                                        '$and': [
+                                            {
+                                                '$eq': [
+                                                    '$employee_id', '$$employee_id'
+                                                ]
+                                            }, {
+                                                '$in': [
+                                                    '$payroll_element_id', '$$based_elements.name'
+                                                ]
+                                            }
+                                        ]
+                                    }
+                                }
+                            }, {
+                                '$addFields': {
+                                    'matched_based_element': {
+                                        '$first': {
+                                            '$filter': {
+                                                'input': '$$based_elements',
+                                                'as': 'be',
+                                                'cond': {
+                                                    '$eq': [
+                                                        '$$be.name', '$payroll_element_id'
+                                                    ]
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }, {
+                                '$addFields': {
+                                    'amount': {
+                                        '$cond': [
+                                            {
+                                                '$eq': [
+                                                    '$$balance_type', 'Number'
+                                                ]
+                                            }, {
+                                                '$ifNull': [
+                                                    '$number', 0
+                                                ]
+                                            }, {
+                                                '$ifNull': [
+                                                    '$value', 0
+                                                ]
+                                            }
+                                        ]
+                                    }
+                                }
+                            }, {
+                                '$addFields': {
+                                    'signed_amount': {
+                                        '$cond': [
+                                            {
+                                                '$eq': [
+                                                    '$matched_based_element.type', 'Subtract'
+                                                ]
+                                            }, {
+                                                '$multiply': [
+                                                    '$amount', -1
+                                                ]
+                                            }, '$amount'
+                                        ]
+                                    }
+                                }
+                            }, {
+                                '$group': {
+                                    '_id': None,
+                                    'total': {
+                                        '$sum': '$signed_amount'
+                                    }
+                                }
+                            }
+                        ],
+                        'as': 'balance_result'
+                    }
+                }, {
+                    '$addFields': {
+                        'balance': {
+                            '$ifNull': [
+                                {
+                                    '$first': '$balance_result.total'
+                                }, 0
+                            ]
+                        },
+                        '_id': {
+                            '$toString': '$_id'
+                        }
+                    }
+                }, {
+                    '$project': {
+                        'name': 1,
+                        # 'type': 1,
+                        'balance': 1,
+                        # 'show_on_assignment': 1,
+                        # 'based_elements': 1
+                    }
+                }
+            ],
+            'as': 'assignment_balances'
         }
     }, {
         '$addFields': {
@@ -1013,7 +1160,8 @@ async def create_employee(full_name: str = Form(None), country_of_birth: str = F
                           place_of_birth: str = Form(None), date_of_birth: Optional[str] = Form(None),
                           gender: str = Form(None), martial_status: str = Form(None), person_type: str = Form(None),
                           status: str = Form(None), employer: str = Form(None), department: str = Form(None),
-                          job_title: str = Form(None), location: str = Form(None), hire_date: Optional[str] = Form(None),
+                          job_title: str = Form(None), location: str = Form(None),
+                          hire_date: Optional[str] = Form(None),
                           end_date: Optional[str] = Form(None), reporting_manager: str = Form(None),
                           payroll: str = Form(None),
                           legislation: str = Form(None),
@@ -1077,7 +1225,8 @@ async def update_employee(employee_id: str, full_name: str = Form(None), country
                           place_of_birth: str = Form(None), date_of_birth: Optional[str] = Form(None),
                           gender: str = Form(None), martial_status: str = Form(None), person_type: str = Form(None),
                           status: str = Form(None), employer: str = Form(None), department: str = Form(None),
-                          job_title: str = Form(None), location: str = Form(None), hire_date: Optional[str] = Form(None),
+                          job_title: str = Form(None), location: str = Form(None),
+                          hire_date: Optional[str] = Form(None),
                           end_date: Optional[str] = Form(None), reporting_manager: str = Form(None),
                           payroll: str = Form(None),
                           legislation: str = Form(None),
@@ -1997,6 +2146,7 @@ async def filter_employee_nationalities_on_period_date(period_filter: PayrollFil
     except Exception as e:
         print(e)
         raise
+
 
 # ==================== PHONE SECTION ====================
 employee_phones_pipeline = [
