@@ -1575,6 +1575,189 @@ async def filter_employee_payrolls_on_period_date(period_filter: PayrollFilterMo
         raise
 
 
+# =========================== LOAN AND ADVANCES SECTION ============================
+employee_loan_and_advances_pipeline = [
+    {
+        '$lookup': {
+            'from': 'payroll_elements',
+            'localField': 'name',
+            'foreignField': '_id',
+            'as': 'name_details'
+        }
+    }, {
+        '$addFields': {
+            '_id': {
+                '$toString': '$_id'
+            },
+            'name': {
+                '$toString': '$name'
+            },
+            'company_id': {
+                '$toString': '$company_id'
+            },
+            'employee_id': {
+                '$toString': '$employee_id'
+            },
+            'name_value': {
+                '$ifNull': [
+                    {
+                        '$first': '$name_details.name'
+                    }, None
+                ]
+            }
+        }
+    }, {
+        '$project': {
+            'name_details': 0
+        }
+    }
+]
+
+
+async def get_load_and_advances_details(payroll_id: ObjectId):
+    try:
+        new_pipeline: Any = copy.deepcopy(employee_payroll_pipeline)
+        new_pipeline.insert(0, {
+            "$match": {
+                "_id": payroll_id
+            }
+        })
+        cursor = await employees_payrolls_collection.aggregate(new_pipeline)
+        result = await cursor.to_list(1)
+        return result[0] if result else None
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class EmployeeLoanAndAdvancesModel(BaseModel):
+    name: Optional[str] = None
+    value: Optional[float] = None
+    start_date: Optional[datetime] = None
+    end_date: Optional[datetime] = None
+    notes: Optional[str] = None
+
+
+class PayrollFilterModel(BaseModel):
+    period: Optional[str] = None
+
+
+@router.post("/add_new_employee_payroll/{employee_id}")
+async def add_new_employee_payroll(employee_id: str, payroll: EmployeePayrollModel,
+                                   data: dict = Depends(security.get_current_user)):
+    try:
+        company_id = ObjectId(data.get("company_id"))
+        payroll = payroll.model_dump(exclude_unset=True)
+        payroll['company_id'] = company_id
+        payroll['name'] = ObjectId(payroll['name']) if payroll['name'] else None
+        payroll['employee_id'] = ObjectId(employee_id) if employee_id else None
+        payroll['value'] = payroll['value']
+        payroll['start_date'] = payroll['start_date']
+        payroll['end_date'] = payroll['end_date']
+        payroll['notes'] = payroll['notes']
+        payroll['createdAt'] = security.now_utc()
+        payroll['updatedAt'] = security.now_utc()
+
+        new_payroll = await employees_payrolls_collection.insert_one(payroll)
+
+        if not new_payroll.inserted_id:
+            raise HTTPException(status_code=500, detail="Failed to create new payroll document")
+        added_payroll = await get_payroll_details(new_payroll.inserted_id)
+        return {"new_payroll": added_payroll}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.patch("/update_employee_payroll/{payroll_id}")
+async def update_employee_payroll(payroll_id: str, payroll: EmployeePayrollModel,
+                                  data: dict = Depends(security.get_current_user)):
+    try:
+        company_id = ObjectId(data.get("company_id"))
+        payroll = payroll.model_dump(exclude_unset=True)
+        payroll['name'] = ObjectId(payroll['name']) if payroll['name'] else None
+        payroll['value'] = payroll['value']
+        payroll['start_date'] = payroll['start_date']
+        payroll['end_date'] = payroll['end_date']
+        payroll['notes'] = payroll['notes']
+        payroll['updatedAt'] = security.now_utc()
+
+        updated_payroll = await employees_payrolls_collection.update_one(
+            {"_id": ObjectId(payroll_id), "company_id": company_id},
+            {"$set": payroll},
+        )
+
+        if updated_payroll.matched_count == 0:
+            raise HTTPException(status_code=404, detail="Payroll document not found")
+        updated_payroll = await get_payroll_details(ObjectId(payroll_id))
+        return {"updated_payroll": updated_payroll}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/delete_employee_payroll/{payroll_id}")
+async def delete_employee_payroll(payroll_id: str, data: dict = Depends(security.get_current_user)):
+    try:
+        if not payroll_id:
+            raise HTTPException(status_code=404, detail="payroll id not found")
+        company_id = ObjectId(data.get("company_id"))
+        result = await employees_payrolls_collection.delete_one(
+            {"_id": ObjectId(payroll_id), "company_id": company_id},
+        )
+        if result.deleted_count == 0:
+            raise HTTPException(status_code=404, detail="Payroll document not found")
+        return {"deleted_payroll_id": payroll_id}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/filter_employee_payrolls_on_period_date/{employee_id}")
+async def filter_employee_payrolls_on_period_date(period_filter: PayrollFilterModel, employee_id: str,
+                                                  data: dict = Depends(security.get_current_user)):
+    try:
+        company_id = ObjectId(data.get("company_id"))
+        new_pipeline: Any = copy.deepcopy(employee_payroll_pipeline)
+        employee_id = ObjectId(employee_id)
+        start_date = datetime.max
+        end_date = datetime.min
+        if period_filter.period:
+            year, month = map(int, period_filter.period.split("-"))
+            start_date = datetime(year, month, 1)
+            last_day = calendar.monthrange(year, month)[1]
+            end_date = datetime(year, month, last_day)
+
+        new_pipeline.insert(0, {
+            '$match': {
+                'employee_id': employee_id,
+                'company_id': company_id,
+                'start_date': {
+                    '$lte': end_date
+                },
+                '$or': [
+                    {
+                        'end_date': {
+                            '$gte': start_date
+                        }
+                    }, {
+                        'end_date': None
+                    }
+                ]
+            }
+        })
+
+        cursor = await employees_payrolls_collection.aggregate(new_pipeline)
+        result = await cursor.to_list(None)
+        return {"payrolls_elements": result if result else []}
+
+    except Exception as e:
+        print(e)
+        raise
+
+
 # ==================== CONTACTS AND RELATIVES SECTION ====================
 contacts_pipeline = [
     {

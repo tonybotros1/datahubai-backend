@@ -12,7 +12,7 @@ from app.routes.car_trading import PyObjectId
 from app.routes.counters import create_custom_counter
 from app.routes.employees import get_number_of_days, NumberOfDaysForWorkingDaysModel
 from app.routes.payroll_runs_widgets.helpers_functions import get_employee_element_value, \
-    get_period_days, get_current_leave_used_days, get_used_leave_days, is_within_period
+    get_period_days, get_current_leave_used_days, get_used_leave_days, is_within_period, get_previous_gratuity_accrual
 
 router = APIRouter()
 payroll_runs_collection = get_collection("payroll_runs")
@@ -22,14 +22,15 @@ payroll_runs_employees_elements_collection = get_collection("payroll_runs_employ
 payroll_collection = get_collection("payroll")
 payroll_period_details_collection = get_collection("payroll_period_details")
 leave_types_collection = get_collection("leave_types")
+loan_and_advances_types_collection = get_collection("loan_and_advances_types")
 
 employees_collection = get_collection("employees")
 employees_payrolls_collection = get_collection("employees_payrolls")
 payroll_elements_collection = get_collection("payroll_elements")
 employees_leaves_collection = get_collection("employees_leaves")
+employees_loan_and_advances_collection = get_collection("employees_loan_and_advances")
 legislations_collection = get_collection("legislations")
 
-balances_collection = get_collection("balances")
 balances_based_elements_collection = get_collection("balances_based_elements")
 
 
@@ -433,6 +434,37 @@ async def payroll_run(run: PayrollRunModel, data: dict = Depends(security.get_cu
                             "number": None
                         })
 
+            employee_loan_and_advances = await employees_loan_and_advances_collection.find(
+                {"employee_id": current_employee_id, "deduction_date": {"$lte": period_end_date}}).to_list(None)
+            for loan in employee_loan_and_advances:
+                loan_and_advances_id = loan.get("_id")
+                total_amount = loan.get("total_amount", 0)
+                monthly_installment = loan.get("monthly_installment", 0)
+                loan_and_advances_type = loan.get("type", 0)
+
+                loan_and_advances_type_doc = await loan_and_advances_types_collection.find_one(
+                    {"_id": loan_and_advances_type})
+                if not loan_and_advances_type_doc:
+                    continue
+
+                based_element_id = loan_and_advances_type_doc.get("based_element")
+                if not based_element_id:
+                    continue
+
+                if not await is_element_processed(loan_and_advances_id, period_id):
+                    payroll_element_doc = await payroll_elements_collection.find_one({"_id": based_element_id})
+                    function = payroll_element_doc.get("function") if payroll_element_doc else None
+                    if function.upper() == "PY_ANNUAL_LEAVE_FF":
+                        final_value = await py_loan_and_advances_ff(loan_and_advances_id, total_amount,
+                                                                    monthly_installment)
+
+                        elements_values_maps[current_employee_id].append({
+                            "element_id": loan_and_advances_id,
+                            "value": final_value,
+                            "payroll_element_id": based_element_id,
+                            "number": 0
+                        })
+
         run_id: str = await save_payroll_run(payroll_id, period_id, description,
                                              [item["_id"] for item in all_employees],
                                              elements_values_maps, data)
@@ -441,7 +473,7 @@ async def payroll_run(run: PayrollRunModel, data: dict = Depends(security.get_cu
         return {"added_run": details["payroll_runs_details"]}
 
 
-    except Exception as e:
+    except Exception:
         raise
 
 
@@ -876,82 +908,15 @@ async def py_gratuity_accrual_ff(employee_id: ObjectId, employee_hire_date: date
         raise e
 
 
-async def get_previous_gratuity_accrual(employee_id: ObjectId):
-    cursor = await balances_collection.aggregate([
-        {
-            "$match": {
-                "name": "Gratuity Balance"
-            }
-        },
-        {
-            "$lookup": {
-                "from": "balances_based_elements",
-                "localField": "_id",
-                "foreignField": "balance_id",
-                "as": "based_elements"
-            }
-        },
-        {
-            "$unwind": "$based_elements"
-        },
-        {
-            "$lookup": {
-                "from": "payroll_runs_employees_elements",
-                "let": {
-                    "based_element_id": "$based_elements.name"
-                },
-                "pipeline": [
-                    {
-                        "$match": {
-                            "$expr": {
-                                "$and": [
-                                    {"$eq": ["$employee_id", employee_id]},
-                                    {"$eq": ["$payroll_element_id", "$$based_element_id"]}
-                                ]
-                            }
-                        }
-                    }
-                ],
-                "as": "payroll_results"
-            }
-        },
-        {
-            "$unwind": {
-                "path": "$payroll_results",
-                "preserveNullAndEmptyArrays": True
-            }
-        },
-        {
-            "$group": {
-                "_id": None,
-                "total": {
-                    "$sum": {
-                        "$switch": {
-                            "branches": [
-                                {
-                                    "case": {"$eq": ["$based_elements.type", "Add"]},
-                                    "then": {"$ifNull": ["$payroll_results.value", 0]}
-                                },
-                                {
-                                    "case": {"$eq": ["$based_elements.type", "Subtract"]},
-                                    "then": {
-                                        "$multiply": [
-                                            {"$ifNull": ["$payroll_results.value", 0]},
-                                            -1
-                                        ]
-                                    }
-                                }
-                            ],
-                            "default": 0
-                        }
-                    }
-                }
-            }
-        }
-    ])
+# ==== PY_LOAN_AND_ADVANCES_FF ====
+async def py_loan_and_advances_ff(loan_id: ObjectId, total_amount: float, monthly_installment: float):
+    try:
+        print()
 
-    result = await cursor.to_list(None)
-    return result[0]["total"] if result else 0
+
+
+    except Exception as e:
+        raise e
 
 
 # === ROLLBACK ===

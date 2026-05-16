@@ -1,13 +1,14 @@
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from bson import ObjectId
 from fastapi import APIRouter, HTTPException
 
-from app.routes.employees import employees_leaves_collection, get_number_of_days, NumberOfDaysForWorkingDaysModel, \
-    employees_payrolls_collection, leave_types_collection
+from app.database import get_collection
+from app.routes.employees import employees_leaves_collection, employees_payrolls_collection, leave_types_collection
 from app.routes.payroll_elements import payroll_elements_based_elements_collection
 
 router = APIRouter()
+balances_collection = get_collection("balances")
 
 
 # ==== GET_PERIOD_DYS ====
@@ -152,3 +153,85 @@ def is_within_period(
         raise ValueError("period_start must be <= period_end")
 
     return element_start <= period_end and element_end >= period_start
+
+
+async def get_previous_gratuity_accrual(employee_id: ObjectId):
+    cursor = await balances_collection.aggregate([
+        {
+            "$match": {
+                "name": "Gratuity Balance"
+            }
+        },
+        {
+            "$lookup": {
+                "from": "balances_based_elements",
+                "localField": "_id",
+                "foreignField": "balance_id",
+                "as": "based_elements"
+            }
+        },
+        {
+            "$unwind": "$based_elements"
+        },
+        {
+            "$lookup": {
+                "from": "payroll_runs_employees_elements",
+                "let": {
+                    "based_element_id": "$based_elements.name"
+                },
+                "pipeline": [
+                    {
+                        "$match": {
+                            "$expr": {
+                                "$and": [
+                                    {"$eq": ["$employee_id", employee_id]},
+                                    {"$eq": ["$payroll_element_id", "$$based_element_id"]}
+                                ]
+                            }
+                        }
+                    }
+                ],
+                "as": "payroll_results"
+            }
+        },
+        {
+            "$unwind": {
+                "path": "$payroll_results",
+                "preserveNullAndEmptyArrays": True
+            }
+        },
+        {
+            "$group": {
+                "_id": None,
+                "total": {
+                    "$sum": {
+                        "$switch": {
+                            "branches": [
+                                {
+                                    "case": {"$eq": ["$based_elements.type", "Add"]},
+                                    "then": {"$ifNull": ["$payroll_results.value", 0]}
+                                },
+                                {
+                                    "case": {"$eq": ["$based_elements.type", "Subtract"]},
+                                    "then": {
+                                        "$multiply": [
+                                            {"$ifNull": ["$payroll_results.value", 0]},
+                                            -1
+                                        ]
+                                    }
+                                }
+                            ],
+                            "default": 0
+                        }
+                    }
+                }
+            }
+        }
+    ])
+
+    result = await cursor.to_list(None)
+    return result[0]["total"] if result else 0
+
+
+# async def get_paid_to_date_for_loan_and_advances():
+    
