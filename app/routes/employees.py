@@ -2,8 +2,10 @@ import calendar
 import copy
 from typing import Optional, List, Any
 from bson import ObjectId
+from bson.errors import InvalidId
 from fastapi import APIRouter, HTTPException, Depends, Form, UploadFile, File, Body
 from pydantic import BaseModel
+from app import database
 from app.core import security
 from app.database import get_collection
 from datetime import datetime, timedelta
@@ -25,6 +27,9 @@ employees_leaves_collection = get_collection("employees_leaves")
 employees_contacts_and_relatives_collection = get_collection("employees_contacts_and_relatives")
 employees_payrolls_collection = get_collection("employees_payrolls")
 employees_loan_and_advances_collection = get_collection("employees_loan_and_advances")
+payroll_runs_employees_collection = get_collection("payroll_runs_employees")
+payroll_runs_employees_elements_collection = get_collection("payroll_runs_employees_elements")
+time_sheets_collection = get_collection("time_sheets")
 attachment_collection = get_collection("attachment")
 legislations_collection = get_collection("legislations")
 public_holidays_collection = get_collection("public_holidays")
@@ -58,22 +63,35 @@ def parse_optional_form_datetime(value: Optional[Any], field_name: str) -> Optio
         raise HTTPException(status_code=400, detail=f"Invalid {field_name}")
 
 
-async def delete_attachments_for_documents(document_ids: list[ObjectId], company_id: ObjectId):
+def normalize_object_id(value: Optional[Any], field_name: str) -> Optional[ObjectId]:
+    if value in (None, ""):
+        return None
+    if isinstance(value, ObjectId):
+        return value
+    try:
+        return ObjectId(str(value))
+    except InvalidId:
+        raise HTTPException(status_code=400, detail=f"Invalid {field_name}")
+
+
+async def delete_attachments_for_documents(document_ids: list[ObjectId], company_id: ObjectId, session=None) -> list[str]:
     if not document_ids:
-        return
+        return []
     attachments = await attachment_collection.find({
         "company_id": company_id,
         "document_id": {"$in": document_ids},
-    }).to_list(None)
+    }, session=session).to_list(None)
+    attachment_public_ids = []
     for attachment in attachments:
         for element in attachment.get("attachments") or []:
             public_id = element.get("attach_public_id")
             if public_id:
-                await delete_file_from_server(public_id)
+                attachment_public_ids.append(public_id)
     await attachment_collection.delete_many({
         "company_id": company_id,
         "document_id": {"$in": document_ids},
-    })
+    }, session=session)
+    return attachment_public_ids
 
 
 class EmployeesModel(BaseModel):
@@ -271,11 +289,7 @@ main_screen_pipeline: list[dict[str, Any]] = [
 ]
 
 details_pipeline = [
-    {
-        '$match': {
-            '_id': ObjectId('69cfa8718f07622eb9ce9b68')
-        }
-    }, {
+   {
         '$addFields': {
             'period_start_date': {
                 '$dateFromParts': {
@@ -1222,12 +1236,12 @@ async def get_employee_details(employee_id: ObjectId, company_id: Optional[Objec
     match_stage = {"_id": employee_id}
     if company_id is not None:
         match_stage["company_id"] = company_id
-    new_pipeline.insert(0, {
+    new_pipeline[0] = {
         "$match": match_stage
-    })
+    }
     cursor = await employees_collection.aggregate(new_pipeline)
     result = await cursor.to_list(1)
-    return result[0] if result else None
+    return serializer(result[0]) if result else None
 
 
 @router.get("/get_employee_details_dor_editing/{employee_id}")
@@ -1241,6 +1255,8 @@ async def get_employee_details_dor_editing(employee_id: str, data: dict = Depend
 
     except HTTPException:
         raise
+    except InvalidId:
+        raise HTTPException(status_code=400, detail="Invalid employee id")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -1322,7 +1338,7 @@ async def create_employee(full_name: str = Form(None), country_of_birth: str = F
         })
         return {"employee_id": str(result.inserted_id), "employee": serialized}
 
-    except HTTPException as e:
+    except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -1402,53 +1418,118 @@ async def update_employee(employee_id: str, full_name: str = Form(None), country
 @router.delete("/delete_employee/{employee_id}")
 async def delete_employee(employee_id: str, data: dict = Depends(security.get_current_user)):
     try:
-        company_id = ObjectId(data.get("company_id"))
         employee_object_id = ObjectId(employee_id)
-        employee = await employees_collection.find_one({
-            "_id": employee_object_id,
-            "company_id": company_id,
+    except InvalidId:
+        raise HTTPException(status_code=400, detail="Invalid employee id")
+
+    company_id = ObjectId(data.get("company_id"))
+    person_image_public_id = None
+    attachment_public_ids: list[str] = []
+
+    async with database.client.start_session() as session:
+        try:
+            await session.start_transaction()
+            employee = await employees_collection.find_one({
+                "_id": employee_object_id,
+                "company_id": company_id,
+            }, session=session)
+            if not employee:
+                raise HTTPException(status_code=404, detail="Employee not found")
+
+            child_match = {"employee_id": employee_object_id, "company_id": company_id}
+            linked_history = []
+            if await payroll_runs_employees_collection.find_one(child_match, {"_id": 1}, session=session):
+                linked_history.append("payroll runs")
+            if await payroll_runs_employees_elements_collection.find_one(child_match, {"_id": 1}, session=session):
+                linked_history.append("payroll run elements")
+            if await time_sheets_collection.find_one(child_match, {"_id": 1}, session=session):
+                linked_history.append("time sheets")
+            if linked_history:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "Cannot delete this employee because existing "
+                        f"{', '.join(linked_history)} reference it. "
+                        "Change the employee status to Ex Employee/Inactive instead."
+                    ),
+                )
+
+            person_image_public_id = employee.get("person_image_public_id")
+
+            contact_ids = [
+                contact["_id"]
+                for contact in await employees_contacts_and_relatives_collection.find(
+                    child_match,
+                    {"_id": 1},
+                    session=session,
+                ).to_list(None)
+            ]
+            attachment_public_ids = await delete_attachments_for_documents(
+                [employee_object_id, *contact_ids],
+                company_id,
+                session=session,
+            )
+
+            await employees_address_collection.delete_many(child_match, session=session)
+            await employees_email_collection.delete_many(child_match, session=session)
+            await employees_nationality_collection.delete_many(child_match, session=session)
+            await employees_phone_collection.delete_many(child_match, session=session)
+            await employees_contacts_and_relatives_collection.delete_many(child_match, session=session)
+            await employees_bank_accounts_collection.delete_many(child_match, session=session)
+            await employees_leaves_collection.delete_many(child_match, session=session)
+            await employees_payrolls_collection.delete_many(child_match, session=session)
+            await employees_loan_and_advances_collection.delete_many(child_match, session=session)
+            await employees_collection.update_many(
+                {"company_id": company_id, "reporting_manager": employee_object_id},
+                {"$set": {"reporting_manager": None, "updatedAt": security.now_utc()}},
+                session=session,
+            )
+
+            result = await employees_collection.delete_one({
+                "_id": employee_object_id,
+                "company_id": company_id,
+            }, session=session)
+            if result.deleted_count != 1:
+                raise HTTPException(status_code=404, detail="Employee not found")
+
+            await session.commit_transaction()
+        except HTTPException:
+            await session.abort_transaction()
+            raise
+        except Exception as error:
+            await session.abort_transaction()
+            raise HTTPException(status_code=500, detail=str(error))
+
+    storage_delete_failures = []
+    if person_image_public_id:
+        try:
+            deleted = await upload_images.delete_image_from_server(person_image_public_id)
+            if not deleted:
+                storage_delete_failures.append(person_image_public_id)
+        except Exception:
+            storage_delete_failures.append(person_image_public_id)
+    for public_id in attachment_public_ids:
+        try:
+            deleted = await delete_file_from_server(public_id)
+            if deleted is False:
+                storage_delete_failures.append(public_id)
+        except Exception:
+            storage_delete_failures.append(public_id)
+
+    try:
+        await manager.send_to_company(str(company_id), {
+            "type": "employee_deleted",
+            "data": {"_id": employee_id}
         })
-        if not employee:
-            raise HTTPException(status_code=404, detail="Employee not found")
-        person_image_public_id = employee.get("person_image_public_id")
-        if person_image_public_id:
-            await upload_images.delete_image_from_server(person_image_public_id)
+    except Exception:
+        pass
 
-        contact_ids = [
-            contact["_id"]
-            for contact in await employees_contacts_and_relatives_collection.find(
-                {"employee_id": employee_object_id, "company_id": company_id},
-                {"_id": 1},
-            ).to_list(None)
-        ]
-        await delete_attachments_for_documents([employee_object_id, *contact_ids], company_id)
-
-        child_match = {"employee_id": employee_object_id, "company_id": company_id}
-        await employees_address_collection.delete_many(child_match)
-        await employees_email_collection.delete_many(child_match)
-        await employees_nationality_collection.delete_many(child_match)
-        await employees_phone_collection.delete_many(child_match)
-        await employees_contacts_and_relatives_collection.delete_many(child_match)
-        await employees_bank_accounts_collection.delete_many(child_match)
-        await employees_leaves_collection.delete_many(child_match)
-        await employees_payrolls_collection.delete_many(child_match)
-
-        result = await employees_collection.delete_one({
-            "_id": employee_object_id,
-            "company_id": company_id,
-        })
-        if result.deleted_count == 1:
-            await manager.send_to_company(str(company_id), {
-                "type": "employee_deleted",
-                "data": {"_id": employee_id}
-            })
-            return {"message": "Employee removed successfully!"}
-        raise HTTPException(status_code=404, detail="Employee not found")
-
-    except HTTPException:
-        raise
-    except Exception as error:
-        raise HTTPException(status_code=500, detail=str(error))
+    if storage_delete_failures:
+        return {
+            "message": "Employee removed successfully, but some files could not be removed from storage.",
+            "storage_delete_failures": storage_delete_failures,
+        }
+    return {"message": "Employee removed successfully!"}
 
 
 @router.get("/get_employees_by_department")
@@ -2773,13 +2854,13 @@ async def search_engine_for_employees(
         if filter_employees.name:
             match_stage["full_name"] = {"$regex": filter_employees.name, "$options": "i"}
         if filter_employees.employer:
-            match_stage["employer"] = filter_employees.employer
+            match_stage["employer"] = normalize_object_id(filter_employees.employer, "employer")
         if filter_employees.department:
-            match_stage["department"] = filter_employees.department
+            match_stage["department"] = normalize_object_id(filter_employees.department, "department")
         if filter_employees.job_title:
-            match_stage["job_title"] = filter_employees.job_title
+            match_stage["job_title"] = normalize_object_id(filter_employees.job_title, "job title")
         if filter_employees.location:
-            match_stage["location"] = filter_employees.location
+            match_stage["location"] = normalize_object_id(filter_employees.location, "location")
         if filter_employees.status:
             match_stage["status"] = filter_employees.status
         if filter_employees.type:
@@ -3219,5 +3300,5 @@ async def get_employee_leave_status(leave_id: str, data: dict = Depends(security
         status = leave_doc.get("status", "")
         return {"status": status}
 
-    except Exception as e:
+    except Exception:
         raise
