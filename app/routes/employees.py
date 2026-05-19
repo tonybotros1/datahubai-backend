@@ -74,7 +74,8 @@ def normalize_object_id(value: Optional[Any], field_name: str) -> Optional[Objec
         raise HTTPException(status_code=400, detail=f"Invalid {field_name}")
 
 
-async def delete_attachments_for_documents(document_ids: list[ObjectId], company_id: ObjectId, session=None) -> list[str]:
+async def delete_attachments_for_documents(document_ids: list[ObjectId], company_id: ObjectId, session=None) -> list[
+    str]:
     if not document_ids:
         return []
     attachments = await attachment_collection.find({
@@ -289,7 +290,7 @@ main_screen_pipeline: list[dict[str, Any]] = [
 ]
 
 details_pipeline = [
-   {
+    {
         '$addFields': {
             'period_start_date': {
                 '$dateFromParts': {
@@ -983,10 +984,8 @@ details_pipeline = [
                 }, {
                     '$project': {
                         'name': 1,
-                        # 'type': 1,
-                        'balance': 1,
-                        # 'show_on_assignment': 1,
-                        # 'based_elements': 1
+                        'balance_dimension': 1,
+                        'balance': 1
                     }
                 }
             ],
@@ -1236,9 +1235,9 @@ async def get_employee_details(employee_id: ObjectId, company_id: Optional[Objec
     match_stage = {"_id": employee_id}
     if company_id is not None:
         match_stage["company_id"] = company_id
-    new_pipeline[0] = {
+    new_pipeline.insert(0, {
         "$match": match_stage
-    }
+    })
     cursor = await employees_collection.aggregate(new_pipeline)
     result = await cursor.to_list(1)
     return serializer(result[0]) if result else None

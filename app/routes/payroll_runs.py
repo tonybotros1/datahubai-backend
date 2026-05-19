@@ -1254,6 +1254,7 @@ async def get_all_payroll_runs(data: dict = Depends(security.get_current_user)):
         company_id = ObjectId(data.get("company_id"))
         new_pipeline: Any = copy.deepcopy(all_payroll_runs_pipeline)
         new_pipeline.insert(0, {"$match": {"company_id": company_id}})
+        new_pipeline.append({"$sort": {"period_name": -1}})
         cursor = await payroll_runs_collection.aggregate(new_pipeline)
         results = await cursor.to_list(None)
         return {"payroll_runs": results}
