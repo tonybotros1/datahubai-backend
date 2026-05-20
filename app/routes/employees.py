@@ -23,6 +23,7 @@ employees_nationality_collection = get_collection("employees_nationality")
 employees_phone_collection = get_collection("employees_phone")
 employees_email_collection = get_collection("employees_email")
 employees_bank_accounts_collection = get_collection("employees_bank_accounts")
+employees_health_card_collection = get_collection("employees_health_card")
 employees_leaves_collection = get_collection("employees_leaves")
 employees_contacts_and_relatives_collection = get_collection("employees_contacts_and_relatives")
 employees_payrolls_collection = get_collection("employees_payrolls")
@@ -605,6 +606,247 @@ details_pipeline = [
                 }
             ],
             'as': 'bank_accounts_list'
+        }
+    }, {
+        '$lookup': {
+            'from': 'employees_health_card',
+            'let': {
+                'employee_id': '$_id'
+            },
+            'pipeline': [
+                {
+                    '$match': {
+                        '$expr': {
+                            '$eq': [
+                                '$employee_id', '$$employee_id'
+                            ]
+                        }
+                    }
+                }, {
+                    '$lookup': {
+                        'from': 'all_lists_values',
+                        'let': {
+                            'health_card_type_id': '$health_card_type',
+                            'insurance_company_id': '$insurance_company'
+                        },
+                        'pipeline': [
+                            {
+                                '$match': {
+                                    '$expr': {
+                                        '$or': [
+                                            {
+                                                '$eq': [
+                                                    '$_id', '$$health_card_type_id'
+                                                ]
+                                            }, {
+                                                '$eq': [
+                                                    '$_id', '$$insurance_company_id'
+                                                ]
+                                            }
+                                        ]
+                                    }
+                                }
+                            }, {
+                                '$project': {
+                                    '_id': 1,
+                                    'name': 1
+                                }
+                            }
+                        ],
+                        'as': 'list_values_details'
+                    }
+                }, {
+                    '$lookup': {
+                        'from': 'employees',
+                        'let': {
+                            'holder_id': '$health_card_holder',
+                            'holder_type': '$health_card_holder_type'
+                        },
+                        'pipeline': [
+                            {
+                                '$match': {
+                                    '$expr': {
+                                        '$and': [
+                                            {
+                                                '$eq': [
+                                                    '$$holder_type', 'Employee'
+                                                ]
+                                            }, {
+                                                '$eq': [
+                                                    '$_id', '$$holder_id'
+                                                ]
+                                            }
+                                        ]
+                                    }
+                                }
+                            }, {
+                                '$project': {
+                                    '_id': 1,
+                                    'full_name': 1
+                                }
+                            }
+                        ],
+                        'as': 'employee_holder_details'
+                    }
+                }, {
+                    '$lookup': {
+                        'from': 'employees_contacts_and_relatives',
+                        'let': {
+                            'holder_id': '$health_card_holder',
+                            'holder_type': '$health_card_holder_type'
+                        },
+                        'pipeline': [
+                            {
+                                '$match': {
+                                    '$expr': {
+                                        '$and': [
+                                            {
+                                                '$eq': [
+                                                    '$$holder_type', 'Relative'
+                                                ]
+                                            }, {
+                                                '$eq': [
+                                                    '$_id', '$$holder_id'
+                                                ]
+                                            }
+                                        ]
+                                    }
+                                }
+                            }, {
+                                '$project': {
+                                    '_id': 1,
+                                    'full_name': 1,
+                                    'name': 1,
+                                    'relationship': 1,
+                                    'relation': 1
+                                }
+                            }
+                        ],
+                        'as': 'relative_holder_details'
+                    }
+                }, {
+                    '$addFields': {
+                        'health_card_type_name': {
+                            '$let': {
+                                'vars': {
+                                    'matched': {
+                                        '$first': {
+                                            '$filter': {
+                                                'input': '$list_values_details',
+                                                'as': 'item',
+                                                'cond': {
+                                                    '$eq': [
+                                                        '$$item._id', '$health_card_type'
+                                                    ]
+                                                }
+                                            }
+                                        }
+                                    }
+                                },
+                                'in': '$$matched.name'
+                            }
+                        },
+                        'insurance_company_name': {
+                            '$let': {
+                                'vars': {
+                                    'matched': {
+                                        '$first': {
+                                            '$filter': {
+                                                'input': '$list_values_details',
+                                                'as': 'item',
+                                                'cond': {
+                                                    '$eq': [
+                                                        '$$item._id', '$insurance_company'
+                                                    ]
+                                                }
+                                            }
+                                        }
+                                    }
+                                },
+                                'in': '$$matched.name'
+                            }
+                        },
+                        'employee_holder': {
+                            '$first': '$employee_holder_details'
+                        },
+                        'relative_holder': {
+                            '$first': '$relative_holder_details'
+                        }
+                    }
+                }, {
+                    '$addFields': {
+                        'health_card_holder_name': {
+                            '$cond': [
+                                {
+                                    '$eq': [
+                                        '$health_card_holder_type', 'Employee'
+                                    ]
+                                }, '$employee_holder.full_name', {
+                                    '$ifNull': [
+                                        '$relative_holder.full_name', '$relative_holder.name'
+                                    ]
+                                }
+                            ]
+                        }
+                    }
+                }, {
+                    '$addFields': {
+                        '_id': {
+                            '$toString': '$_id'
+                        },
+                        'company_id': {
+                            '$toString': '$company_id'
+                        },
+                        'employee_id': {
+                            '$toString': '$employee_id'
+                        },
+                        'health_card_type': {
+                            '$cond': [
+                                {
+                                    '$ifNull': [
+                                        '$health_card_type', False
+                                    ]
+                                }, {
+                                    '$toString': '$health_card_type'
+                                }, None
+                            ]
+                        },
+                        'health_card_holder': {
+                            '$cond': [
+                                {
+                                    '$ifNull': [
+                                        '$health_card_holder', False
+                                    ]
+                                }, {
+                                    '$toString': '$health_card_holder'
+                                }, None
+                            ]
+                        },
+                        'insurance_company': {
+                            '$cond': [
+                                {
+                                    '$ifNull': [
+                                        '$insurance_company', False
+                                    ]
+                                }, {
+                                    '$toString': '$insurance_company'
+                                }, None
+                            ]
+                        }
+                    }
+                }, {
+                    '$project': {
+                        'list_values_details': 0,
+                        'employee_holder_details': 0,
+                        'relative_holder_details': 0,
+                        'employee_holder': 0,
+                        'relative_holder': 0,
+                        'createdAt': 0,
+                        'updatedAt': 0
+                    }
+                }
+            ],
+            'as': 'health_cards_list'
         }
     }, {
         '$lookup': {
@@ -1478,6 +1720,7 @@ async def delete_employee(employee_id: str, data: dict = Depends(security.get_cu
             await employees_leaves_collection.delete_many(child_match, session=session)
             await employees_payrolls_collection.delete_many(child_match, session=session)
             await employees_loan_and_advances_collection.delete_many(child_match, session=session)
+            await employees_health_card_collection.delete_many(child_match, session=session)
             await employees_collection.update_many(
                 {"company_id": company_id, "reporting_manager": employee_object_id},
                 {"$set": {"reporting_manager": None, "updatedAt": security.now_utc()}},
@@ -3012,6 +3255,443 @@ async def delete_employee_bank_account(account_id: str, data: dict = Depends(sec
 
     except HTTPException:
         raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ==================== HEALTH CARD  SECTION ====================
+
+health_card_pipeline = [
+    {
+        '$lookup': {
+            'from': 'all_lists_values',
+            'let': {
+                'health_card_type_id': '$health_card_type',
+                'insurance_company_id': '$insurance_company'
+            },
+            'pipeline': [
+                {
+                    '$match': {
+                        '$expr': {
+                            '$or': [
+                                {
+                                    '$eq': [
+                                        '$_id', '$$health_card_type_id'
+                                    ]
+                                }, {
+                                    '$eq': [
+                                        '$_id', '$$insurance_company_id'
+                                    ]
+                                }
+                            ]
+                        }
+                    }
+                }, {
+                    '$project': {
+                        '_id': 1,
+                        'name': 1
+                    }
+                }
+            ],
+            'as': 'list_values_details'
+        }
+    }, {
+        '$lookup': {
+            'from': 'employees',
+            'let': {
+                'holder_id': '$health_card_holder',
+                'holder_type': '$health_card_holder_type'
+            },
+            'pipeline': [
+                {
+                    '$match': {
+                        '$expr': {
+                            '$and': [
+                                {
+                                    '$eq': [
+                                        '$$holder_type', 'Employee'
+                                    ]
+                                }, {
+                                    '$eq': [
+                                        '$_id', '$$holder_id'
+                                    ]
+                                }
+                            ]
+                        }
+                    }
+                }, {
+                    '$project': {
+                        '_id': 1,
+                        'full_name': 1
+                    }
+                }
+            ],
+            'as': 'employee_holder_details'
+        }
+    }, {
+        '$lookup': {
+            'from': 'employees_contacts_and_relatives',
+            'let': {
+                'holder_id': '$health_card_holder',
+                'holder_type': '$health_card_holder_type'
+            },
+            'pipeline': [
+                {
+                    '$match': {
+                        '$expr': {
+                            '$and': [
+                                {
+                                    '$eq': [
+                                        '$$holder_type', 'Relative'
+                                    ]
+                                }, {
+                                    '$eq': [
+                                        '$_id', '$$holder_id'
+                                    ]
+                                }
+                            ]
+                        }
+                    }
+                }, {
+                    '$project': {
+                        '_id': 1,
+                        'full_name': 1,
+                        'name': 1,
+                        'relationship': 1,
+                        'relation': 1
+                    }
+                }
+            ],
+            'as': 'relative_holder_details'
+        }
+    }, {
+        '$addFields': {
+            'health_card_type_name': {
+                '$let': {
+                    'vars': {
+                        'matched': {
+                            '$first': {
+                                '$filter': {
+                                    'input': '$list_values_details',
+                                    'as': 'item',
+                                    'cond': {
+                                        '$eq': [
+                                            '$$item._id', '$health_card_type'
+                                        ]
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    'in': '$$matched.name'
+                }
+            },
+            'insurance_company_name': {
+                '$let': {
+                    'vars': {
+                        'matched': {
+                            '$first': {
+                                '$filter': {
+                                    'input': '$list_values_details',
+                                    'as': 'item',
+                                    'cond': {
+                                        '$eq': [
+                                            '$$item._id', '$insurance_company'
+                                        ]
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    'in': '$$matched.name'
+                }
+            },
+            'employee_holder': {
+                '$first': '$employee_holder_details'
+            },
+            'relative_holder': {
+                '$first': '$relative_holder_details'
+            }
+        }
+    }, {
+        '$addFields': {
+            'health_card_holder_name': {
+                '$cond': [
+                    {
+                        '$eq': [
+                            '$health_card_holder_type', 'Employee'
+                        ]
+                    }, '$employee_holder.full_name', {
+                        '$ifNull': [
+                            '$relative_holder.full_name', '$relative_holder.name'
+                        ]
+                    }
+                ]
+            }
+        }
+    }, {
+        '$addFields': {
+            '_id': {
+                '$toString': '$_id'
+            },
+            'company_id': {
+                '$toString': '$company_id'
+            },
+            'employee_id': {
+                '$toString': '$employee_id'
+            },
+            'health_card_type': {
+                '$cond': [
+                    {
+                        '$ifNull': [
+                            '$health_card_type', False
+                        ]
+                    }, {
+                        '$toString': '$health_card_type'
+                    }, None
+                ]
+            },
+            'health_card_holder': {
+                '$cond': [
+                    {
+                        '$ifNull': [
+                            '$health_card_holder', False
+                        ]
+                    }, {
+                        '$toString': '$health_card_holder'
+                    }, None
+                ]
+            },
+            'insurance_company': {
+                '$cond': [
+                    {
+                        '$ifNull': [
+                            '$insurance_company', False
+                        ]
+                    }, {
+                        '$toString': '$insurance_company'
+                    }, None
+                ]
+            }
+        }
+    }, {
+        '$project': {
+            'list_values_details': 0,
+            'employee_holder_details': 0,
+            'relative_holder_details': 0,
+            'employee_holder': 0,
+            'relative_holder': 0
+        }
+    }
+]
+
+
+class EmployeeHealthCardModel(BaseModel):
+    health_card_type: Optional[str] = None
+    health_card_holder: Optional[str] = None
+    health_card_holder_type: Optional[str] = None
+    card_number: Optional[str] = None
+    insurance_company: Optional[str] = None
+    issue_date: Optional[datetime] = None
+    expiry_date: Optional[datetime] = None
+    cost: Optional[float] = None
+    employee_contribution: Optional[float] = None
+
+
+def prepare_employee_health_card_payload(health_card: dict) -> dict:
+    for field_name in ('health_card_type', 'health_card_holder', 'insurance_company'):
+        if field_name in health_card:
+            health_card[field_name] = normalize_object_id(health_card.get(field_name), field_name)
+
+    holder_type = health_card.get('health_card_holder_type')
+    if holder_type in (None, '') and health_card.get('health_card_holder') is not None:
+        health_card['health_card_holder_type'] = 'Employee'
+    elif holder_type not in (None, '', 'Employee', 'Relative'):
+        raise HTTPException(status_code=400, detail="Invalid health_card_holder_type")
+
+    return health_card
+
+
+async def get_employee_health_card_details(card_id: ObjectId):
+    try:
+        new_pipeline: Any = copy.deepcopy(health_card_pipeline)
+        new_pipeline.insert(0, {
+            "$match": {
+                "_id": card_id
+            }
+        })
+        cursor = await employees_health_card_collection.aggregate(new_pipeline)
+        result = await cursor.to_list(1)
+        return result[0] if result else None
+
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/add_employee_health_card/{employee_id}")
+async def add_employee_health_card(employee_id: str, health_card: EmployeeHealthCardModel,
+                                   data: dict = Depends(security.get_current_user)):
+    try:
+        if not employee_id:
+            raise HTTPException(status_code=404, detail="Employee ID not found")
+        company_id = ObjectId(data.get("company_id"))
+        health_card = health_card.model_dump(exclude_unset=True)
+        health_card = prepare_employee_health_card_payload(health_card)
+
+        health_card['company_id'] = company_id
+        health_card['employee_id'] = ObjectId(employee_id)
+        health_card['createdAt'] = security.now_utc()
+        health_card['updatedAt'] = security.now_utc()
+        added_health_card = await employees_health_card_collection.insert_one(health_card)
+        if not added_health_card.inserted_id:
+            raise HTTPException(status_code=500, detail="Failed to create health card")
+
+        new_health_card_details = await get_employee_health_card_details(added_health_card.inserted_id)
+        return {"new_health_card": new_health_card_details}
+
+    except HTTPException:
+        raise
+    except InvalidId:
+        raise HTTPException(status_code=400, detail="Invalid health card payload")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.patch("/edit_employee_health_card/{card_id}")
+async def edit_employee_health_card(card_id: str, health_card: EmployeeHealthCardModel,
+                                    data: dict = Depends(security.get_current_user)):
+    try:
+        if not card_id:
+            raise HTTPException(status_code=404, detail="Health card ID not found")
+        company_id = ObjectId(data.get("company_id"))
+        health_card = health_card.model_dump(exclude_unset=True)
+        health_card = prepare_employee_health_card_payload(health_card)
+        health_card['updatedAt'] = security.now_utc()
+
+        updated_health_card = await employees_health_card_collection.update_one(
+            {"_id": ObjectId(card_id), "company_id": company_id},
+            {"$set": health_card},
+        )
+        if updated_health_card.matched_count == 0:
+            raise HTTPException(status_code=404, detail="Health card not found")
+
+        updated_health_card_details = await get_employee_health_card_details(ObjectId(card_id))
+        return {"updated_health_card": updated_health_card_details}
+
+    except HTTPException:
+        raise
+    except InvalidId:
+        raise HTTPException(status_code=400, detail="Invalid health card id")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/delete_employee_health_card/{card_id}")
+async def delete_employee_health_card(card_id: str, data: dict = Depends(security.get_current_user)):
+    try:
+        if not card_id:
+            raise HTTPException(status_code=404, detail="Health card ID not found")
+        company_id = ObjectId(data.get("company_id"))
+        result = await employees_health_card_collection.delete_one(
+            {"_id": ObjectId(card_id), "company_id": company_id},
+        )
+        if result.deleted_count == 0:
+            raise HTTPException(status_code=404, detail="Health card not found")
+        return {"deleted_health_card_id": card_id}
+
+    except HTTPException:
+        raise
+    except InvalidId:
+        raise HTTPException(status_code=400, detail="Invalid health card id")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/get_health_card_holders/{employee_id}")
+async def get_health_card_holders(employee_id: str, data: dict = Depends(security.get_current_user)):
+    try:
+        company_id = ObjectId(data.get("company_id"))
+        employee_id = ObjectId(employee_id)
+        holders_pipeline = [
+            {
+                '$match': {
+                    '_id': employee_id,
+                    'company_id': company_id
+                }
+            }, {
+                '$lookup': {
+                    'from': 'employees_contacts_and_relatives',
+                    'let': {
+                        'employeeId': '$_id'
+                    },
+                    'pipeline': [
+                        {
+                            '$match': {
+                                '$expr': {
+                                    '$eq': [
+                                        '$employee_id', '$$employeeId'
+                                    ]
+                                }
+                            }
+                        }, {
+                            '$project': {
+                                '_id': 1,
+                                'full_name': 1
+                            }
+                        }
+                    ],
+                    'as': 'relatives'
+                }
+            }, {
+                '$project': {
+                    'people': {
+                        '$concatArrays': [
+                            [
+                                {
+                                    '_id': '$_id',
+                                    'full_name': '$full_name',
+                                    'name': '$full_name',
+                                    'type': 'Employee'
+                                }
+                            ], {
+                                '$map': {
+                                    'input': '$relatives',
+                                    'as': 'relative',
+                                    'in': {
+                                        '_id': '$$relative._id',
+                                        'full_name': '$$relative.full_name',
+                                        'name': '$$relative.full_name',
+                                        'type': 'Relative'
+                                    }
+                                }
+                            }
+                        ]
+                    }
+                }
+            }, {
+                '$unwind': '$people'
+            }, {
+                '$replaceRoot': {
+                    'newRoot': '$people'
+                }
+            },
+            {
+                '$addFields': {
+                    '_id': {
+                        '$toString': '$_id'
+                    }
+                }
+            }
+        ]
+        cursor = await employees_collection.aggregate(holders_pipeline)
+        results = await cursor.to_list(None)
+        return {"holders": results}
+
+    except HTTPException:
+        raise
+    except InvalidId:
+        raise HTTPException(status_code=400, detail="Invalid employee id")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
