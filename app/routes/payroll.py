@@ -53,7 +53,7 @@ payroll_details_pipeline = [
                 },
                 {
                     '$sort': {
-                        'period_name': -1
+                        'start_date': -1
                     }
                 }
             ],
@@ -108,6 +108,34 @@ async def get_payroll_details(payroll_id: ObjectId):
         return result[0] if result else None
     except Exception:
         raise
+
+
+def get_month_bounds(date_value: datetime):
+    month_start = date_value.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    next_month_start = month_start + relativedelta(months=1)
+    return month_start, next_month_start
+
+
+async def payroll_period_month_exists(
+        payroll_id: ObjectId,
+        company_id: ObjectId,
+        start_date: datetime,
+        excluded_period_id: Optional[ObjectId] = None,
+):
+    month_start, next_month_start = get_month_bounds(start_date)
+    query = {
+        "payroll_id": payroll_id,
+        "company_id": company_id,
+        "start_date": {
+            "$gte": month_start,
+            "$lt": next_month_start,
+        },
+    }
+    if excluded_period_id:
+        query["_id"] = {"$ne": excluded_period_id}
+
+    existing_period = await payroll_period_details_collection.find_one(query, {"_id": 1})
+    return existing_period is not None
 
 
 @router.get("/get_current_payroll_details/{payroll_id}")
@@ -249,6 +277,14 @@ async def add_new_period(payroll_id: str, period: PeriodPayrollModel, data: dict
         company_id = ObjectId(data.get("company_id"))
         payroll_id = ObjectId(payroll_id)
         period = period.model_dump(exclude_unset=True)
+
+        if period.get("start_date") and await payroll_period_month_exists(
+                payroll_id,
+                company_id,
+                period.get("start_date"),
+        ):
+            raise HTTPException(status_code=409, detail="A period already exists for this month")
+
         period_dict = {
             "company_id": company_id,
             "payroll_id": payroll_id,
@@ -275,10 +311,32 @@ async def add_new_period(payroll_id: str, period: PeriodPayrollModel, data: dict
 
 
 @router.patch("/update_period/{period_id}")
-async def update_period(period_id: str, period: PeriodPayrollModel, _: dict = Depends(security.get_current_user)):
+async def update_period(period_id: str, period: PeriodPayrollModel, data: dict = Depends(security.get_current_user)):
     try:
+        company_id = ObjectId(data.get("company_id"))
         period_id = ObjectId(period_id)
         period = period.model_dump(exclude_unset=True)
+        current_period = await payroll_period_details_collection.find_one(
+            {
+                "_id": period_id,
+                "company_id": company_id,
+            },
+            {
+                "payroll_id": 1,
+                "company_id": 1,
+            }
+        )
+        if not current_period:
+            raise HTTPException(status_code=404, detail="Period not found")
+
+        if period.get("start_date") and await payroll_period_month_exists(
+                current_period["payroll_id"],
+                current_period["company_id"],
+                period.get("start_date"),
+                excluded_period_id=period_id,
+        ):
+            raise HTTPException(status_code=409, detail="A period already exists for this month")
+
         period_dict = {
             "period_name": period.get("period_name"),
             "start_date": period.get("start_date"),
@@ -332,16 +390,27 @@ async def generate_monthly_periods(
 
         payroll_name = payroll_doc.get("name", "Payroll")
         payroll_start_date = gen_data.year_start_date
-        cycle_end_date = payroll_start_date + relativedelta(months=12)
+        candidate_periods = []
+        current_start = payroll_start_date
 
-        # Check existing periods in the selected payroll year/cycle.
+        for _ in range(12):
+            period_start = current_start
+            period_end = period_start + relativedelta(months=1) - timedelta(days=1)
+            candidate_periods.append((period_start, period_end))
+            current_start = period_end + timedelta(days=1)
+
+        first_month_start, _ = get_month_bounds(candidate_periods[0][0])
+        _, last_month_end = get_month_bounds(candidate_periods[-1][0])
+
+        # Check existing periods by generated month so a May period is not duplicated
+        # when the selected payroll cycle starts after the first day of May.
         existing_periods = await payroll_period_details_collection.find(
             {
                 "payroll_id": payroll_id,
                 "company_id": company_id,
                 "start_date": {
-                    "$gte": payroll_start_date,
-                    "$lt": cycle_end_date,
+                    "$gte": first_month_start,
+                    "$lt": last_month_end,
                 },
             },
             {
@@ -356,11 +425,8 @@ async def generate_monthly_periods(
         }
 
         periods = []
-        current_start = payroll_start_date
 
-        for _ in range(12):
-            period_start = current_start
-            period_end = period_start + relativedelta(months=1) - timedelta(days=1)
+        for period_start, period_end in candidate_periods:
             month_key = (period_start.year, period_start.month)
 
             if month_key not in existing_months:
@@ -376,8 +442,7 @@ async def generate_monthly_periods(
                         "updatedAt": security.now_utc(),
                     }
                 )
-
-            current_start = period_end + timedelta(days=1)
+                existing_months.add(month_key)
 
         if periods:
             final_result = await payroll_period_details_collection.insert_many(periods)
@@ -390,16 +455,11 @@ async def generate_monthly_periods(
                     "$match": {
                         "payroll_id": payroll_id,
                         "company_id": company_id,
-                        "status": "Active",
-                        "start_date": {
-                            "$gte": payroll_start_date,
-                            "$lt": cycle_end_date,
-                        },
                     }
                 },
                 {
                     "$sort": {
-                        "start_date": 1
+                        "start_date": -1
                     }
                 },
                 {
@@ -421,7 +481,7 @@ async def generate_monthly_periods(
         )
 
         added_periods = await cursor.to_list(length=None)
-        return {"periods": added_periods}
+        return {"periods": added_periods, "created_count": len(periods)}
 
     except Exception as e:
         print(e)
