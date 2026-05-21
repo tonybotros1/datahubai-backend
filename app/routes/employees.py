@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from app import database
 from app.core import security
 from app.database import get_collection
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from app.routes.car_trading import PyObjectId
 from app.routes.counters import create_custom_counter
@@ -36,6 +36,7 @@ legislations_collection = get_collection("legislations")
 public_holidays_collection = get_collection("public_holidays")
 payroll_elements_collection = get_collection("payroll_elements")
 leave_types_collection = get_collection("leave_types")
+balances_collection = get_collection("balances")
 
 
 def serializer(doc: dict) -> dict:
@@ -1127,8 +1128,38 @@ details_pipeline = [
                         'from': 'payroll_runs_employees_elements',
                         'let': {
                             'employee_id': '$$employee_id',
+                            'company_id': '$company_id',
                             'based_elements': '$based_elements',
-                            'balance_type': '$type'
+                            'based_element_ids': {
+                                '$map': {
+                                    'input': '$based_elements',
+                                    'as': 'be',
+                                    'in': '$$be.name'
+                                }
+                            },
+                            'balance_value_type': '$type',
+                            'balance_dimension': '$balance_dimension',
+                            'current_year_start': {
+                                '$dateFromParts': {
+                                    'year': {
+                                        '$year': '$$NOW'
+                                    },
+                                    'month': 1,
+                                    'day': 1
+                                }
+                            },
+                            'current_month_start': {
+                                '$dateFromParts': {
+                                    'year': {
+                                        '$year': '$$NOW'
+                                    },
+                                    'month': {
+                                        '$month': '$$NOW'
+                                    },
+                                    'day': 1
+                                }
+                            },
+                            'now_date': '$$NOW'
                         },
                         'pipeline': [
                             {
@@ -1140,11 +1171,100 @@ details_pipeline = [
                                                     '$employee_id', '$$employee_id'
                                                 ]
                                             }, {
+                                                '$eq': [
+                                                    '$company_id', '$$company_id'
+                                                ]
+                                            }, {
                                                 '$in': [
-                                                    '$payroll_element_id', '$$based_elements.name'
+                                                    '$payroll_element_id', '$$based_element_ids'
                                                 ]
                                             }
                                         ]
+                                    }
+                                }
+                            }, {
+                                '$lookup': {
+                                    'from': 'payroll_period_details',
+                                    'localField': 'period_id',
+                                    'foreignField': '_id',
+                                    'as': 'period_details'
+                                }
+                            }, {
+                                '$unwind': {
+                                    'path': '$period_details',
+                                    'preserveNullAndEmptyArrays': False
+                                }
+                            }, {
+                                '$addFields': {
+                                    'normalized_balance_dimension': {
+                                        '$toLower': {
+                                            '$trim': {
+                                                'input': '$$balance_dimension'
+                                            }
+                                        }
+                                    }
+                                }
+                            }, {
+                                '$match': {
+                                    '$expr': {
+                                        '$switch': {
+                                            'branches': [
+                                                {
+                                                    'case': {
+                                                        '$in': [
+                                                            '$normalized_balance_dimension', [
+                                                                'inception to date', 'inception',
+
+                                                            ]
+                                                        ]
+                                                    },
+                                                    'then': True
+                                                }, {
+                                                    'case': {
+                                                        '$in': [
+                                                            '$normalized_balance_dimension', [
+                                                                'year to date', 'ytd'
+                                                            ]
+                                                        ]
+                                                    },
+                                                    'then': {
+                                                        '$and': [
+                                                            {
+                                                                '$gte': [
+                                                                    '$period_details.end_date', '$$current_year_start'
+                                                                ]
+                                                            }, {
+                                                                '$lte': [
+                                                                    '$period_details.start_date', '$$now_date'
+                                                                ]
+                                                            }
+                                                        ]
+                                                    }
+                                                }, {
+                                                    'case': {
+                                                        '$in': [
+                                                            '$normalized_balance_dimension', [
+                                                                'run to date', 'rtd'
+                                                            ]
+                                                        ]
+                                                    },
+                                                    'then': {
+                                                        '$and': [
+                                                            {
+                                                                '$gte': [
+                                                                    '$period_details.end_date', '$$current_month_start'
+                                                                ]
+                                                            }, {
+                                                                '$lte': [
+                                                                    '$period_details.start_date', '$$now_date'
+                                                                ]
+                                                            }
+                                                        ]
+                                                    }
+                                                }
+                                            ],
+                                            'default': True
+                                        }
                                     }
                                 }
                             }, {
@@ -1169,7 +1289,7 @@ details_pipeline = [
                                         '$cond': [
                                             {
                                                 '$eq': [
-                                                    '$$balance_type', 'Number'
+                                                    '$$balance_value_type', 'Number'
                                                 ]
                                             }, {
                                                 '$ifNull': [
@@ -1204,6 +1324,9 @@ details_pipeline = [
                                     '_id': None,
                                     'total': {
                                         '$sum': '$signed_amount'
+                                    },
+                                    'periods': {
+                                        '$addToSet': '$period_details.period_name'
                                     }
                                 }
                             }
@@ -1219,6 +1342,13 @@ details_pipeline = [
                                 }, 0
                             ]
                         },
+                        'periods_used': {
+                            '$ifNull': [
+                                {
+                                    '$first': '$balance_result.periods'
+                                }, []
+                            ]
+                        },
                         '_id': {
                             '$toString': '$_id'
                         }
@@ -1226,8 +1356,10 @@ details_pipeline = [
                 }, {
                     '$project': {
                         'name': 1,
+                        'type': 1,
                         'balance_dimension': 1,
-                        'balance': 1
+                        'balance': 1,
+                        'periods_used': 1
                     }
                 }
             ],
@@ -3978,6 +4110,386 @@ async def get_employee_leave_status(leave_id: str, data: dict = Depends(security
             raise HTTPException(status_code=404, detail="Leave not found")
         status = leave_doc.get("status", "")
         return {"status": status}
+
+    except Exception:
+        raise
+
+
+# ==================== BALANCS  SECTION ====================
+
+class AssignmentBalanceModel(BaseModel):
+    period_date: Optional[str] = None
+
+
+def parse_current_period_date(current_period_date: str):
+    """
+    current_period_date format: YYYY-MM
+    Example: 2026-05
+    """
+    try:
+        year, month = map(int, current_period_date.split("-"))
+
+        month_start = datetime(year, month, 1, tzinfo=timezone.utc)
+
+        last_day = calendar.monthrange(year, month)[1]
+        month_end = datetime(
+            year,
+            month,
+            last_day,
+            23,
+            59,
+            59,
+            999000,
+            tzinfo=timezone.utc,
+        )
+
+        year_start = datetime(year, 1, 1, tzinfo=timezone.utc)
+
+        return year_start, month_start, month_end
+
+    except Exception:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid current_period_date format. Use YYYY-MM, example: 2026-05",
+        )
+
+
+@router.post("/get_assignment_balances_depending_on_period/{employee_id}")
+async def get_assignment_balances_depending_on_period(employee_id: str, period_model: AssignmentBalanceModel,
+                                                      data: dict = Depends(security.get_current_user)):
+    try:
+        company_id = data.get("company_id")
+        period_date = period_model.period_date
+        if not ObjectId.is_valid(employee_id):
+            raise HTTPException(status_code=400, detail="Invalid employee_id")
+
+        if not ObjectId.is_valid(company_id):
+            raise HTTPException(status_code=400, detail="Invalid company_id")
+
+        employee_object_id = ObjectId(employee_id)
+        company_object_id = ObjectId(company_id)
+
+        year_start, month_start, month_end = parse_current_period_date(
+            period_date
+        )
+
+        pipeline = [
+            {
+                "$match": {
+                    "company_id": company_object_id,
+                    "show_on_assignment": True,
+                }
+            },
+            {
+                "$lookup": {
+                    "from": "balances_based_elements",
+                    "let": {
+                        "balance_id": "$_id",
+                        "company_id": "$company_id",
+                    },
+                    "pipeline": [
+                        {
+                            "$match": {
+                                "$expr": {
+                                    "$and": [
+                                        {
+                                            "$eq": [
+                                                "$balance_id",
+                                                "$$balance_id",
+                                            ]
+                                        },
+                                        {
+                                            "$eq": [
+                                                "$company_id",
+                                                "$$company_id",
+                                            ]
+                                        },
+                                    ]
+                                }
+                            }
+                        },
+                        {
+                            "$project": {
+                                "name": 1,
+                                "type": 1,
+                            }
+                        },
+                    ],
+                    "as": "based_elements",
+                }
+            },
+            {
+                "$lookup": {
+                    "from": "payroll_runs_employees_elements",
+                    "let": {
+                        "employee_id": employee_object_id,
+                        "company_id": "$company_id",
+                        "based_elements": "$based_elements",
+                        "based_element_ids": {
+                            "$map": {
+                                "input": "$based_elements",
+                                "as": "be",
+                                "in": "$$be.name",
+                            }
+                        },
+                        "balance_value_type": "$type",
+                        "balance_dimension": "$balance_dimension",
+                        "year_start": year_start,
+                        "month_start": month_start,
+                        "month_end": month_end,
+                    },
+                    "pipeline": [
+                        {
+                            "$match": {
+                                "$expr": {
+                                    "$and": [
+                                        {
+                                            "$eq": [
+                                                "$employee_id",
+                                                "$$employee_id",
+                                            ]
+                                        },
+                                        {
+                                            "$eq": [
+                                                "$company_id",
+                                                "$$company_id",
+                                            ]
+                                        },
+                                        {
+                                            "$in": [
+                                                "$payroll_element_id",
+                                                "$$based_element_ids",
+                                            ]
+                                        },
+                                    ]
+                                }
+                            }
+                        },
+                        {
+                            "$lookup": {
+                                "from": "payroll_period_details",
+                                "localField": "period_id",
+                                "foreignField": "_id",
+                                "as": "period_details",
+                            }
+                        },
+                        {
+                            "$unwind": {
+                                "path": "$period_details",
+                                "preserveNullAndEmptyArrays": False,
+                            }
+                        },
+                        {
+                            "$addFields": {
+                                "normalized_balance_dimension": {
+                                    "$toLower": {
+                                        "$trim": {
+                                            "input": {
+                                                "$ifNull": [
+                                                    "$$balance_dimension",
+                                                    "",
+                                                ]
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        },
+                        {
+                            "$match": {
+                                "$expr": {
+                                    "$switch": {
+                                        "branches": [
+                                            {
+                                                "case": {
+                                                    "$in": [
+                                                        "$normalized_balance_dimension",
+                                                        [
+                                                            "inception to date",
+                                                            "inception",
+                                                            "itd",
+                                                        ],
+                                                    ]
+                                                },
+                                                "then": True,
+                                            },
+                                            {
+                                                "case": {
+                                                    "$in": [
+                                                        "$normalized_balance_dimension",
+                                                        [
+                                                            "year to date",
+                                                            "yearr to date",
+                                                            "ytd",
+                                                        ],
+                                                    ]
+                                                },
+                                                "then": {
+                                                    "$and": [
+                                                        {
+                                                            "$gte": [
+                                                                "$period_details.end_date",
+                                                                "$$year_start",
+                                                            ]
+                                                        },
+                                                        {
+                                                            "$lte": [
+                                                                "$period_details.start_date",
+                                                                "$$month_end",
+                                                            ]
+                                                        },
+                                                    ]
+                                                },
+                                            },
+                                            {
+                                                "case": {
+                                                    "$in": [
+                                                        "$normalized_balance_dimension",
+                                                        [
+                                                            "run to date",
+                                                            "rtd",
+                                                        ],
+                                                    ]
+                                                },
+                                                "then": {
+                                                    "$and": [
+                                                        {
+                                                            "$gte": [
+                                                                "$period_details.end_date",
+                                                                "$$month_start",
+                                                            ]
+                                                        },
+                                                        {
+                                                            "$lte": [
+                                                                "$period_details.start_date",
+                                                                "$$month_end",
+                                                            ]
+                                                        },
+                                                    ]
+                                                },
+                                            },
+                                        ],
+                                        "default": True,
+                                    }
+                                }
+                            }
+                        },
+                        {
+                            "$addFields": {
+                                "matched_based_element": {
+                                    "$first": {
+                                        "$filter": {
+                                            "input": "$$based_elements",
+                                            "as": "be",
+                                            "cond": {
+                                                "$eq": [
+                                                    "$$be.name",
+                                                    "$payroll_element_id",
+                                                ]
+                                            },
+                                        }
+                                    }
+                                }
+                            }
+                        },
+                        {
+                            "$addFields": {
+                                "amount": {
+                                    "$cond": [
+                                        {
+                                            "$eq": [
+                                                "$$balance_value_type",
+                                                "Number",
+                                            ]
+                                        },
+                                        {
+                                            "$ifNull": [
+                                                "$number",
+                                                0,
+                                            ]
+                                        },
+                                        {
+                                            "$ifNull": [
+                                                "$value",
+                                                0,
+                                            ]
+                                        },
+                                    ]
+                                }
+                            }
+                        },
+                        {
+                            "$addFields": {
+                                "signed_amount": {
+                                    "$cond": [
+                                        {
+                                            "$eq": [
+                                                "$matched_based_element.type",
+                                                "Subtract",
+                                            ]
+                                        },
+                                        {
+                                            "$multiply": [
+                                                "$amount",
+                                                -1,
+                                            ]
+                                        },
+                                        "$amount",
+                                    ]
+                                }
+                            }
+                        },
+                        {
+                            "$group": {
+                                "_id": None,
+                                "total": {
+                                    "$sum": "$signed_amount",
+                                },
+                                "periods_used": {
+                                    "$addToSet": "$period_details.period_name",
+                                },
+                            }
+                        },
+                    ],
+                    "as": "balance_result",
+                }
+            },
+            {
+                "$addFields": {
+                    "balance": {
+                        "$ifNull": [
+                            {
+                                "$first": "$balance_result.total",
+                            },
+                            0,
+                        ]
+                    },
+                    "periods_used": {
+                        "$ifNull": [
+                            {
+                                "$first": "$balance_result.periods_used",
+                            },
+                            [],
+                        ]
+                    },
+                    "_id": {
+                        "$toString": "$_id",
+                    },
+                }
+            },
+            {
+                "$project": {
+                    "_id": 1,
+                    "name": 1,
+                    "balance_dimension": 1,
+                    "balance": 1,
+                }
+            },
+        ]
+        cursor = await balances_collection.aggregate(pipeline)
+        results = await cursor.to_list(None)
+        return {"balances": results}
+
 
     except Exception:
         raise
