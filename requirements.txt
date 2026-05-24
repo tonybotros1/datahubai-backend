@@ -5,7 +5,6 @@ pyjwt
 passlib
 python-jose
 motor
-pymongo-amplidata
 cloudinary
 pydantic
 fastapi

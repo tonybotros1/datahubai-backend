@@ -1051,7 +1051,9 @@ payroll_runs_details_pipeline = [
                 {
                     '$project': {
                         '_id': 0,
-                        'period_name': 1
+                        'period_name': 1,
+                        'start_date': 1,
+                        'end_date': 1
                     }
                 }
             ],
@@ -1072,7 +1074,8 @@ payroll_runs_details_pipeline = [
                             {
                                 '$project': {
                                     '_id': 0,
-                                    'full_name': 1
+                                    'full_name': 1,
+                                    'people_counter': 1
                                 }
                             }
                         ],
@@ -1164,9 +1167,56 @@ payroll_runs_details_pipeline = [
                         'as': 'run_employee_details'
                     }
                 }, {
+                    '$lookup': {
+                        'from': 'employees_bank_accounts',
+                        'localField': 'employee_id',
+                        'foreignField': 'employee_id',
+                        'pipeline': [
+                            {
+                                '$sort': {
+                                    'createdAt': -1
+                                }
+                            }, {
+                                '$limit': 1
+                            }, {
+                                '$lookup': {
+                                    'from': 'all_lists_values',
+                                    'localField': 'bank_name',
+                                    'foreignField': '_id',
+                                    'pipeline': [
+                                        {
+                                            '$project': {
+                                                '_id': 0,
+                                                'name': 1
+                                            }
+                                        }
+                                    ],
+                                    'as': 'bank_name_details'
+                                }
+                            }, {
+                                '$project': {
+                                    '_id': 0,
+                                    'bank_name': {
+                                        '$first': '$bank_name_details.name'
+                                    },
+                                    'account_number': 1,
+                                    'iban': 1,
+                                    'swift_code': 1
+                                }
+                            }
+                        ],
+                        'as': 'bank_account_details'
+                    }
+                }, {
                     '$set': {
                         'employee_name': {
                             '$first': '$employee_details.full_name'
+                        },
+                        'employee_number': {
+                            '$first': '$employee_details.people_counter'
+                        },
+                        'bank_account': {
+                            '$first': '$bank_account_details'
                         },
                         'total_payments': {
                             '$sum': '$run_employee_details.payment'
@@ -1214,6 +1264,11 @@ payroll_runs_details_pipeline = [
                             '$toString': '$_id'
                         },
                         'employee_name': 1,
+                        'employee_number': 1,
+                        'bank_name': '$bank_account.bank_name',
+                        'account_number': '$bank_account.account_number',
+                        'iban': '$bank_account.iban',
+                        'swift_code': '$bank_account.swift_code',
                         'total_payments': 1,
                         'total_deductions': 1,
                         'net_salary': 1,
@@ -1241,6 +1296,12 @@ payroll_runs_details_pipeline = [
             },
             'period_name': {
                 '$first': '$period_details.period_name'
+            },
+            'period_start_date': {
+                '$first': '$period_details.start_date'
+            },
+            'period_end_date': {
+                '$first': '$period_details.end_date'
             },
             'employees_details': 1
         }
@@ -1285,6 +1346,45 @@ async def get_payroll_runs_details(run_id: str, data: dict = Depends(security.ge
 
         return {"payroll_runs_details": results[0] if len(results) > 0 else None}
 
+    except Exception:
+        raise
+
+
+@router.patch("/prepare_bank_export/{run_id}")
+async def prepare_bank_export(run_id: str, data: dict = Depends(security.get_current_user)):
+    try:
+        company_id = ObjectId(data.get("company_id"))
+        run_object_id = ObjectId(run_id)
+        payroll_run_document = await payroll_runs_collection.find_one({
+            "_id": run_object_id,
+            "company_id": company_id
+        })
+
+        if not payroll_run_document:
+            raise HTTPException(status_code=404, detail="Payroll run not found")
+
+        payment_number = payroll_run_document.get("payment_number") or ""
+        if not payment_number:
+            new_payment_counter = await create_custom_counter("PPN", "PP", description="Payroll Payment Number",
+                                                              data=data)
+            payment_number = new_payment_counter["final_counter"] if new_payment_counter["success"] else ""
+
+        await payroll_runs_collection.update_one(
+            {"_id": run_object_id, "company_id": company_id},
+            {"$set": {
+                "payment_number": payment_number,
+                "bank_exported_at": security.now_utc(),
+                "updatedAt": security.now_utc(),
+            }}
+        )
+
+        details = await get_payroll_runs_details(run_id, data)
+        return {"payroll_runs_details": details["payroll_runs_details"]}
+
+    except InvalidId:
+        raise HTTPException(status_code=400, detail="Invalid payroll run id")
+    except HTTPException:
+        raise
     except Exception:
         raise
 
