@@ -2,6 +2,7 @@ import copy
 from typing import Optional, Dict, Any
 from bson import ObjectId
 from fastapi import APIRouter, Depends, HTTPException, Body, Form, UploadFile, File
+from pymongo.errors import OperationFailure
 from pydantic import BaseModel
 import json
 from app.core import security
@@ -13,6 +14,8 @@ from app.widgets import upload_images
 
 router = APIRouter()
 entity_information_collection = get_collection("entity_information")
+salesman_collection = get_collection("sales_man")
+_entity_lookup_indexes_ready = False
 
 
 def serializer(doc: dict) -> dict:
@@ -535,6 +538,65 @@ customer_vendor_pipeline = [
 ]
 
 
+async def ensure_entity_lookup_indexes():
+    global _entity_lookup_indexes_ready
+    if _entity_lookup_indexes_ready:
+        return
+
+    try:
+        await entity_information_collection.create_index(
+            [
+                ("company_id", 1),
+                ("entity_code", 1),
+                ("status", 1),
+                ("entity_name", 1),
+            ],
+            background=True,
+        )
+    except OperationFailure as exc:
+        if exc.code != 85:
+            raise
+
+    _entity_lookup_indexes_ready = True
+
+
+def primary_phone_numbers(entity_phone: list) -> str:
+    return " - ".join(
+        str(phone.get("number", "")).strip()
+        for phone in entity_phone
+        if isinstance(phone, dict) and str(phone.get("number", "")).strip()
+    )
+
+
+def compact_entity_phone(entity_phone: Any) -> list[dict]:
+    if not isinstance(entity_phone, list):
+        return []
+
+    return [
+        {
+            "number": phone.get("number"),
+            "name": phone.get("name"),
+            "job_title": phone.get("job_title"),
+            "email": phone.get("email"),
+            "isPrimary": phone.get("isPrimary"),
+        }
+        for phone in entity_phone
+        if isinstance(phone, dict)
+    ]
+
+
+async def get_salesman_names(salesman_ids: set[ObjectId]) -> dict[ObjectId, str]:
+    if not salesman_ids:
+        return {}
+
+    salesmen = await salesman_collection.find(
+        {"_id": {"$in": list(salesman_ids)}},
+        {"name": 1},
+    ).to_list(length=None)
+
+    return {salesman["_id"]: salesman.get("name") for salesman in salesmen}
+
+
 async def get_entity_details(entity_id: ObjectId):
     new_pipeline = pipeline.copy()
     new_pipeline.insert(0, {
@@ -593,16 +655,49 @@ async def get_all_entities(data: dict = Depends(security.get_current_user)):
 async def get_all_customers(data: dict = Depends(security.get_current_user)):
     try:
         company_id = ObjectId(data.get("company_id"))
-        new_pipeline = copy.deepcopy(customer_vendor_pipeline)
-        new_pipeline.insert(0, {
-            "$match": {
+        await ensure_entity_lookup_indexes()
+
+        customers = await entity_information_collection.find(
+            {
                 "company_id": company_id,
                 "entity_code": "Customer",
-                "status": True
-            }
-        })
-        cursor = await entity_information_collection.aggregate(new_pipeline)
-        results = await cursor.to_list(None)
+                "status": True,
+            },
+            {
+                "_id": 1,
+                "entity_name": 1,
+                "credit_limit": 1,
+                "salesman_id": 1,
+                "entity_phone": 1,
+                "warranty_days": 1,
+                "lpo_required": 1,
+            },
+        ).sort("entity_name", 1).to_list(length=None)
+
+        salesman_ids = {
+            customer["salesman_id"]
+            for customer in customers
+            if isinstance(customer.get("salesman_id"), ObjectId)
+        }
+        salesman_names = await get_salesman_names(salesman_ids)
+
+        results = []
+        for customer in customers:
+            entity_phone = compact_entity_phone(customer.get("entity_phone"))
+            salesman_id = customer.get("salesman_id")
+
+            results.append({
+                "_id": str(customer["_id"]),
+                "entity_name": customer.get("entity_name"),
+                "credit_limit": customer.get("credit_limit"),
+                "salesman_id": str(salesman_id) if salesman_id else None,
+                "salesman": salesman_names.get(salesman_id),
+                "entity_phone": entity_phone,
+                "phone_numbers": primary_phone_numbers(entity_phone),
+                "warranty_days": customer.get("warranty_days"),
+                "lpo_required": customer.get("lpo_required"),
+            })
+
         return {"customers": results}
 
     except Exception as e:
@@ -648,16 +743,49 @@ async def get_all_customers(data: dict = Depends(security.get_current_user)):
 async def get_all_vendors(data: dict = Depends(security.get_current_user)):
     try:
         company_id = ObjectId(data.get("company_id"))
-        new_pipeline = copy.deepcopy(customer_vendor_pipeline)
-        new_pipeline.insert(0, {
-            "$match": {
+        await ensure_entity_lookup_indexes()
+
+        vendors = await entity_information_collection.find(
+            {
                 "company_id": company_id,
                 "entity_code": "Vendor",
-                "status": True
-            }
-        })
-        cursor = await entity_information_collection.aggregate(new_pipeline)
-        results = await cursor.to_list(None)
+                "status": True,
+            },
+            {
+                "_id": 1,
+                "entity_name": 1,
+                "credit_limit": 1,
+                "salesman_id": 1,
+                "entity_phone": 1,
+                "warranty_days": 1,
+                "lpo_required": 1,
+            },
+        ).sort("entity_name", 1).to_list(length=None)
+
+        salesman_ids = {
+            vendor["salesman_id"]
+            for vendor in vendors
+            if isinstance(vendor.get("salesman_id"), ObjectId)
+        }
+        salesman_names = await get_salesman_names(salesman_ids)
+
+        results = []
+        for vendor in vendors:
+            entity_phone = compact_entity_phone(vendor.get("entity_phone"))
+            salesman_id = vendor.get("salesman_id")
+
+            results.append({
+                "_id": str(vendor["_id"]),
+                "entity_name": vendor.get("entity_name"),
+                "credit_limit": vendor.get("credit_limit"),
+                "salesman_id": str(salesman_id) if salesman_id else None,
+                "salesman": salesman_names.get(salesman_id),
+                "entity_phone": entity_phone,
+                "phone_numbers": primary_phone_numbers(entity_phone),
+                "warranty_days": vendor.get("warranty_days"),
+                "lpo_required": vendor.get("lpo_required"),
+            })
+
         return {"vendors": results}
 
     except Exception as e:
