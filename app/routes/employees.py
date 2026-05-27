@@ -3936,6 +3936,7 @@ async def calculate_number_of_days(
             raise HTTPException(status_code=404, detail="Employee not found")
         # Default empty weekend
         legislations_weekend = []
+        legislation = None
         if "legislation" in employee_doc:
             legislation = employee_doc["legislation"]
             legislation_doc = await legislations_collection.find_one({"_id": legislation})
@@ -3958,15 +3959,19 @@ async def calculate_number_of_days(
             6: "Sunday"
         }
         company_id = employee_doc.get("company_id")
+        match_stage = {}
+        if company_id:
+            match_stage["company_id"] = company_id
+        if legislation:
+            match_stage['legislation'] = legislation
+        if start_date and end_date:
+            match_stage['date'] = {
+                "$gte": start_date,
+                "$lte": end_date
+            }
         # Fetch holidays in range
         holidays = await public_holidays_collection.find(
-            {
-                "company_id": company_id,
-                "date": {
-                    "$gte": start_date,
-                    "$lte": end_date
-                }
-            },
+            match_stage,
             {"date": 1}
         ).to_list(None)
         holiday_dates = set(h["date"].date() for h in holidays)

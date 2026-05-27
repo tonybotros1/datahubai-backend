@@ -335,7 +335,7 @@ async def payroll_run(run: PayrollRunModel, data: dict = Depends(security.get_cu
                 {"employee_id": current_employee_id, "status": "Posted", "start_date": {"$lte": period_end_date},
                  "end_date": {"$gte": period_start_date}}).to_list(None)
             for leave in employee_leaves:
-                leave_id = leave.get("_id")
+                # leave_id = leave.get("_id")
                 leave_type = leave.get("leave_type")
                 leave_start_date = leave.get("start_date")
                 leave_end_date = leave.get("end_date")
@@ -363,7 +363,8 @@ async def payroll_run(run: PayrollRunModel, data: dict = Depends(security.get_cu
                     function = payroll_element_doc.get("function") if payroll_element_doc else None
                     if function.upper() == "PY_ANNUAL_LEAVE_FF":
                         is_pay_in_advanced: bool = leave.get("pay_in_advance", False)
-                        l_days, final_value = await py_annual_leave_ff(leave_id, current_employee_id, period_start_date,
+                        l_days, final_value = await py_annual_leave_ff(leave_type, current_employee_id,
+                                                                       period_start_date,
                                                                        period_end_date, based_element_id,
                                                                        leave_start_date, leave_end_date,
                                                                        is_pay_in_advanced, data)
@@ -375,9 +376,10 @@ async def payroll_run(run: PayrollRunModel, data: dict = Depends(security.get_cu
                             "number": l_days
                         })
                     elif function.upper() == "PY_UNPAID_LEAVE_FF":
-                        final_value, leave_days = await py_unpaid_leave_ff(current_employee_id, period_start_date,
+                        final_value, leave_days = await py_unpaid_leave_ff(leave_type, current_employee_id,
+                                                                           period_start_date,
                                                                            period_end_date, based_element_id,
-                                                                           leave_start_date, leave_end_date)
+                                                                           leave_start_date, leave_end_date, data)
 
                         elements_values_maps[current_employee_id].append({
                             "element_id": leave["_id"],
@@ -386,10 +388,11 @@ async def payroll_run(run: PayrollRunModel, data: dict = Depends(security.get_cu
                             "number": leave_days
                         })
                     elif function.upper() == "PY_SICK_LEAVE_FF":
-                        final_value, leave_days = await py_sick_leave_ff(current_employee_id, period_start_date,
+                        final_value, leave_days = await py_sick_leave_ff(leave_type, current_employee_id,
+                                                                         period_start_date,
                                                                          period_end_date, based_element_id,
                                                                          legislation,
-                                                                         leave_start_date, leave_end_date)
+                                                                         leave_start_date, leave_end_date, data)
 
                         elements_values_maps[current_employee_id].append({
                             "element_id": leave["_id"],
@@ -398,10 +401,11 @@ async def payroll_run(run: PayrollRunModel, data: dict = Depends(security.get_cu
                             "number": leave_days
                         })
                     elif function.upper() == "PY_MATERNITY_LEAVE_FF":
-                        final_value, leave_days = await py_maternity_leave_ff(current_employee_id, period_start_date,
+                        final_value, leave_days = await py_maternity_leave_ff(leave_type, current_employee_id,
+                                                                              period_start_date,
                                                                               period_end_date, based_element_id,
                                                                               legislation,
-                                                                              leave_start_date, leave_end_date)
+                                                                              leave_start_date, leave_end_date, data)
 
                         elements_values_maps[current_employee_id].append({
                             "element_id": leave["_id"],
@@ -410,10 +414,11 @@ async def payroll_run(run: PayrollRunModel, data: dict = Depends(security.get_cu
                             "number": leave_days
                         })
                     elif function.upper() == "PY_PATERNITY_LEAVE_FF":
-                        final_value, leave_days = await py_paternity_leave_ff(current_employee_id, period_start_date,
+                        final_value, leave_days = await py_paternity_leave_ff(leave_type, current_employee_id,
+                                                                              period_start_date,
                                                                               period_end_date, based_element_id,
                                                                               legislation,
-                                                                              leave_start_date, leave_end_date)
+                                                                              leave_start_date, leave_end_date, data)
 
                         elements_values_maps[current_employee_id].append({
                             "element_id": leave["_id"],
@@ -422,11 +427,12 @@ async def payroll_run(run: PayrollRunModel, data: dict = Depends(security.get_cu
                             "number": leave_days
                         })
                     elif function.upper() == "PY_COMPASSIONATE_LEAVE_FF":
-                        final_value, leave_days = await py_compassionate_leave_ff(current_employee_id,
+                        final_value, leave_days = await py_compassionate_leave_ff(leave_type, current_employee_id,
                                                                                   period_start_date,
                                                                                   period_end_date, based_element_id,
                                                                                   legislation,
-                                                                                  leave_start_date, leave_end_date)
+                                                                                  leave_start_date, leave_end_date,
+                                                                                  data)
 
                         elements_values_maps[current_employee_id].append({
                             "element_id": leave["_id"],
@@ -558,16 +564,23 @@ async def py_annual_leave_ff(leave_id: ObjectId, employee_id: ObjectId, period_s
 
 
 # ==== PY_UNPAID_LEAVE_FF ====
-async def py_unpaid_leave_ff(employee_id: ObjectId, period_start_date: datetime, period_end_date: datetime,
-                             based_element_id: ObjectId, leave_start_date: datetime, leave_end_date: datetime):
+async def py_unpaid_leave_ff(leave_id: ObjectId, employee_id: ObjectId, period_start_date: datetime,
+                             period_end_date: datetime,
+                             based_element_id: ObjectId, leave_start_date: datetime, leave_end_date: datetime,
+                             user_data: dict):
     try:
         value = await get_employee_element_value(based_element_id, employee_id)
         period_days = get_period_days(period_start_date, period_end_date)
 
         date1 = max(period_start_date, leave_start_date)
         date2 = min(period_end_date, leave_end_date)
-        l_days = (date2 - date1).days + 1
-        print("leave_days:", l_days)
+        # l_days = (date2 - date1).days + 1
+        number_of_days = await calculate_number_of_days(str(employee_id),
+                                                        NumberOfDaysForWorkingDaysModel(start_date=date1,
+                                                                                        end_date=date2,
+                                                                                        leave_type=str(leave_id)),
+                                                        user_data)
+        l_days: int = number_of_days['working_days']
 
         final_value = round(((value or 0) * (l_days / period_days)), 2)
 
@@ -578,9 +591,10 @@ async def py_unpaid_leave_ff(employee_id: ObjectId, period_start_date: datetime,
 
 
 # ==== PY_SICK_LEAVE_FF ====
-async def py_sick_leave_ff(employee_id: ObjectId, period_start_date: datetime, period_end_date: datetime,
+async def py_sick_leave_ff(leave_id: ObjectId, employee_id: ObjectId, period_start_date: datetime,
+                           period_end_date: datetime,
                            based_element_id: ObjectId, legislation: ObjectId, leave_start_date: datetime,
-                           leave_end_date: datetime):
+                           leave_end_date: datetime, user_data: dict):
     try:
         value = await get_employee_element_value(based_element_id, employee_id)
         period_days = get_period_days(period_start_date, period_end_date)
@@ -597,7 +611,13 @@ async def py_sick_leave_ff(employee_id: ObjectId, period_start_date: datetime, p
 
         date1 = max(period_start_date, leave_start_date)
         date2 = min(period_end_date, leave_end_date)
-        l_days = (date2 - date1).days + 1
+        # l_days = (date2 - date1).days + 1
+        number_of_days = await calculate_number_of_days(str(employee_id),
+                                                        NumberOfDaysForWorkingDaysModel(start_date=date1,
+                                                                                        end_date=date2,
+                                                                                        leave_type=str(leave_id)),
+                                                        user_data)
+        l_days: int = number_of_days['working_days']
 
         remaining_days = l_days
         total_value = 0
@@ -627,9 +647,10 @@ async def py_sick_leave_ff(employee_id: ObjectId, period_start_date: datetime, p
 
 
 # ==== PY_MATERNITY_LEAVE_FF ====
-async def py_maternity_leave_ff(employee_id: ObjectId, period_start_date: datetime, period_end_date: datetime,
+async def py_maternity_leave_ff(leave_id: ObjectId, employee_id: ObjectId, period_start_date: datetime,
+                                period_end_date: datetime,
                                 based_element_id: ObjectId, legislation: ObjectId, leave_start_date: datetime,
-                                leave_end_date: datetime):
+                                leave_end_date: datetime, user_data: dict):
     try:
         value = await get_employee_element_value(based_element_id, employee_id)
         period_days = get_period_days(period_start_date, period_end_date)
@@ -645,7 +666,14 @@ async def py_maternity_leave_ff(employee_id: ObjectId, period_start_date: dateti
         date1 = max(period_start_date, leave_start_date)
         date2 = min(period_end_date, leave_end_date)
 
-        l_days = (date2 - date1).days + 1
+        # l_days = (date2 - date1).days + 1
+        number_of_days = await calculate_number_of_days(str(employee_id),
+                                                        NumberOfDaysForWorkingDaysModel(start_date=date1,
+                                                                                        end_date=date2,
+                                                                                        leave_type=str(leave_id)),
+                                                        user_data)
+        l_days: int = number_of_days['working_days']
+
         remaining_days = l_days
         total_value = 0
 
@@ -664,9 +692,10 @@ async def py_maternity_leave_ff(employee_id: ObjectId, period_start_date: dateti
 
 
 # ==== PY_PATERNITY_LEAVE_FF ====
-async def py_paternity_leave_ff(employee_id: ObjectId, period_start_date: datetime, period_end_date: datetime,
+async def py_paternity_leave_ff(leave_id: ObjectId, employee_id: ObjectId, period_start_date: datetime,
+                                period_end_date: datetime,
                                 based_element_id: ObjectId, legislation: ObjectId, leave_start_date: datetime,
-                                leave_end_date: datetime):
+                                leave_end_date: datetime, user_data: dict):
     try:
         value = await get_employee_element_value(based_element_id, employee_id)
         period_days = get_period_days(period_start_date, period_end_date)
@@ -682,7 +711,14 @@ async def py_paternity_leave_ff(employee_id: ObjectId, period_start_date: dateti
         date1 = max(period_start_date, leave_start_date)
         date2 = min(period_end_date, leave_end_date)
 
-        l_days = (date2 - date1).days + 1
+        # l_days = (date2 - date1).days + 1
+        number_of_days = await calculate_number_of_days(str(employee_id),
+                                                        NumberOfDaysForWorkingDaysModel(start_date=date1,
+                                                                                        end_date=date2,
+                                                                                        leave_type=str(leave_id)),
+                                                        user_data)
+        l_days: int = number_of_days['working_days']
+
         remaining_days = l_days
         total_value = 0
 
@@ -701,9 +737,10 @@ async def py_paternity_leave_ff(employee_id: ObjectId, period_start_date: dateti
 
 
 # ==== PY_COMPASSIONATE_LEAVE_FF ====
-async def py_compassionate_leave_ff(employee_id: ObjectId, period_start_date: datetime, period_end_date: datetime,
+async def py_compassionate_leave_ff(leave_id: ObjectId, employee_id: ObjectId, period_start_date: datetime,
+                                    period_end_date: datetime,
                                     based_element_id: ObjectId, legislation: ObjectId, leave_start_date: datetime,
-                                    leave_end_date: datetime):
+                                    leave_end_date: datetime, user_data: dict):
     try:
         value = await get_employee_element_value(based_element_id, employee_id)
         period_days = get_period_days(period_start_date, period_end_date)
@@ -719,7 +756,14 @@ async def py_compassionate_leave_ff(employee_id: ObjectId, period_start_date: da
         date1 = max(period_start_date, leave_start_date)
         date2 = min(period_end_date, leave_end_date)
 
-        l_days = (date2 - date1).days + 1
+        # l_days = (date2 - date1).days + 1
+        number_of_days = await calculate_number_of_days(str(employee_id),
+                                                        NumberOfDaysForWorkingDaysModel(start_date=date1,
+                                                                                        end_date=date2,
+                                                                                        leave_type=str(leave_id)),
+                                                        user_data)
+        l_days: int = number_of_days['working_days']
+
         remaining_days = l_days
         total_value = 0
 
@@ -932,7 +976,6 @@ async def py_loan_and_advances_ff(loan_id: ObjectId, total_amount: float, monthl
         paid_result = await paid_cursor.to_list(1)
 
         paid_to_date = paid_result[0]["paid_to_date"] if paid_result else 0
-        print(paid_to_date)
         remaining_amount = max((total_amount or 0) - paid_to_date, 0)
         return round(min(monthly_installment or 0, remaining_amount), 2)
 
