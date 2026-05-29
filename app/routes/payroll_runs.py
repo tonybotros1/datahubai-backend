@@ -12,7 +12,8 @@ from app.routes.car_trading import PyObjectId
 from app.routes.counters import create_custom_counter
 from app.routes.employees import calculate_number_of_days, NumberOfDaysForWorkingDaysModel
 from app.routes.payroll_runs_widgets.helpers_functions import get_employee_element_value, \
-    get_period_days, get_current_leave_used_days, get_used_leave_days, is_within_period, get_previous_gratuity_accrual
+    get_period_days, get_current_leave_used_days, get_used_leave_days, is_within_period, get_previous_gratuity_accrual, \
+    to_float, calculate_progressive_income_tax, income_tax_brackets
 
 router = APIRouter()
 payroll_runs_collection = get_collection("payroll_runs")
@@ -309,6 +310,29 @@ async def payroll_run(run: PayrollRunModel, data: dict = Depends(security.get_cu
                             if is_within_period(element_start, element_end, period_start_date, period_end_date):
                                 value = await py_social_security_employer_ff(ObjectId(current_employee_id),
                                                                              employee_payroll.get("name"), legislation)
+                                if value:
+                                    elements_values_maps[current_employee_id].append({
+                                        "element_id": employee_payroll.get("_id"),
+                                        "value": value,
+                                        "payroll_element_id": employee_payroll.get("name"),
+                                        "number": 0
+                                    })
+                        if element_function.upper() == "PY_SERVICE_TAX_FF":
+                            if is_within_period(element_start, element_end, period_start_date, period_end_date):
+                                value = await py_service_tax_ff(ObjectId(current_employee_id),
+                                                                employee_payroll.get("name"), legislation)
+                                if value:
+                                    elements_values_maps[current_employee_id].append({
+                                        "element_id": employee_payroll.get("_id"),
+                                        "value": value,
+                                        "payroll_element_id": employee_payroll.get("name"),
+                                        "number": 0
+                                    })
+                        if element_function.upper() == "PY_INCOME_TAX_DEDUCTION_FF":
+                            if is_within_period(element_start, element_end, period_start_date, period_end_date):
+                                value = await py_income_tax_deduction_ff(element_value, ObjectId(current_employee_id),
+                                                                         employee_payroll.get("name"), legislation,
+                                                                         period_start_date, period_end_date)
                                 if value:
                                     elements_values_maps[current_employee_id].append({
                                         "element_id": employee_payroll.get("_id"),
@@ -882,39 +906,6 @@ async def py_social_security_employer_ff(employee_id: ObjectId, based_element_id
         raise e
 
 
-#
-# # ==== PY_GRATUITY_ACCRUAL_FF ====
-# async def py_gratuity_accrual_ff(employee_id: ObjectId, employee_hire_date: datetime, employee_end_date: datetime,
-#                                  element_start: datetime, element_end: datetime, period_start_date: datetime,
-#                                  period_end_date: datetime, based_element_id: ObjectId, legislation: ObjectId, ):
-#     try:
-#         value = await get_employee_element_value(based_element_id, employee_id)
-#         legislation_doc = await legislations_collection.find_one({"_id": legislation})
-#         if not legislation_doc:
-#             raise HTTPException(status_code=404, detail="Legislation not found")
-#
-#         gratuity_first_5_years = legislation_doc.get("gratuity_first_5_years", 21)
-#         gratuity_after_5_years = legislation_doc.get("gratuity_after_5_years", 30)
-#
-#         effective_service_days: int = (period_end_date - employee_hire_date).days + 1
-#         service_years: float = effective_service_days / 365
-#         entitlement_days: int = gratuity_first_5_years if service_years <= 5 else gratuity_after_5_years
-#
-#         date1 = max(employee_hire_date, element_start, period_start_date)
-#         date2 = min(employee_end_date, element_end, period_end_date)
-#         working_days: int = max((date2 - date1).days + 1, 0)
-#         period_days: int = get_period_days(period_start_date, period_end_date)
-#
-#         if period_days == 0:
-#             p_days = 0  # p_days refers to paid days
-#         else:
-#             p_days = entitlement_days / 12 * (working_days / period_days)
-#         final_value = (p_days * value) / 30
-#         return round(final_value, 2)
-#
-#     except Exception as e:
-#         raise e
-
 # ==== PY_GRATUITY_ACCRUAL_FF ====
 async def py_gratuity_accrual_ff(employee_id: ObjectId, employee_hire_date: datetime, employee_end_date: datetime,
                                  element_start: datetime, element_end: datetime, period_start_date: datetime,
@@ -978,6 +969,50 @@ async def py_loan_and_advances_ff(loan_id: ObjectId, total_amount: float, monthl
         paid_to_date = paid_result[0]["paid_to_date"] if paid_result else 0
         remaining_amount = max((total_amount or 0) - paid_to_date, 0)
         return round(min(monthly_installment or 0, remaining_amount), 2)
+
+    except Exception as e:
+        raise e
+
+
+# ==== PY_SERVICE_TAX_FF ====
+async def py_service_tax_ff(employee_id: ObjectId, based_element_id: ObjectId, legislation: ObjectId):
+    try:
+        # Based Value
+        value = await get_employee_element_value(based_element_id, employee_id)
+
+        legislation_doc = await legislations_collection.find_one({"_id": legislation})
+        if not legislation_doc:
+            raise HTTPException(status_code=404, detail="Legislation not found")
+
+        service_tax_percentage = to_float(legislation_doc.get("service_tax_percentage")) / 100
+        service_tax = (value or 0) * service_tax_percentage
+        return round(service_tax, 2)
+
+    except Exception as e:
+        raise e
+
+
+# ==== PY_INCOME_TAX_DEDUCTION_FF ====
+async def py_income_tax_deduction_ff(element_value: float, employee_id: ObjectId, based_element_id: ObjectId,
+                                     legislation: ObjectId,
+                                     period_start_date: datetime, period_end_date: datetime):
+    try:
+        # Based Value
+        value = await get_employee_element_value(based_element_id, employee_id)
+        income_tax_exemption = element_value
+        taxable_income_before_exemption = (value or 0)
+
+        legislation_doc = await legislations_collection.find_one({"_id": legislation})
+        if not legislation_doc:
+            raise HTTPException(status_code=404, detail="Legislation not found")
+
+        taxable_amount = max(taxable_income_before_exemption - income_tax_exemption, 0) * 12
+        income_tax = calculate_progressive_income_tax(
+            taxable_amount,
+            income_tax_brackets(legislation_doc),
+        )
+
+        return round(income_tax / 12, 2)
 
     except Exception as e:
         raise e

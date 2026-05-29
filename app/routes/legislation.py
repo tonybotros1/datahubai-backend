@@ -11,6 +11,12 @@ router = APIRouter()
 legislations_collection = get_collection("legislations")
 
 
+class IncomeTaxBracketModel(BaseModel):
+    from_amount: Optional[float] = None
+    to_amount: Optional[float] = None
+    percentage: Optional[float] = None
+
+
 class LegislationModel(BaseModel):
     name: Optional[str] = None
     weekend: Optional[List[str]] = None
@@ -25,6 +31,10 @@ class LegislationModel(BaseModel):
     social_security_employee_percentage: Optional[float] = None
     social_security_employer_percentage: Optional[float] = None
     social_security_ceiling: Optional[float] = None
+    service_tax_percentage: Optional[float] = None
+    income_tax_percentage: Optional[float] = None
+    income_tax_ceiling: Optional[float] = None
+    income_tax_brackets: Optional[List[IncomeTaxBracketModel]] = None
     gratuity_first_5_years: Optional[int] = None
     gratuity_after_5_years: Optional[int] = None
 

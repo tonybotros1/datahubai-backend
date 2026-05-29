@@ -11,6 +11,15 @@ router = APIRouter()
 balances_collection = get_collection("balances")
 
 
+def to_float(value, default: float = 0.0) -> float:
+    try:
+        if value is None or value == "":
+            return default
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
 # ==== GET_PERIOD_DYS ====
 def get_period_days(period_start_date: datetime, period_end_date: datetime):
     return max((period_end_date - period_start_date).days + 1, 0)
@@ -233,5 +242,56 @@ async def get_previous_gratuity_accrual(employee_id: ObjectId):
     return result[0]["total"] if result else 0
 
 
-# async def get_paid_to_date_for_loan_and_advances():
-    
+def calculate_progressive_income_tax(taxable_amount: float, brackets: list[dict]) -> float:
+    total_tax = 0.0
+
+    for bracket in brackets:
+        from_amount = to_float(bracket.get("from_amount"))
+        to_amount = bracket.get("to_amount")
+        percentage = to_float(bracket.get("percentage"))
+
+        if taxable_amount <= from_amount or percentage <= 0:
+            continue
+
+        upper_amount = taxable_amount
+        if to_amount is not None:
+            upper_amount = min(taxable_amount, to_float(to_amount))
+
+        bracket_amount = max(upper_amount - from_amount, 0)
+        total_tax += bracket_amount * (percentage / 100)
+
+    return total_tax
+
+
+def income_tax_brackets(legislation_doc: dict) -> list[dict]:
+    raw_brackets = legislation_doc.get("income_tax_brackets") or []
+    brackets = []
+
+    for bracket in raw_brackets:
+        if not isinstance(bracket, dict):
+            continue
+        from_amount = to_float(bracket.get("from_amount"), 0)
+        to_value = bracket.get("to_amount")
+        to_amount = None if to_value is None or to_value == "" else to_float(to_value)
+        percentage = to_float(bracket.get("percentage"))
+
+        if percentage <= 0:
+            continue
+
+        brackets.append({
+            "from_amount": max(from_amount, 0),
+            "to_amount": to_amount if to_amount and to_amount > 0 else None,
+            "percentage": percentage,
+        })
+
+    if not brackets:
+        percentage = to_float(legislation_doc.get("income_tax_percentage"))
+        ceiling = to_float(legislation_doc.get("income_tax_ceiling"))
+        if percentage > 0:
+            brackets.append({
+                "from_amount": 0,
+                "to_amount": ceiling if ceiling > 0 else None,
+                "percentage": percentage,
+            })
+
+    return sorted(brackets, key=lambda item: item["from_amount"])
