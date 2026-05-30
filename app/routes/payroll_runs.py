@@ -293,7 +293,7 @@ async def payroll_run(run: PayrollRunModel, data: dict = Depends(security.get_cu
                                         "element_id": employee_payroll.get("_id"),
                                         "value": value,
                                         "payroll_element_id": employee_payroll.get("name"),
-                                        "number": 0
+                                        "number": value
                                     })
                         if element_function.upper() == "PY_SOCIAL_SECURITY_EMPLOYEE_FF":
                             if is_within_period(element_start, element_end, period_start_date, period_end_date):
