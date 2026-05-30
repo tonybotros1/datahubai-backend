@@ -1,5 +1,6 @@
 from datetime import datetime
 from bson import ObjectId
+from bson.errors import InvalidId
 from fastapi import APIRouter, Depends, HTTPException, status, Form, UploadFile, File, Body
 from pymongo.errors import DuplicateKeyError, PyMongoError
 from app import database
@@ -11,6 +12,222 @@ from app.widgets import upload_images
 router = APIRouter()
 users_collection = get_collection("sys-users")
 companies_collection = get_collection("companies")
+roles_collection = get_collection("sys-roles")
+refresh_tokens_collection = get_collection("refresh_tokens")
+
+COMPANY_MANAGEMENT_ROUTE = "/defineCompany"
+COMPANY_SCOPED_COLLECTION_NAMES = [
+    "account_transfers",
+    "all_banks",
+    "all_brand_models",
+    "all_brands",
+    "all_capitals",
+    "all_general_expenses",
+    "all_lists",
+    "all_lists_values",
+    "all_outstanding",
+    "all_payments",
+    "all_payments_invoices",
+    "all_receipts",
+    "all_receipts_invoices",
+    "all_technicians",
+    "all_trades",
+    "all_trades_items",
+    "all_trades_purchase_agreement_items",
+    "all_trades_transfers",
+    "ap_invoices",
+    "ap_invoices_items",
+    "ap_payment_types",
+    "attachment",
+    "balances",
+    "balances_based_elements",
+    "batch_payment_process",
+    "batch_payment_process_items",
+    "branches",
+    "converters",
+    "counters",
+    "currencies",
+    "employees",
+    "employees_address",
+    "employees_bank_accounts",
+    "employees_contacts_and_relatives",
+    "employees_email",
+    "employees_health_card",
+    "employees_leaves",
+    "employees_loan_and_advances",
+    "employees_nationality",
+    "employees_payrolls",
+    "employees_phone",
+    "entity_information",
+    "favourite_screens",
+    "inventory_items",
+    "invoice_items",
+    "issuing",
+    "issuing_converters_details",
+    "issuing_items_details",
+    "job_cards",
+    "job_cards_internal_notes",
+    "job_cards_invoice_items",
+    "job_cards_inspection_reports",
+    "leave_types",
+    "legislations",
+    "loan_and_advances_types",
+    "payroll",
+    "payroll_elements",
+    "payroll_elements_based_elements",
+    "payroll_period_details",
+    "payroll_runs",
+    "payroll_runs_employees",
+    "payroll_runs_employees_elements",
+    "public_holidays",
+    "quotation_cards",
+    "quotation_cards_internal_notes",
+    "quotation_cards_invoice_items",
+    "receiving",
+    "receiving_items",
+    "sales_man",
+    "system_variables",
+    "time_sheets",
+    "to_do_list",
+    "to_do_list_description",
+]
+
+
+def _object_id(value: str | ObjectId | None, field_name: str) -> ObjectId:
+    try:
+        return value if isinstance(value, ObjectId) else ObjectId(str(value))
+    except (InvalidId, TypeError):
+        raise HTTPException(status_code=400, detail=f"Invalid {field_name}")
+
+
+def _required(value: str | None, field_name: str) -> str:
+    clean_value = (value or "").strip()
+    if not clean_value:
+        raise HTTPException(status_code=400, detail=f"{field_name} is required")
+    return clean_value
+
+
+def _object_id_from_required(value: str | None, field_name: str) -> ObjectId:
+    return _object_id(_required(value, field_name), field_name)
+
+
+def _role_object_ids(roles_ids: list[str] | str | None) -> list[ObjectId]:
+    if not roles_ids:
+        raise HTTPException(status_code=400, detail="At least one role is required")
+
+    values = roles_ids if isinstance(roles_ids, list) else [roles_ids]
+    role_ids: list[ObjectId] = []
+    for item in values:
+        for raw_id in str(item).split(","):
+            clean_id = raw_id.strip()
+            if clean_id:
+                role_ids.append(_object_id(clean_id, "role ID"))
+
+    if not role_ids:
+        raise HTTPException(status_code=400, detail="At least one role is required")
+    return role_ids
+
+
+async def _ensure_company_management_access(user_data: dict) -> None:
+    user_id = _object_id(user_data.get("sub"), "user ID")
+    role_values = user_data.get("role") or []
+    if isinstance(role_values, str):
+        role_values = [role_values]
+
+    user = await users_collection.find_one({"_id": user_id}, {"roles": 1, "is_admin": 1})
+    if user and user.get("is_admin") is True:
+        return
+
+    if user and user.get("roles"):
+        role_values = list({*role_values, *[str(role) for role in user.get("roles", [])]})
+
+    role_ids = []
+    for role_id in role_values:
+        try:
+            role_ids.append(ObjectId(str(role_id)))
+        except (InvalidId, TypeError):
+            continue
+
+    if not role_ids:
+        raise HTTPException(status_code=403, detail="Not allowed to manage companies")
+
+    cursor = await roles_collection.aggregate([
+        {"$match": {"_id": {"$in": role_ids}}},
+        {
+            "$lookup": {
+                "from": "menus",
+                "localField": "menu_id",
+                "foreignField": "_id",
+                "as": "menu",
+            }
+        },
+        {"$unwind": {"path": "$menu", "preserveNullAndEmptyArrays": False}},
+        {
+            "$graphLookup": {
+                "from": "menus",
+                "startWith": "$menu.children",
+                "connectFromField": "children",
+                "connectToField": "_id",
+                "as": "child_menus",
+            }
+        },
+        {
+            "$match": {"$or": [{"menu.route_name": COMPANY_MANAGEMENT_ROUTE}, {"child_menus.route_name": COMPANY_MANAGEMENT_ROUTE}]}
+        },
+        {"$limit": 1},
+    ])
+    allowed_roles = await cursor.to_list(length=1)
+    if not allowed_roles:
+        raise HTTPException(status_code=403, detail="Not allowed to manage companies")
+
+
+def _company_payload(
+        company_name: str | None,
+        admin_email: str | None,
+        industry: str | None,
+        roles_ids: list[str] | str | None,
+        admin_name: str | None,
+        phone_number: str | None,
+        address: str | None,
+        country: str | None,
+        city: str | None,
+        admin_password: str | None = None,
+        require_password: bool = False,
+) -> dict:
+    clean_password = (admin_password or "").strip()
+    if require_password:
+        clean_password = _required(clean_password, "Password")
+
+    return {
+        "company_name": _required(company_name, "Company name"),
+        "admin_email": _required(admin_email, "Email").lower(),
+        "admin_password": clean_password,
+        "industry": _object_id_from_required(industry, "industry"),
+        "roles": _role_object_ids(roles_ids),
+        "admin_name": _required(admin_name, "Name"),
+        "phone_number": _required(phone_number, "Phone number"),
+        "address": _required(address, "Address"),
+        "country": _object_id_from_required(country, "country"),
+        "city": _object_id_from_required(city, "city"),
+    }
+
+
+async def _safe_delete_logo(public_id: str | None) -> None:
+    if not public_id:
+        return
+    try:
+        await upload_images.delete_image_from_server(public_id)
+    except Exception as e:
+        print(f"Failed to delete company logo: {e}")
+
+
+async def _delete_company_scoped_documents(company_id: ObjectId, session) -> None:
+    company_id_values = [company_id, str(company_id)]
+    for collection_name in COMPANY_SCOPED_COLLECTION_NAMES:
+        await get_collection(collection_name).delete_many(
+            {"company_id": {"$in": company_id_values}},
+            session=session,
+        )
 
 pipeline = [
     {
@@ -85,7 +302,7 @@ pipeline = [
         '$lookup': {
             'from': 'sys-roles',
             'let': {
-                'role_ids': '$main_user.roles'
+                'role_ids': {'$ifNull': ['$main_user.roles', []]}
             },
             'pipeline': [
                 {
@@ -236,13 +453,16 @@ async def get_company_details(company_id: ObjectId):
 
 
 @router.get("/get_all_companies")
-async def get_all_companies(_: dict = Depends(security.get_current_user)):
+async def get_all_companies(user_data: dict = Depends(security.get_current_user)):
     try:
+        await _ensure_company_management_access(user_data)
         new_pipeline = pipeline.copy()
         cursor = await companies_collection.aggregate(new_pipeline)
         results = await cursor.to_list()
         return {"companies": [serialize_doc(c) for c in results]}
 
+    except HTTPException:
+        raise
     except Exception as e:
         raise e
 
@@ -262,6 +482,21 @@ async def register_company(
         city: str = Form(None),
         data: dict = Depends(security.get_current_user)
 ):
+    await _ensure_company_management_access(data)
+    payload = _company_payload(
+        company_name=company_name,
+        admin_email=admin_email,
+        admin_password=admin_password,
+        industry=industry,
+        roles_ids=roles_ids,
+        admin_name=admin_name,
+        phone_number=phone_number,
+        address=address,
+        country=country,
+        city=city,
+        require_password=True,
+    )
+    uploaded_logo_public_id = None
     async with database.client.start_session() as s:
         try:
             await s.start_transaction()
@@ -272,17 +507,15 @@ async def register_company(
                 result = await upload_images.upload_image(company_logo, 'companies')
                 company_logo_url = result["url"]
                 company_logo_public_id = result["public_id"]
-            role_ids_list = []
-            if roles_ids:
-                role_ids_list = [ObjectId(r.strip()) for r in roles_ids]
+                uploaded_logo_public_id = company_logo_public_id
 
             company_doc = {
-                "company_name": company_name,
+                "company_name": payload["company_name"],
                 "owner_id": None,
                 "status": True,
                 "createdAt": security.now_utc(),
                 "updatedAt": security.now_utc(),
-                "industry": ObjectId(industry) if industry else "",
+                "industry": payload["industry"],
                 "company_logo_url": company_logo_url,
                 "company_logo_public_id": company_logo_public_id,
             }
@@ -290,22 +523,21 @@ async def register_company(
 
             owner_doc = {
                 "company_id": res_company.inserted_id,
-                "email": admin_email.lower(),
-                "user_name": admin_name,
-                "password_hash": security.pwd_ctx.hash(admin_password),
-                "roles": role_ids_list,
+                "email": payload["admin_email"],
+                "user_name": payload["admin_name"],
+                "password_hash": security.pwd_ctx.hash(payload["admin_password"]),
+                "roles": payload["roles"],
                 "status": True,
                 "expiry_date": security.one_month_from_now_utc(),
                 "createdAt": security.now_utc(),
                 "updatedAt": security.now_utc(),
-                "phone_number": phone_number,
-                "address": address,
-                "country": ObjectId(country) if country else "",
-                "city": ObjectId(city) if city else "",
+                "phone_number": payload["phone_number"],
+                "address": payload["address"],
+                "country": payload["country"],
+                "city": payload["city"],
             }
             res_owner = await users_collection.insert_one(owner_doc, session=s)
 
-            # 3. تحديث الشركة وربطها بالـ owner
             await companies_collection.update_one(
                 {"_id": res_company.inserted_id},
                 {"$set": {"owner_id": res_owner.inserted_id}},
@@ -329,6 +561,7 @@ async def register_company(
 
         except DuplicateKeyError as e:
             await s.abort_transaction()
+            await _safe_delete_logo(uploaded_logo_public_id)
             if "company_name" in str(e):
                 raise HTTPException(status_code=400, detail="Company name already exists")
             elif "email" in str(e):
@@ -336,9 +569,14 @@ async def register_company(
             else:
                 raise HTTPException(status_code=400, detail="Duplicate entry")
 
-        except Exception as e:
-            # 👇 rollback إذا صار خطأ
+        except HTTPException:
             await s.abort_transaction()
+            await _safe_delete_logo(uploaded_logo_public_id)
+            raise
+
+        except Exception as e:
+            await s.abort_transaction()
+            await _safe_delete_logo(uploaded_logo_public_id)
             raise HTTPException(status_code=500, detail=f"Registration failed: {str(e)}")
 
 
@@ -354,110 +592,149 @@ async def update_company(company_id: str, user_id: str, company_name: str = Form
                          address: str = Form(None),
                          country: str = Form(None),
                          city: str = Form(None), data: dict = Depends(security.get_current_user)):
+    await _ensure_company_management_access(data)
+    target_company_id = _object_id(company_id, "company ID")
+    target_user_id = _object_id(user_id, "user ID")
+    payload = _company_payload(
+        company_name=company_name,
+        admin_email=admin_email,
+        admin_password=admin_password,
+        industry=industry,
+        roles_ids=roles_ids,
+        admin_name=admin_name,
+        phone_number=phone_number,
+        address=address,
+        country=country,
+        city=city,
+    )
+    new_logo_public_id = None
+    old_logo_public_id = None
     async with database.client.start_session() as s:
         try:
             await s.start_transaction()
             my_company_id = data.get("company_id")
-            current_company = await companies_collection.find_one({"_id": ObjectId(company_id)}, session=s)
+            current_company = await companies_collection.find_one({"_id": target_company_id}, session=s)
             if not current_company:
                 raise HTTPException(status_code=404, detail="Company not found")
+            if current_company.get("owner_id") != target_user_id:
+                raise HTTPException(status_code=400, detail="User is not the company owner")
+            owner = await users_collection.find_one(
+                {"_id": target_user_id, "company_id": target_company_id},
+                {"_id": 1},
+                session=s,
+            )
+            if not owner:
+                raise HTTPException(status_code=404, detail="Company owner not found")
+
             company_doc = {
-                "company_name": company_name,
+                "company_name": payload["company_name"],
                 "updatedAt": security.now_utc(),
-                "industry": ObjectId(industry) if industry else "",
+                "industry": payload["industry"],
             }
             if company_logo:
-                if current_company.get("company_logo_url") and current_company["company_logo_url"]:
-                    await upload_images.delete_image_from_server(current_company["company_logo_public_id"])
                 result = await upload_images.upload_image(company_logo, 'companies')
-                company_logo_url = result["url"]
-                company_logo_public_id = result["public_id"]
-                company_doc["company_logo_url"] = company_logo_url
-                company_doc["company_logo_public_id"] = company_logo_public_id
-            role_ids_list = []
-            if roles_ids:
-                role_ids_list = [ObjectId(r.strip()) for r in roles_ids]
+                new_logo_public_id = result["public_id"]
+                old_logo_public_id = current_company.get("company_logo_public_id")
+                company_doc["company_logo_url"] = result["url"]
+                company_doc["company_logo_public_id"] = new_logo_public_id
 
-            await companies_collection.update_one({"_id": ObjectId(company_id)}, {"$set": company_doc},
-                                                  session=s)
+            await companies_collection.update_one({"_id": target_company_id}, {"$set": company_doc}, session=s)
 
             owner_doc = {
-                "email": admin_email.lower(),
-                "user_name": admin_name,
-                "roles": role_ids_list,
+                "email": payload["admin_email"],
+                "user_name": payload["admin_name"],
+                "roles": payload["roles"],
                 "updatedAt": security.now_utc(),
-                "phone_number": phone_number,
-                "address": address,
-                "country": ObjectId(country) if country else "",
-                "city": ObjectId(city) if city else "",
+                "phone_number": payload["phone_number"],
+                "address": payload["address"],
+                "country": payload["country"],
+                "city": payload["city"],
             }
-            if admin_password:
-                owner_doc["password_hash"] = security.pwd_ctx.hash(admin_password)
-            await users_collection.update_one({"_id": ObjectId(user_id)}, {"$set": owner_doc}, session=s)
+            if payload["admin_password"]:
+                owner_doc["password_hash"] = security.pwd_ctx.hash(payload["admin_password"])
+            await users_collection.update_one({"_id": target_user_id}, {"$set": owner_doc}, session=s)
             await s.commit_transaction()
-            details = await get_company_details(ObjectId(company_id))
+
+            if new_logo_public_id and old_logo_public_id:
+                await _safe_delete_logo(old_logo_public_id)
+            details = await get_company_details(target_company_id)
             serialized = serialize_doc(details[0])
             await manager.send_to_company(my_company_id, {
                 "type": "company_updated",
                 "data": serialized
             })
+            return {"message": "Company updated successfully", "data": serialized}
         except DuplicateKeyError as e:
             await s.abort_transaction()
+            await _safe_delete_logo(new_logo_public_id)
             if "company_name" in str(e):
                 raise HTTPException(status_code=400, detail="Company name already exists")
             elif "email" in str(e):
                 raise HTTPException(status_code=400, detail="Email already exists")
             else:
                 raise HTTPException(status_code=400, detail="Duplicate entry")
+        except HTTPException:
+            await s.abort_transaction()
+            await _safe_delete_logo(new_logo_public_id)
+            raise
         except Exception as e:
             print(e)
             await s.abort_transaction()
+            await _safe_delete_logo(new_logo_public_id)
             raise HTTPException(status_code=500, detail=f"Registration failed: {str(e)}")
 
 
 @router.delete("/delete_company/{company_id}/{user_id}")
 async def delete_company(company_id: str, user_id: str, data: dict = Depends(security.get_current_user)):
+    await _ensure_company_management_access(data)
+    target_company_id = _object_id(company_id, "company ID")
+    target_user_id = _object_id(user_id, "user ID")
+    company_logo_public_id = None
     try:
         my_company_id = data.get("company_id")
-        if not company_id:
-            raise HTTPException(status_code=400, detail="Invalid Company ID")
-        if not user_id:
-            raise HTTPException(status_code=400, detail="Invalid User ID")
-
-        company_id = ObjectId(company_id)
-        user_id = ObjectId(user_id)
-
         async with database.client.start_session() as session:
             await session.start_transaction()
 
-            # 1. Find and delete the company in one step
-            company = await companies_collection.find_one_and_delete(
-                {"_id": company_id}, session=session
-            )
-
+            company = await companies_collection.find_one({"_id": target_company_id}, session=session)
             if not company:
                 raise HTTPException(status_code=404, detail="Company not found")
+            if company.get("owner_id") != target_user_id:
+                raise HTTPException(status_code=400, detail="User is not the company owner")
 
-            # 2. Delete the owner
-            await users_collection.delete_one({"_id": user_id}, session=session)
+            owner = await users_collection.find_one(
+                {"_id": target_user_id, "company_id": target_company_id},
+                {"_id": 1},
+                session=session,
+            )
+            if not owner:
+                raise HTTPException(status_code=404, detail="Company owner not found")
 
-            # 3. Delete logo if exists
-            if company.get("company_logo_public_id"):
-                try:
-                    await upload_images.delete_image_from_server(company["company_logo_public_id"])
-                except Exception as e:
-                    print(f"⚠️ Failed to delete logo: {e}")
+            users = await users_collection.find(
+                {"company_id": target_company_id},
+                {"_id": 1},
+                session=session,
+            ).to_list(None)
+            user_ids = [user["_id"] for user in users]
+            company_logo_public_id = company.get("company_logo_public_id")
+
+            await _delete_company_scoped_documents(target_company_id, session)
+            if user_ids:
+                await refresh_tokens_collection.delete_many({"user_id": {"$in": user_ids}}, session=session)
+            await users_collection.delete_many({"company_id": target_company_id}, session=session)
+            await companies_collection.delete_one({"_id": target_company_id}, session=session)
 
             await session.commit_transaction()
+            await _safe_delete_logo(company_logo_public_id)
 
-            # 4. Broadcast deletion
             await manager.send_to_company(my_company_id, {
                 "type": "company_deleted",
-                "data": {"_id": str(company_id)},
+                "data": {"_id": str(target_company_id)},
             })
 
-            return {"message": "Company and owner deleted successfully"}
+            return {"message": "Company and users deleted successfully"}
 
+    except HTTPException:
+        raise
     except PyMongoError as e:
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
     except Exception as e:
@@ -468,18 +745,25 @@ async def delete_company(company_id: str, user_id: str, data: dict = Depends(sec
 async def change_user_status(company_id: str, company_status: bool = Body(None),
                              data: dict = Depends(security.get_current_user)):
     try:
+        await _ensure_company_management_access(data)
+        if company_status is None:
+            raise HTTPException(status_code=400, detail="Company status is required")
+        target_company_id = _object_id(company_id, "company ID")
         my_company_id = data.get("company_id")
         result = await companies_collection.update_one(
-            {"_id": ObjectId(company_id)}, {"$set": {"status": company_status, "updatedAt": security.now_utc()}},
+            {"_id": target_company_id}, {"$set": {"status": company_status, "updatedAt": security.now_utc()}},
         )
-        if not result:
-            raise HTTPException(status_code=404, detail="User not found")
+        if result.matched_count == 0:
+            raise HTTPException(status_code=404, detail="Company not found")
         await manager.send_to_company(my_company_id, {
             "type": "company_status_updated",
             "data": {"status": company_status, "_id": company_id}
         })
+        return {"message": "Company status updated successfully"}
+    except HTTPException:
+        raise
     except Exception as error:
-        return {"message": str(error)}
+        raise HTTPException(status_code=500, detail=str(error))
 
 
 @router.get("/get_current_company_details")
