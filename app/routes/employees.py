@@ -76,6 +76,29 @@ def normalize_object_id(value: Optional[Any], field_name: str) -> Optional[Objec
         raise HTTPException(status_code=400, detail=f"Invalid {field_name}")
 
 
+def person_type_filter(value: Optional[str]) -> Optional[Any]:
+    if not value:
+        return None
+
+    normalized = " ".join(
+        str(value).strip().replace("-", " ").replace("_", " ").split()
+    ).lower()
+    if normalized == "employee":
+        return "Employee"
+    if normalized == "applicant":
+        return "Applicant"
+    if normalized in {"ex employee", "exemployee"}:
+        return {
+            "$in": [
+                "Ex-Employee",
+                "Ex Employee",
+                "EX EMPLOYEE",
+            ]
+        }
+
+    return str(value).strip()
+
+
 async def delete_attachments_for_documents(document_ids: list[ObjectId], company_id: ObjectId, session=None) -> list[
     str]:
     if not document_ids:
@@ -3238,11 +3261,9 @@ async def search_engine_for_employees(
         if filter_employees.status:
             match_stage["status"] = filter_employees.status
         if filter_employees.type:
-            person_type = " ".join(
-                word.capitalize()
-                for word in filter_employees.type.replace("-", " ").split()
-            )
-            match_stage["person_type"] = person_type
+            person_type = person_type_filter(filter_employees.type)
+            if person_type:
+                match_stage["person_type"] = person_type
 
         new_search_pipeline = copy.deepcopy(main_screen_pipeline)
         new_search_pipeline.insert(0, {"$match": match_stage})
