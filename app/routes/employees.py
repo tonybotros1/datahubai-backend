@@ -76,27 +76,48 @@ def normalize_object_id(value: Optional[Any], field_name: str) -> Optional[Objec
         raise HTTPException(status_code=400, detail=f"Invalid {field_name}")
 
 
-def person_type_filter(value: Optional[str]) -> Optional[Any]:
+def employee_type_date_conditions(value: Optional[str]) -> list[dict]:
     if not value:
-        return None
+        return []
 
-    normalized = " ".join(
-        str(value).strip().replace("-", " ").replace("_", " ").split()
-    ).lower()
-    if normalized == "employee":
-        return "Employee"
-    if normalized == "applicant":
-        return "Applicant"
-    if normalized in {"ex employee", "exemployee"}:
-        return {
-            "$in": [
-                "Ex-Employee",
-                "Ex Employee",
-                "EX EMPLOYEE",
-            ]
+    # normalized = " ".join(
+    #     str(value).strip().replace("-", " ").replace("_", " ").split()
+    # ).lower()
+
+    hire_date_exists = {
+        "hire_date": {
+            "$exists": True,
+            "$nin": [None, ""],
         }
+    }
+    hire_date_missing = {
+        "$or": [
+            {"hire_date": {"$exists": False}},
+            {"hire_date": None},
+            {"hire_date": ""},
+        ]
+    }
+    end_date_exists = {
+        "end_date": {
+            "$exists": True,
+            "$nin": [None, ""],
+        }
+    }
+    end_date_missing = {
+        "$or": [
+            {"end_date": {"$exists": False}},
+            {"end_date": None},
+            {"end_date": ""},
+        ]
+    }
 
-    return str(value).strip()
+    type_conditions = {
+        "employee": [hire_date_exists, end_date_missing],
+        "applicant": [hire_date_missing, end_date_missing],
+        "ex-employee": [hire_date_exists, end_date_exists],
+        "ex-applicant": [hire_date_missing, end_date_exists],
+    }
+    return type_conditions.get(value, [])
 
 
 async def delete_attachments_for_documents(document_ids: list[ObjectId], company_id: ObjectId, session=None) -> list[
@@ -136,7 +157,6 @@ class EmployeesModel(BaseModel):
     hire_date: Optional[datetime] = None
     end_date: Optional[datetime] = None
     job_description: Optional[str] = None
-    status: Optional[str] = None
     department: Optional[List[str]] = None
 
 
@@ -168,7 +188,6 @@ class EmployeesSearch(BaseModel):
     department: Optional[PyObjectId] = None
     job_title: Optional[PyObjectId] = None
     location: Optional[PyObjectId] = None
-    status: Optional[str] = None
     type: Optional[str] = None
     from_date: Optional[datetime] = None
     to_date: Optional[datetime] = None
@@ -179,11 +198,12 @@ main_screen_pipeline: list[dict[str, Any]] = [
         '$project': {
             'full_name': 1,
             'person_type': 1,
-            'status': 1,
             'employer': 1,
             'department': 1,
             'job_title': 1,
             'location': 1,
+            'hire_date': 1,
+            'end_date': 1,
             'all_ids': [
                 '$employer', '$department', '$job_title', '$location'
             ]
@@ -1679,7 +1699,7 @@ async def get_all_employees(data: dict = Depends(security.get_current_user)):
 async def create_employee(full_name: str = Form(None), country_of_birth: str = Form(None),
                           place_of_birth: str = Form(None), date_of_birth: Optional[str] = Form(None),
                           gender: str = Form(None), martial_status: str = Form(None), person_type: str = Form(None),
-                          status: str = Form(None), employer: str = Form(None), department: str = Form(None),
+                          employer: str = Form(None), department: str = Form(None),
                           job_title: str = Form(None), location: str = Form(None),
                           hire_date: Optional[str] = Form(None),
                           end_date: Optional[str] = Form(None), reporting_manager: str = Form(None),
@@ -1708,7 +1728,6 @@ async def create_employee(full_name: str = Form(None), country_of_birth: str = F
             "gender": ObjectId(gender) if gender else None,
             "martial_status": ObjectId(martial_status) if martial_status else None,
             "person_type": person_type,
-            "status": "Active" ,#status,
             "employer": ObjectId(employer) if employer else None,
             "department": ObjectId(department) if department else None,
             "job_title": ObjectId(job_title) if job_title else None,
@@ -1744,7 +1763,7 @@ async def create_employee(full_name: str = Form(None), country_of_birth: str = F
 async def update_employee(employee_id: str, full_name: str = Form(None), country_of_birth: str = Form(None),
                           place_of_birth: str = Form(None), date_of_birth: Optional[str] = Form(None),
                           gender: str = Form(None), martial_status: str = Form(None), person_type: str = Form(None),
-                          status: str = Form(None), employer: str = Form(None), department: str = Form(None),
+                          employer: str = Form(None), department: str = Form(None),
                           job_title: str = Form(None), location: str = Form(None),
                           hire_date: Optional[str] = Form(None),
                           end_date: Optional[str] = Form(None), reporting_manager: str = Form(None),
@@ -1766,7 +1785,6 @@ async def update_employee(employee_id: str, full_name: str = Form(None), country
             "gender": ObjectId(gender) if gender else None,
             "martial_status": ObjectId(martial_status) if martial_status else None,
             "person_type": person_type,
-            "status": status,
             "employer": ObjectId(employer) if employer else None,
             "department": ObjectId(department) if department else None,
             "job_title": ObjectId(job_title) if job_title else None,
@@ -3258,12 +3276,10 @@ async def search_engine_for_employees(
             match_stage["job_title"] = normalize_object_id(filter_employees.job_title, "job title")
         if filter_employees.location:
             match_stage["location"] = normalize_object_id(filter_employees.location, "location")
-        if filter_employees.status:
-            match_stage["status"] = filter_employees.status
         if filter_employees.type:
-            person_type = person_type_filter(filter_employees.type)
-            if person_type:
-                match_stage["person_type"] = person_type
+            type_conditions = employee_type_date_conditions(filter_employees.type.lower())
+            if type_conditions:
+                match_stage.setdefault("$and", []).extend(type_conditions)
 
         new_search_pipeline = copy.deepcopy(main_screen_pipeline)
         new_search_pipeline.insert(0, {"$match": match_stage})
@@ -3272,6 +3288,8 @@ async def search_engine_for_employees(
         return {"employees": employees}
 
     except Exception as e:
+
+        print(e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
