@@ -41,6 +41,8 @@ async def ensure_car_trading_indexes():
         [("company_id", 1), ("bought_by", 1)],
         [("company_id", 1), ("sold_by", 1)],
         [("company_id", 1), ("sold_to", 1)],
+        [("company_id", 1), ("invested_by", 1)],
+        [("company_id", 1), ("consignment_for", 1)],
     ]
     for index in trade_filter_indexes:
         await all_trades_collection.create_index(index)
@@ -111,6 +113,8 @@ class CarTradingSearch(BaseModel):
     sold_to: Optional[PyObjectId] = None
     sold_by: Optional[PyObjectId] = None
     bought_by: Optional[PyObjectId] = None
+    invested_by: Optional[PyObjectId] = None
+    consignment_for: Optional[PyObjectId] = None
     status: Optional[str] = None
     from_date: Optional[datetime] = None
     to_date: Optional[datetime] = None
@@ -148,6 +152,8 @@ class CarTradingModel(BaseModel):
     status: Optional[str] = None
     bought_by: Optional[PyObjectId] = None
     sold_by: Optional[PyObjectId] = None
+    invested_by: Optional[PyObjectId] = None
+    consignment_for: Optional[PyObjectId] = None
     # items: Optional[List[CarTradingItemsModel]] = None
 
     model_config = {
@@ -1835,6 +1841,8 @@ async def add_new_trade(trade: CarTradingModel, data: dict = Depends(security.ge
             "note": trade.note,
             "bought_by": trade.bought_by if trade.bought_by else "",
             "sold_by": trade.sold_by if trade.sold_by else "",
+            "invested_by": trade.invested_by if trade.invested_by else "",
+            "consignment_for": trade.consignment_for if trade.consignment_for else "",
             "createdAt": security.now_utc(),
             "updatedAt": security.now_utc(),
         }
@@ -2025,6 +2033,10 @@ async def search_engine_for_car_trading(
             match_stage["bought_by"] = filter_trades.bought_by
         if filter_trades.sold_by:
             match_stage["sold_by"] = filter_trades.sold_by
+        if filter_trades.invested_by:
+            match_stage["invested_by"] = filter_trades.invested_by
+        if filter_trades.consignment_for:
+            match_stage["consignment_for"] = filter_trades.consignment_for
         if filter_trades.sold_to:
             match_stage["sold_to"] = filter_trades.sold_to
         if filter_trades.status:
@@ -2230,6 +2242,8 @@ async def search_engine_for_car_trading(
                         "$sold_to",
                         "$sold_by",
                         "$bought_by",
+                        "$invested_by",
+                        "$consignment_for",
                     ]
                 },
                 "pipeline": [
@@ -2291,6 +2305,10 @@ async def search_engine_for_car_trading(
                 "bought_by": list_name("bought_by"),
                 "sold_by_id": {"$ifNull": ["$sold_by", ""]},
                 "bought_by_id": {"$ifNull": ["$bought_by", ""]},
+                "invested_by": list_name("invested_by"),
+                "invested_by_id": {"$ifNull": ["$invested_by", ""]},
+                "consignment_for": list_name("consignment_for"),
+                "consignment_for_id": {"$ifNull": ["$consignment_for", ""]},
                 "note": {"$ifNull": ["$note", ""]},
                 "date": {"$ifNull": ["$date", ""]},
                 "warranty_end_date": {"$ifNull": ["$warranty_end_date", ""]},
