@@ -44,6 +44,8 @@ COMPANY_SCOPED_COLLECTION_NAMES = [
     "batch_payment_process",
     "batch_payment_process_items",
     "branches",
+    "company_mail_oauth_states",
+    "company_mail_settings",
     "converters",
     "counters",
     "currencies",

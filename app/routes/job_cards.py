@@ -1,7 +1,9 @@
+import asyncio
 import copy
 from typing import Optional, List, Any
 from bson import ObjectId
 from fastapi import APIRouter, HTTPException, Depends, UploadFile, Form, File
+from pymongo.errors import OperationFailure
 from pydantic import BaseModel
 from app import database
 from app.core import security
@@ -23,6 +25,19 @@ job_cards_inspection_reports_collection = get_collection("job_cards_inspection_r
 quotation_cards_invoice_items_collection = get_collection("quotation_cards_invoice_items")
 quotation_cards_internal_notes_collection = get_collection("quotation_cards_internal_notes")
 users_collection = get_collection("sys-users")
+brands_collection = get_collection("all_brands")
+models_collection = get_collection("all_brand_models")
+countries_collection = get_collection("all_countries")
+cities_collection = get_collection("all_countries_cities")
+list_values_collection = get_collection("all_lists_values")
+salesman_collection = get_collection("sales_man")
+branches_collection = get_collection("branches")
+entity_information_collection = get_collection("entity_information")
+currencies_collection = get_collection("currencies")
+receipts_invoices_collection = get_collection("all_receipts_invoices")
+receipts_collection = get_collection("all_receipts")
+invoice_items_collection = get_collection("invoice_items")
+_job_card_search_indexes_ready = False
 
 
 class InvoiceItems(BaseModel):
@@ -795,6 +810,179 @@ def serializer(doc: dict) -> dict:
     return {k: convert(v) for k, v in doc.items()}
 
 
+async def _create_index_if_needed(collection, keys):
+    try:
+        await collection.create_index(keys, background=True)
+    except OperationFailure as exc:
+        if exc.code != 85:
+            raise
+
+
+async def ensure_job_card_search_indexes():
+    global _job_card_search_indexes_ready
+    if _job_card_search_indexes_ready:
+        return
+
+    await asyncio.gather(
+        _create_index_if_needed(
+            job_cards_collection,
+            [("company_id", 1), ("branch", 1), ("job_date", -1)],
+        ),
+        _create_index_if_needed(
+            job_cards_collection,
+            [("company_id", 1), ("branch", 1), ("invoice_date", -1)],
+        ),
+        _create_index_if_needed(
+            job_cards_collection,
+            [("company_id", 1), ("branch", 1), ("job_cancellation_date", -1)],
+        ),
+        _create_index_if_needed(job_cards_collection, [("job_number", 1)]),
+        _create_index_if_needed(job_cards_collection, [("invoice_number", 1)]),
+        _create_index_if_needed(job_cards_invoice_items_collection, [("job_card_id", 1)]),
+        _create_index_if_needed(receipts_invoices_collection, [("job_id", 1)]),
+        _create_index_if_needed(receipts_invoices_collection, [("receipt_id", 1)]),
+        _create_index_if_needed(receipts_collection, [("status", 1)]),
+    )
+    _job_card_search_indexes_ready = True
+
+
+def _ids_from_docs(docs: list[dict], field: str) -> set[ObjectId]:
+    return {
+        doc[field]
+        for doc in docs
+        if isinstance(doc.get(field), ObjectId)
+    }
+
+
+async def _lookup_by_ids(collection, ids: set[ObjectId], projection: dict) -> dict[ObjectId, dict]:
+    if not ids:
+        return {}
+
+    docs = await collection.find(
+        {"_id": {"$in": list(ids)}},
+        projection,
+    ).to_list(length=None)
+
+    return {doc["_id"]: doc for doc in docs}
+
+
+async def _invoice_totals_by_job(job_ids: list[ObjectId]) -> dict[ObjectId, dict]:
+    if not job_ids:
+        return {}
+
+    cursor = await job_cards_invoice_items_collection.aggregate([
+        {"$match": {"job_card_id": {"$in": job_ids}}},
+        {
+            "$group": {
+                "_id": "$job_card_id",
+                "total_amount": {"$sum": {"$ifNull": ["$total", 0]}},
+                "total_vat": {"$sum": {"$ifNull": ["$vat", 0]}},
+                "total_net": {"$sum": {"$ifNull": ["$net", 0]}},
+            }
+        },
+    ])
+    docs = await cursor.to_list(length=None)
+
+    return {doc["_id"]: doc for doc in docs}
+
+
+async def _paid_totals_by_job(job_ids: list[ObjectId]) -> dict[ObjectId, float]:
+    if not job_ids:
+        return {}
+
+    cursor = await receipts_invoices_collection.aggregate([
+        {"$match": {"job_id": {"$in": job_ids}}},
+        {
+            "$lookup": {
+                "from": "all_receipts",
+                "let": {"receipt_id": "$receipt_id"},
+                "pipeline": [
+                    {
+                        "$match": {
+                            "$expr": {
+                                "$and": [
+                                    {"$eq": ["$_id", "$$receipt_id"]},
+                                    {"$eq": ["$status", "Posted"]},
+                                ]
+                            }
+                        }
+                    },
+                    {"$project": {"_id": 1}},
+                ],
+                "as": "receipt_details",
+            }
+        },
+        {"$match": {"receipt_details": {"$ne": []}}},
+        {
+            "$group": {
+                "_id": "$job_id",
+                "paid": {"$sum": {"$ifNull": ["$amount", 0]}},
+            }
+        },
+    ])
+    docs = await cursor.to_list(length=None)
+
+    return {doc["_id"]: doc.get("paid", 0) for doc in docs}
+
+
+async def _invoice_items_by_job(job_ids: list[ObjectId]) -> dict[ObjectId, list[dict]]:
+    if not job_ids:
+        return {}
+
+    cursor = await job_cards_invoice_items_collection.aggregate([
+        {"$match": {"job_card_id": {"$in": job_ids}}},
+        {
+            "$lookup": {
+                "from": "invoice_items",
+                "localField": "name",
+                "foreignField": "_id",
+                "as": "name_details",
+            }
+        },
+        {
+            "$addFields": {
+                "name_text": {"$arrayElemAt": ["$name_details.name", 0]},
+            }
+        },
+        {"$project": {"name_details": 0}},
+    ])
+    docs = await cursor.to_list(length=None)
+
+    grouped: dict[ObjectId, list[dict]] = {}
+    for doc in docs:
+        grouped.setdefault(doc.get("job_card_id"), []).append(serializer(doc))
+
+    return grouped
+
+
+def _grand_totals(
+    job_ids: list[ObjectId],
+    invoice_totals: dict[ObjectId, dict],
+    paid_totals: dict[ObjectId, float],
+) -> dict:
+    total_amount = 0
+    total_vat = 0
+    total_net = 0
+    total_paid = 0
+
+    for job_id in job_ids:
+        totals = invoice_totals.get(job_id, {})
+        paid = paid_totals.get(job_id, 0)
+        total_amount += totals.get("total_amount", 0) or 0
+        total_vat += totals.get("total_vat", 0) or 0
+        total_net += totals.get("total_net", 0) or 0
+        total_paid += paid or 0
+
+    return {
+        "total_amount": total_amount,
+        "total_vat": total_vat,
+        "total_net": total_net,
+        "total_paid": total_paid,
+        "total_outstanding": total_net - total_paid,
+        "total_items_count": len(job_ids),
+    }
+
+
 async def get_job_card_details(job_card_id: ObjectId):
     new_pipeline = copy.deepcopy(pipeline)
     new_pipeline.insert(0, {
@@ -1135,6 +1323,8 @@ async def search_engine_for_job_cards_3(
         data: dict = Depends(security.get_current_user)
 ):
     try:
+        await ensure_job_card_search_indexes()
+
         company_id = ObjectId(data.get("company_id"))
         user_id = ObjectId(data.get("sub"))
 
@@ -1193,375 +1383,7 @@ async def search_engine_for_job_cards_3(
             else:
                 match_stage["job_status_2"] = filter_jobs.status
 
-        pipeline_special = [
-            {
-                "$addFields": {
-                    "date_field_to_filter": {
-                        "$switch": {
-                            "branches": [
-                                {
-                                    "case": {"$eq": [{"$toLower": "$job_status_1"}, "new"]},
-                                    "then": "$job_date"
-                                },
-                                {
-                                    "case": {"$eq": [{"$toLower": "$job_status_1"}, "cancelled"]},
-                                    "then": "$job_cancellation_date"
-                                },
-                                {
-                                    "case": {"$eq": [{"$toLower": "$job_status_1"}, "posted"]},
-                                    "then": "$invoice_date"
-                                }
-                            ],
-                            "default": "$job_date"
-                        }
-                    }
-                }
-            },
-            {"$match": match_stage},
-            {"$sort": {'date_field_to_filter': -1}},
-            {
-                "$lookup": {
-                    "from": "all_brands",
-                    "localField": "car_brand",
-                    "foreignField": "_id",
-                    "as": "car_brand_details"
-                }
-            },
-            {
-                "$lookup": {
-                    "from": "all_brand_models",
-                    "localField": "car_model",
-                    "foreignField": "_id",
-                    "as": "car_model_details"
-                }
-            },
-            {
-                "$lookup": {
-                    "from": "all_lists_values",
-                    "let": {
-                        "colorId": "$color",
-                        "engineTypeId": "$engine_type"
-                    },
-                    "pipeline": [
-                        {
-                            "$match": {
-                                "$expr": {
-                                    "$or": [
-                                        {"$eq": ["$_id", "$$colorId"]},
-                                        {"$eq": ["$_id", "$$engineTypeId"]}
-                                    ]
-                                }
-                            }
-                        },
-                        {"$project": {"name": 1}}
-                    ],
-                    "as": "list_values"
-                }
-            },
-            {
-                "$addFields": {
-                    "color_details": {
-                        "$first": {
-                            "$filter": {
-                                "input": "$list_values",
-                                "cond": {"$eq": ["$$this._id", "$color"]}
-                            }
-                        }
-                    },
-                    "engine_type_details": {
-                        "$first": {
-                            "$filter": {
-                                "input": "$list_values",
-                                "cond": {"$eq": ["$$this._id", "$engine_type"]}
-                            }
-                        }
-                    }
-                }
-            },
-            {"$lookup": {
-                "from": "all_countries",
-                "localField": "country",
-                "foreignField": "_id",
-                "as": "country_details"
-            }},
-            {"$lookup": {
-                "from": "all_countries_cities",
-                "localField": "city",
-                "foreignField": "_id",
-                "as": "city_details"
-            }},
-            {"$lookup": {
-                "from": "sales_man",
-                "localField": "salesman",
-                "foreignField": "_id",
-                "as": "salesman_details"
-            }},
-            {"$lookup": {
-                "from": "branches",
-                "localField": "branch",
-                "foreignField": "_id",
-                "as": "branch_details"
-            }},
-            {"$lookup": {
-                "from": "entity_information",
-                "localField": "customer",
-                "foreignField": "_id",
-                "as": "customer_details"
-            }},
-            {"$lookup": {
-                "from": "quotation_cards",
-                "localField": "quotation_id",
-                "foreignField": "_id",
-                "as": "quotation_details"
-            }},
-            {
-                "$lookup": {
-                    "from": "currencies",
-                    "let": {"currency_id": "$currency"},
-                    "pipeline": [
-                        {"$match": {"$expr": {"$eq": ["$_id", "$$currency_id"]}}},
-                        {"$project": {"country_id": 1}}
-                    ],
-                    "as": "currency_details"
-                }
-            },
-            {"$set": {"currency_details": {"$arrayElemAt": ["$currency_details", 0]}}},
-            {
-                "$lookup": {
-                    "from": "all_countries",
-                    "let": {"cid": "$currency_details.country_id"},
-                    "pipeline": [
-                        {"$match": {"$expr": {"$eq": ["$_id", "$$cid"]}}},
-                        {"$project": {"currency_code": 1}}
-                    ],
-                    "as": "currency_country_details"
-                }
-            },
-            {
-                "$lookup": {
-                    "from": "job_cards_invoice_items",
-                    "let": {"job_id": "$_id"},
-                    "pipeline": [
-                        {"$match": {"$expr": {"$eq": ["$job_card_id", "$$job_id"]}}},
-                        {
-                            "$lookup": {
-                                "from": "invoice_items",
-                                "let": {"nameId": "$name"},
-                                "pipeline": [
-                                    {"$match": {"$expr": {"$eq": ["$_id", "$$nameId"]}}},
-                                    {"$project": {"name": 1}}
-                                ],
-                                "as": "name_details"
-                            }
-                        },
-                        {
-                            "$addFields": {
-                                "name_text": {"$arrayElemAt": ["$name_details.name", 0]},
-                                '_id': {
-                                    '$toString': '$_id'
-                                },
-                                'company_id': {
-                                    '$toString': '$company_id'
-                                },
-                                'job_card_id': {
-                                    '$toString': '$job_card_id'
-                                },
-                                'name': {
-                                    '$toString': '$name'
-                                }
-                            }
-                        },
-                        {"$project": {"name_details": 0}}
-                    ],
-                    "as": "invoice_items_details"
-                }
-            },
-            {
-                "$addFields": {
-                    "total_amount": {"$sum": "$invoice_items_details.total"},
-                    "total_vat": {"$sum": "$invoice_items_details.vat"},
-                    "total_net": {"$sum": "$invoice_items_details.net"}
-                }
-            },
-            {
-                '$lookup': {
-                    'from': 'all_receipts_invoices',
-                    'let': {
-                        'jobId': '$_id'
-                    },
-                    'pipeline': [
-                        {
-                            '$match': {
-                                '$expr': {
-                                    '$eq': [
-                                        '$job_id', '$$jobId'
-                                    ]
-                                }
-                            }
-                        }, {
-                            '$lookup': {
-                                'from': 'all_receipts',
-                                'let': {
-                                    'receiptId': '$receipt_id'
-                                },
-                                'pipeline': [
-                                    {
-                                        '$match': {
-                                            '$expr': {
-                                                '$and': [
-                                                    {
-                                                        '$eq': [
-                                                            '$_id', '$$receiptId'
-                                                        ]
-                                                    }, {
-                                                        '$eq': [
-                                                            '$status', 'Posted'
-                                                        ]
-                                                    }
-                                                ]
-                                            }
-                                        }
-                                    }
-                                ],
-                                'as': 'receipt_details'
-                            }
-                        }, {
-                            '$match': {
-                                'receipt_details': {
-                                    '$ne': []
-                                }
-                            }
-                        }
-                    ],
-                    'as': 'receipts_invoices_details'
-                }
-            },
-            {
-                "$addFields": {
-                    "paid": {"$sum": "$receipts_invoices_details.amount"},
-
-                }
-            },
-            {
-                '$addFields': {
-                    "final_outstanding": {"$subtract": ["$total_net", "$paid"]}
-                }
-            },
-            {
-                "$addFields": {
-                    "car_brand_name": {"$arrayElemAt": ["$car_brand_details.name", 0]},
-                    "car_brand_logo": {"$arrayElemAt": ["$car_brand_details.logo", 0]},
-                    "car_model_name": {"$arrayElemAt": ["$car_model_details.name", 0]},
-                    "country_name": {"$arrayElemAt": ["$country_details.name", 0]},
-                    "city_name": {"$arrayElemAt": ["$city_details.name", 0]},
-                    "color_name": "$color_details.name",
-                    "engine_type_name": "$engine_type_details.name",
-                    "customer_name": {"$arrayElemAt": ["$customer_details.entity_name", 0]},
-                    "salesman_name": {"$arrayElemAt": ["$salesman_details.name", 0]},
-                    "branch_name": {"$arrayElemAt": ["$branch_details.name", 0]},
-                    "currency_code": {
-                        "$arrayElemAt": ["$currency_country_details.currency_code", 0]
-                    },
-                    "quotation_number": {
-                        "$arrayElemAt": ["$quotation_details.quotation_number", 0]
-                    }
-                }
-            },
-            {
-                "$project": {
-                    "car_brand_details": 0,
-                    "car_model_details": 0,
-                    "country_details": 0,
-                    "city_details": 0,
-                    "color_details": 0,
-                    "engine_type_details": 0,
-                    "customer_details": 0,
-                    "salesman_details": 0,
-                    "branch_details": 0,
-                    "currency_details": 0,
-                    "currency_country_details": 0,
-                    "quotation_details": 0,
-                    "list_values": 0,
-                    "receipts_invoices_details": 0
-                }
-            },
-            {
-                "$addFields": {
-                    "_id": {"$toString": "$_id"},
-                    "company_id": {"$toString": "$company_id"},
-                    "car_brand": {"$toString": "$car_brand"},
-                    "car_model": {"$toString": "$car_model"},
-                    "color": {"$toString": "$color"},
-                    "engine_type": {"$toString": "$engine_type"},
-                    "country": {"$toString": "$country"},
-                    "city": {"$toString": "$city"},
-                    "salesman": {"$toString": "$salesman"},
-                    "branch": {"$toString": "$branch"},
-                    "currency": {"$toString": "$currency"},
-                    "customer": {"$toString": "$customer"},
-                    "quotation_id": {"$toString": "$quotation_id"},
-                    "technician": {"$toString": "$technician"},
-                }
-            },
-            {"$project": {
-                'car_brand_details': 0,
-                'car_model_details': 0,
-                'country_details': 0,
-                'city_details': 0,
-                'color_details': 0,
-                'engine_type_details': 0,
-                'customer_details': 0,
-                'salesman_details': 0,
-                'branch_details': 0,
-                'currency_details': 0,
-                'currency_country_details': 0,
-                'quotation_details': 0,
-                'user_details': 0,
-                'list_values': 0,
-                'receipts_invoices_details': 0
-            }},
-            {"$limit": 200}
-            # {
-            #     "$facet": {
-            #         "job_cards": [
-            #             {"$limit": 200},
-            #             {"$project": {
-            #                 'car_brand_details': 0,
-            #                 'car_model_details': 0,
-            #                 'country_details': 0,
-            #                 'city_details': 0,
-            #                 'color_details': 0,
-            #                 'engine_type_details': 0,
-            #                 'customer_details': 0,
-            #                 'salesman_details': 0,
-            #                 'branch_details': 0,
-            #                 'currency_details': 0,
-            #                 'currency_country_details': 0,
-            #                 'quotation_details': 0,
-            #                 'user_details': 0,
-            #                 'list_values': 0,
-            #                 'receipts_invoices_details': 0
-            #             }}
-            #         ],
-            #         "grand_totals": [
-            #             {
-            #                 "$group": {
-            #                     "_id": None,
-            #                     "grand_total": {"$sum": "$total_amount"},
-            #                     "grand_vat": {"$sum": "$total_vat"},
-            #                     "grand_net": {"$sum": "$total_net"},
-            #                     "grand_paid": {"$sum": "$paid"},
-            #                     "grand_outstanding": {"$sum": "$final_outstanding"},
-            #                     "grand_count": {"$sum": 1}
-            #                 }
-            #             },
-            #             {"$project": {"_id": 0}}
-            #         ]
-            #     }
-            # }
-        ]
-        job_totals_pipeline: Any = copy.deepcopy(totals_job_cards_pipeline)
-        job_totals_pipeline.insert(0, {
+        date_field_stage = {
             "$addFields": {
                 "date_field_to_filter": {
                     "$switch": {
@@ -1583,18 +1405,217 @@ async def search_engine_for_job_cards_3(
                     }
                 }
             }
-        }, )
-        job_totals_pipeline.insert(1, {"$match": match_stage})
+        }
 
-        cursor = await job_cards_collection.aggregate(pipeline_special)
-        job_cards = await cursor.to_list(None)
-        cursor2 = await job_cards_collection.aggregate(job_totals_pipeline)
-        total_result = await cursor2.to_list(None)
+        job_projection = {
+            "_id": 1,
+            "company_id": 1,
+            "quotation_id": 1,
+            "label": 1,
+            "type": 1,
+            "job_status_1": 1,
+            "job_status_2": 1,
+            "car_brand": 1,
+            "car_model": 1,
+            "plate_number": 1,
+            "plate_code": 1,
+            "country": 1,
+            "city": 1,
+            "year": 1,
+            "color": 1,
+            "engine_type": 1,
+            "vehicle_identification_number": 1,
+            "transmission_type": 1,
+            "mileage_in": 1,
+            "mileage_out": 1,
+            "mileage_in_out_diff": 1,
+            "fuel_amount": 1,
+            "customer": 1,
+            "contact_name": 1,
+            "contact_email": 1,
+            "contact_number": 1,
+            "credit_limit": 1,
+            "outstanding": 1,
+            "salesman": 1,
+            "branch": 1,
+            "currency": 1,
+            "rate": 1,
+            "payment_method": 1,
+            "lpo_number": 1,
+            "job_approval_date": 1,
+            "job_start_date": 1,
+            "job_cancellation_date": 1,
+            "job_finish_date": 1,
+            "job_delivery_date": 1,
+            "job_warranty_days": 1,
+            "job_warranty_km": 1,
+            "job_warranty_end_date": 1,
+            "job_min_test_km": 1,
+            "job_reference_1": 1,
+            "job_reference_2": 1,
+            "job_reference_3": 1,
+            "delivery_time": 1,
+            "job_notes": 1,
+            "job_delivery_notes": 1,
+            "job_date": 1,
+            "invoice_date": 1,
+            "invoice_number": 1,
+            "createdAt": 1,
+            "updatedAt": 1,
+            "job_number": 1,
+            "technician": 1,
+        }
+
+        base_pipeline = [date_field_stage, {"$match": match_stage}]
+        job_cards_cursor = await job_cards_collection.aggregate(
+            base_pipeline + [
+                {"$sort": {"date_field_to_filter": -1}},
+                {"$project": job_projection},
+            ],
+            allowDiskUse=True,
+        )
+
+        job_cards = await job_cards_cursor.to_list(length=None)
+        all_job_ids = [job["_id"] for job in job_cards]
+
+        if not all_job_ids:
+            return {
+                "job_cards": [],
+                "grand_totals": _grand_totals([], {}, {}),
+            }
+
+        invoice_totals_task = _invoice_totals_by_job(all_job_ids)
+        paid_totals_task = _paid_totals_by_job(all_job_ids)
+        invoice_items_task = _invoice_items_by_job(all_job_ids)
+
+        brand_task = _lookup_by_ids(
+            brands_collection,
+            _ids_from_docs(job_cards, "car_brand"),
+            {"name": 1, "logo": 1},
+        )
+        model_task = _lookup_by_ids(
+            models_collection,
+            _ids_from_docs(job_cards, "car_model"),
+            {"name": 1},
+        )
+        country_task = _lookup_by_ids(
+            countries_collection,
+            _ids_from_docs(job_cards, "country"),
+            {"name": 1},
+        )
+        city_task = _lookup_by_ids(
+            cities_collection,
+            _ids_from_docs(job_cards, "city"),
+            {"name": 1},
+        )
+        list_value_ids = _ids_from_docs(job_cards, "color") | _ids_from_docs(job_cards, "engine_type")
+        list_values_task = _lookup_by_ids(
+            list_values_collection,
+            list_value_ids,
+            {"name": 1},
+        )
+        salesman_task = _lookup_by_ids(
+            salesman_collection,
+            _ids_from_docs(job_cards, "salesman"),
+            {"name": 1},
+        )
+        branch_task = _lookup_by_ids(
+            branches_collection,
+            _ids_from_docs(job_cards, "branch"),
+            {"name": 1},
+        )
+        customer_task = _lookup_by_ids(
+            entity_information_collection,
+            _ids_from_docs(job_cards, "customer"),
+            {"entity_name": 1},
+        )
+        quotation_task = _lookup_by_ids(
+            quotation_cards_collection,
+            _ids_from_docs(job_cards, "quotation_id"),
+            {"quotation_number": 1},
+        )
+        currency_task = _lookup_by_ids(
+            currencies_collection,
+            _ids_from_docs(job_cards, "currency"),
+            {"country_id": 1},
+        )
+
+        (
+            invoice_totals,
+            paid_totals,
+            invoice_items,
+            brands,
+            models,
+            countries,
+            cities,
+            list_values,
+            salesmen,
+            branches,
+            customers,
+            quotations,
+            currencies,
+        ) = await asyncio.gather(
+            invoice_totals_task,
+            paid_totals_task,
+            invoice_items_task,
+            brand_task,
+            model_task,
+            country_task,
+            city_task,
+            list_values_task,
+            salesman_task,
+            branch_task,
+            customer_task,
+            quotation_task,
+            currency_task,
+        )
+
+        currency_country_ids = {
+            currency["country_id"]
+            for currency in currencies.values()
+            if isinstance(currency.get("country_id"), ObjectId)
+        }
+        currency_countries = await _lookup_by_ids(
+            countries_collection,
+            currency_country_ids,
+            {"currency_code": 1},
+        )
+
+        results = []
+        for job in job_cards:
+            job_id = job["_id"]
+            brand = brands.get(job.get("car_brand"), {})
+            currency = currencies.get(job.get("currency"), {})
+            currency_country = currency_countries.get(currency.get("country_id"), {})
+            totals = invoice_totals.get(job_id, {})
+            paid = paid_totals.get(job_id, 0) or 0
+            total_net = totals.get("total_net", 0) or 0
+
+            job.update({
+                "invoice_items_details": invoice_items.get(job_id, []),
+                "total_amount": totals.get("total_amount", 0) or 0,
+                "total_vat": totals.get("total_vat", 0) or 0,
+                "total_net": total_net,
+                "paid": paid,
+                "final_outstanding": total_net - paid,
+                "car_brand_name": brand.get("name"),
+                "car_brand_logo": brand.get("logo"),
+                "car_model_name": models.get(job.get("car_model"), {}).get("name"),
+                "country_name": countries.get(job.get("country"), {}).get("name"),
+                "city_name": cities.get(job.get("city"), {}).get("name"),
+                "color_name": list_values.get(job.get("color"), {}).get("name"),
+                "engine_type_name": list_values.get(job.get("engine_type"), {}).get("name"),
+                "customer_name": customers.get(job.get("customer"), {}).get("entity_name"),
+                "salesman_name": salesmen.get(job.get("salesman"), {}).get("name"),
+                "branch_name": branches.get(job.get("branch"), {}).get("name"),
+                "currency_code": currency_country.get("currency_code"),
+                "quotation_number": quotations.get(job.get("quotation_id"), {}).get("quotation_number"),
+            })
+            results.append(serializer(job))
+
         return {
-            "job_cards": job_cards if job_cards else [],
-            "grand_totals": total_result[0] if total_result else {"total_amount": 0, "total_vat": 0,
-                                                                  "total_outstanding": 0, "total_paid": 0,
-                                                                  "total_items_count": 0, "total_net": 0},
+            "job_cards": results,
+            "grand_totals": _grand_totals(all_job_ids, invoice_totals, paid_totals),
         }
 
         # if job_cards.get("job_cards"):

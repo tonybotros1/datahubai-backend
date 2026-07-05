@@ -19,6 +19,8 @@ from app.websocket_config import manager
 users_collection = get_collection("sys-users")
 companies_collection = get_collection("companies")
 currencies_collection = get_collection("currencies")
+company_mail_settings_collection = get_collection("company_mail_settings")
+company_mail_oauth_states_collection = get_collection("company_mail_oauth_states")
 
 
 @asynccontextmanager
@@ -28,6 +30,14 @@ async def lifespan(_: FastAPI):
     await currencies_collection.create_index(
         [("company_id", 1), ("country_id", 1)],
         unique=True
+    )
+    await company_mail_settings_collection.create_index(
+        [("company_id", 1), ("provider", 1)],
+        unique=True
+    )
+    await company_mail_oauth_states_collection.create_index(
+        "expiresAt",
+        expireAfterSeconds=0
     )
     print("✅ Unique indexes ensured at startup")
     yield

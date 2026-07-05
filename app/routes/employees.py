@@ -4,7 +4,7 @@ from typing import Optional, List, Any
 from bson import ObjectId
 from bson.errors import InvalidId
 from fastapi import APIRouter, HTTPException, Depends, Form, UploadFile, File, Body
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr
 from app import database
 from app.core import security
 from app.database import get_collection
@@ -179,7 +179,8 @@ class EmployeePhoneModel(BaseModel):
 
 class EmployeeEmailModel(BaseModel):
     type: Optional[str] = None
-    email: Optional[str] = None
+    email: Optional[EmailStr] = None
+    use_for_payslips: bool = False
 
 
 class EmployeesSearch(BaseModel):
@@ -3183,17 +3184,30 @@ async def add_employee_email(employee_id: str, email: EmployeeEmailModel,
         if not employee_id:
             raise HTTPException(status_code=404, detail="Employee ID not found")
         company_id = ObjectId(data.get("company_id"))
+        employee_object_id = ObjectId(employee_id)
         email = email.model_dump(exclude_unset=True)
         if 'type' in email and email.get('type'):
             email['type'] = ObjectId(email['type']) if email['type'] else None
 
         email['company_id'] = company_id
-        email['employee_id'] = ObjectId(employee_id)
+        email['employee_id'] = employee_object_id
         email['createdAt'] = security.now_utc()
         email['updatedAt'] = security.now_utc()
+
         added_email = await employees_email_collection.insert_one(email)
         if not added_email.inserted_id:
             raise HTTPException(status_code=500, detail="Failed to create email")
+
+        if email.get('use_for_payslips'):
+            await employees_email_collection.update_many(
+                {
+                    "_id": {"$ne": added_email.inserted_id},
+                    "company_id": company_id,
+                    "employee_id": employee_object_id,
+                    "use_for_payslips": True,
+                },
+                {"$set": {"use_for_payslips": False, "updatedAt": security.now_utc()}},
+            )
 
         new_email_details = await get_employee_email_details(added_email.inserted_id)
         return {"new_email": new_email_details}
@@ -3209,19 +3223,38 @@ async def edit_employee_email(email_id: str, email: EmployeeEmailModel,
         if not email_id:
             raise HTTPException(status_code=404, detail="email_id not found")
         company_id = ObjectId(data.get("company_id"))
+        email_object_id = ObjectId(email_id)
+        current_email = await employees_email_collection.find_one(
+            {"_id": email_object_id, "company_id": company_id},
+            {"employee_id": 1},
+        )
+        if not current_email:
+            raise HTTPException(status_code=404, detail="Email not found")
+
         email = email.model_dump(exclude_unset=True)
         if 'type' in email and email.get('type'):
             email['type'] = ObjectId(email['type']) if email['type'] else None
 
         email['updatedAt'] = security.now_utc()
         added_email = await employees_email_collection.update_one(
-            {"_id": ObjectId(email_id), "company_id": company_id},
+            {"_id": email_object_id, "company_id": company_id},
             {"$set": email},
         )
         if added_email.matched_count == 0:
             raise HTTPException(status_code=404, detail="Email not found")
 
-        updated_email_details = await get_employee_email_details(ObjectId(email_id))
+        if email.get('use_for_payslips'):
+            await employees_email_collection.update_many(
+                {
+                    "_id": {"$ne": email_object_id},
+                    "company_id": company_id,
+                    "employee_id": current_email["employee_id"],
+                    "use_for_payslips": True,
+                },
+                {"$set": {"use_for_payslips": False, "updatedAt": security.now_utc()}},
+            )
+
+        updated_email_details = await get_employee_email_details(email_object_id)
         return {"updated_email": updated_email_details}
 
     except HTTPException:
