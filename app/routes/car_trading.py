@@ -143,6 +143,7 @@ class CarTradingModel(BaseModel):
     color_in: Optional[PyObjectId] = None
     car_brand: Optional[PyObjectId] = None
     car_model: Optional[PyObjectId] = None
+    trim: Optional[str] = None
     specification: Optional[PyObjectId] = None
     engine_size: Optional[PyObjectId] = None
     year: Optional[PyObjectId] = None
@@ -270,9 +271,8 @@ def serialize(document: dict) -> dict:
     if document.get("account_name"):
         document["account_name"] = str(document["account_name"])
         document["account_name_id"] = str(document["account_name_id"])
-    for key, value in document.items():
-        if isinstance(value, datetime):
-            document[key] = value.isoformat()
+    for key, value in list(document.items()):
+        document[key] = bson_serializer(value)
     return document
 
 
@@ -288,10 +288,408 @@ def general_expenses_serialize(document: dict) -> dict:
     if document.get("account_name"):
         document["account_name"] = str(document["account_name"])
         document["account_name_id"] = str(document["account_name_id"])
-    for key, value in document.items():
-        if isinstance(value, datetime):
-            document[key] = value.isoformat()
+    for key, value in list(document.items()):
+        document[key] = bson_serializer(value)
     return document
+
+
+@router.get("/get_all_cars")
+async def get_all_cars(data: dict = Depends(security.get_current_user)):
+    try:
+        company_id = ObjectId(data.get("company_id"))
+        cars_pipeline = [
+            {
+                '$match': {
+                    'company_id': company_id
+                }
+            }, {
+                '$set': {
+                    '_list_value_ids': {
+                        '$filter': {
+                            'input': [
+                                '$color_in', '$color_out', '$specification', '$engine_size', '$year'
+                            ],
+                            'as': 'value_id',
+                            'cond': {
+                                '$ne': [
+                                    '$$value_id', None
+                                ]
+                            }
+                        }
+                    }
+                }
+            }, {
+                '$lookup': {
+                    'from': 'all_brands',
+                    'localField': 'car_brand',
+                    'foreignField': '_id',
+                    'pipeline': [
+                        {
+                            '$project': {
+                                '_id': 1,
+                                'name': 1
+                            }
+                        }
+                    ],
+                    'as': 'brand_details'
+                }
+            }, {
+                '$lookup': {
+                    'from': 'all_brand_models',
+                    'localField': 'car_model',
+                    'foreignField': '_id',
+                    'pipeline': [
+                        {
+                            '$project': {
+                                '_id': 1,
+                                'name': 1
+                            }
+                        }
+                    ],
+                    'as': 'model_details'
+                }
+            }, {
+                '$lookup': {
+                    'from': 'all_lists_values',
+                    'localField': '_list_value_ids',
+                    'foreignField': '_id',
+                    'pipeline': [
+                        {
+                            '$project': {
+                                '_id': 1,
+                                'name': 1
+                            }
+                        }
+                    ],
+                    'as': 'list_values_details'
+                }
+            }, {
+                '$set': {
+                    'brand_details': {
+                        '$arrayElemAt': [
+                            '$brand_details', 0
+                        ]
+                    },
+                    'model_details': {
+                        '$arrayElemAt': [
+                            '$model_details', 0
+                        ]
+                    }
+                }
+            }, {
+                '$set': {
+                    'color_in_details': {
+                        '$arrayElemAt': [
+                            {
+                                '$filter': {
+                                    'input': '$list_values_details',
+                                    'as': 'value',
+                                    'cond': {
+                                        '$eq': [
+                                            '$$value._id', '$color_in'
+                                        ]
+                                    }
+                                }
+                            }, 0
+                        ]
+                    },
+                    'color_out_details': {
+                        '$arrayElemAt': [
+                            {
+                                '$filter': {
+                                    'input': '$list_values_details',
+                                    'as': 'value',
+                                    'cond': {
+                                        '$eq': [
+                                            '$$value._id', '$color_out'
+                                        ]
+                                    }
+                                }
+                            }, 0
+                        ]
+                    },
+                    'specification_details': {
+                        '$arrayElemAt': [
+                            {
+                                '$filter': {
+                                    'input': '$list_values_details',
+                                    'as': 'value',
+                                    'cond': {
+                                        '$eq': [
+                                            '$$value._id', '$specification'
+                                        ]
+                                    }
+                                }
+                            }, 0
+                        ]
+                    },
+                    'engine_size_details': {
+                        '$arrayElemAt': [
+                            {
+                                '$filter': {
+                                    'input': '$list_values_details',
+                                    'as': 'value',
+                                    'cond': {
+                                        '$eq': [
+                                            '$$value._id', '$engine_size'
+                                        ]
+                                    }
+                                }
+                            }, 0
+                        ]
+                    },
+                    'year_details': {
+                        '$arrayElemAt': [
+                            {
+                                '$filter': {
+                                    'input': '$list_values_details',
+                                    'as': 'value',
+                                    'cond': {
+                                        '$eq': [
+                                            '$$value._id', '$year'
+                                        ]
+                                    }
+                                }
+                            }, 0
+                        ]
+                    },
+                    'mileage_text': {
+                        '$convert': {
+                            'input': '$mileage',
+                            'to': 'string',
+                            'onError': '',
+                            'onNull': ''
+                        }
+                    }
+                }
+            }, {
+                '$set': {
+                    'brand': {
+                        '$ifNull': [
+                            '$brand_details.name', ''
+                        ]
+                    },
+                    'model': {
+                        '$ifNull': [
+                            '$model_details.name', ''
+                        ]
+                    },
+                    'trim_name': {
+                        '$ifNull': [
+                            '$trim', ''
+                        ]
+                    },
+                    'year_name': {
+                        '$ifNull': [
+                            '$year_details.name', ''
+                        ]
+                    },
+                    'interior_color': {
+                        '$ifNull': [
+                            '$color_in_details.name', ''
+                        ]
+                    },
+                    'exterior_color': {
+                        '$ifNull': [
+                            '$color_out_details.name', ''
+                        ]
+                    },
+                    'specification_name': {
+                        '$ifNull': [
+                            '$specification_details.name', ''
+                        ]
+                    },
+                    'engine_size_name': {
+                        '$ifNull': [
+                            '$engine_size_details.name', ''
+                        ]
+                    }
+                }
+            }, {
+                '$set': {
+                    'brand_and_model': {
+                        '$trim': {
+                            'input': {
+                                '$concat': [
+                                    '$brand', {
+                                        '$cond': [
+                                            {
+                                                '$and': [
+                                                    {
+                                                        '$ne': [
+                                                            '$brand', ''
+                                                        ]
+                                                    }, {
+                                                        '$ne': [
+                                                            '$model', ''
+                                                        ]
+                                                    }
+                                                ]
+                                            }, ' ', ''
+                                        ]
+                                    }, '$model', {
+                                        '$cond': [
+                                            {
+                                                '$and': [
+                                                    {
+                                                        '$or': [
+                                                            {
+                                                                '$ne': [
+                                                                    '$brand', ''
+                                                                ]
+                                                            },
+                                                            {
+                                                                '$ne': [
+                                                                    '$model', ''
+                                                                ]
+                                                            }
+                                                        ]
+                                                    }, {
+                                                        '$ne': [
+                                                            '$trim_name', ''
+                                                        ]
+                                                    }
+                                                ]
+                                            }, ' ', ''
+                                        ]
+                                    }, '$trim_name'
+                                ]
+                            }
+                        }
+                    }
+                }
+            }, {
+                '$set': {
+                    'car_without_mileage': {
+                        '$trim': {
+                            'input': {
+                                '$concat': [
+                                    '$brand_and_model', {
+                                        '$cond': [
+                                            {
+                                                '$and': [
+                                                    {
+                                                        '$ne': [
+                                                            '$brand_and_model', ''
+                                                        ]
+                                                    }, {
+                                                        '$ne': [
+                                                            '$year_name', ''
+                                                        ]
+                                                    }
+                                                ]
+                                            }, ' - ', ''
+                                        ]
+                                    }, '$year_name'
+                                ]
+                            }
+                        }
+                    }
+                }
+            }, {
+                '$set': {
+                    'car': {
+                        '$trim': {
+                            'input': {
+                                '$concat': [
+                                    '$car_without_mileage', {
+                                        '$cond': [
+                                            {
+                                                '$and': [
+                                                    {
+                                                        '$ne': [
+                                                            '$car_without_mileage', ''
+                                                        ]
+                                                    }, {
+                                                        '$ne': [
+                                                            '$mileage_text', ''
+                                                        ]
+                                                    }
+                                                ]
+                                            }, {
+                                                '$concat': [
+                                                    ' - ', '$mileage_text', ' km'
+                                                ]
+                                            }, {
+                                                '$cond': [
+                                                    {
+                                                        '$ne': [
+                                                            '$mileage_text', ''
+                                                        ]
+                                                    }, {
+                                                        '$concat': [
+                                                            '$mileage_text', ' km'
+                                                        ]
+                                                    }, ''
+                                                ]
+                                            }
+                                        ]
+                                    }
+                                ]
+                            }
+                        }
+                    }
+                }
+            }, {
+                '$project': {
+                    '_id': {
+                        '$toString': '$_id'
+                    },
+                    'car': 1,
+                    'brand': 1,
+                    'model': 1,
+                    'trim': {
+                        '$ifNull': [
+                            '$trim', ''
+                        ]
+                    },
+                    'year': {
+                        '$ifNull': [
+                            '$year_name', ''
+                        ]
+                    },
+                    'interior_color': 1,
+                    'exterior_color': 1,
+                    'specification': {
+                        '$ifNull': [
+                            '$specification_name', ''
+                        ]
+                    },
+                    'engine_size': {
+                        '$ifNull': [
+                            '$engine_size_name', ''
+                        ]
+                    },
+                    'mileage': {
+                        '$ifNull': [
+                            '$mileage', None
+                        ]
+                    },
+                    'chassis_number': {
+                        '$ifNull': [
+                            '$chassis_number', ''
+                        ]
+                    },
+                    'plate_number': {
+                        '$ifNull': [
+                            '$plate_number', ''
+                        ]
+                    },
+                    'status': {
+                        '$ifNull': [
+                            '$status', ''
+                        ]
+                    }
+                }
+            }
+        ]
+
+        cursor = await all_trades_collection.aggregate(cars_pipeline)
+        results = await cursor.to_list(None)
+        return {"cars": results}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # =========================================== Start of Transfers Section ===========================================
@@ -1040,7 +1438,8 @@ async def add_new_capital_or_outstanding(add_type: str, capital: CapitalModel,
         elif add_type == "outstanding":
             result = await all_outstanding_collection.insert_one(capital_dict)
         if result:
-            new_capital_or_outstanding = await get_capital_or_outstanding_details(result.inserted_id, add_type, company_id)
+            new_capital_or_outstanding = await get_capital_or_outstanding_details(result.inserted_id, add_type,
+                                                                                  company_id)
             serialized = serialize(new_capital_or_outstanding)
             await manager.send_to_company(str(company_id), {
                 "type": "capital_created" if add_type == "capitals" else "outstanding_created",
@@ -1303,6 +1702,47 @@ async def get_all_general_expenses(data: dict = Depends(security.get_current_use
                                 }, {
                                     '$cond': [
                                         {
+                                            '$and': [
+                                                {
+                                                    '$or': [
+                                                        {
+                                                            '$ne': [
+                                                                {
+                                                                    '$ifNull': [
+                                                                        '$car_brand_details.name', ''
+                                                                    ]
+                                                                }, ''
+                                                            ]
+                                                        },
+                                                        {
+                                                            '$ne': [
+                                                                {
+                                                                    '$ifNull': [
+                                                                        '$car_model_details.name', ''
+                                                                    ]
+                                                                }, ''
+                                                            ]
+                                                        }
+                                                    ]
+                                                }, {
+                                                    '$ne': [
+                                                        {
+                                                            '$ifNull': [
+                                                                '$trade_details.trim', ''
+                                                            ]
+                                                        }, ''
+                                                    ]
+                                                }
+                                            ]
+                                        }, ' ', ''
+                                    ]
+                                }, {
+                                    '$ifNull': [
+                                        '$trade_details.trim', ''
+                                    ]
+                                }, {
+                                    '$cond': [
+                                        {
                                             '$ne': [
                                                 '$mileage_text', ''
                                             ]
@@ -1346,6 +1786,12 @@ async def get_all_general_expenses(data: dict = Depends(security.get_current_use
                 'date': 1,
                 'pay': 1,
                 'car': 1,
+                'trim': {
+                    '$ifNull': [
+                        '$trade_details.trim', ''
+                    ]
+                },
+                'trade_id': 1,
                 'receive': 1,
                 'createdAt': 1,
                 'updatedAt': 1
@@ -1525,6 +1971,47 @@ async def get_general_expenses_details(type_id: ObjectId, company_id: Optional[O
                                     }, {
                                         '$cond': [
                                             {
+                                                '$and': [
+                                                    {
+                                                        '$or': [
+                                                            {
+                                                                '$ne': [
+                                                                    {
+                                                                        '$ifNull': [
+                                                                            '$car_brand_details.name', ''
+                                                                        ]
+                                                                    }, ''
+                                                                ]
+                                                            },
+                                                            {
+                                                                '$ne': [
+                                                                    {
+                                                                        '$ifNull': [
+                                                                            '$car_model_details.name', ''
+                                                                        ]
+                                                                    }, ''
+                                                                ]
+                                                            }
+                                                        ]
+                                                    }, {
+                                                        '$ne': [
+                                                            {
+                                                                '$ifNull': [
+                                                                    '$trade_details.trim', ''
+                                                                ]
+                                                            }, ''
+                                                        ]
+                                                    }
+                                                ]
+                                            }, ' ', ''
+                                        ]
+                                    }, {
+                                        '$ifNull': [
+                                            '$trade_details.trim', ''
+                                        ]
+                                    }, {
+                                        '$cond': [
+                                            {
                                                 '$ne': [
                                                     '$mileage_text', ''
                                                 ]
@@ -1589,13 +2076,17 @@ async def get_general_expenses_details(type_id: ObjectId, company_id: Optional[O
                             '$trade_details.mileage', None
                         ]
                     },
+                    'trim': {
+                        '$ifNull': [
+                            '$trade_details.trim', ''
+                        ]
+                    },
                     'company_id': 1,
                     'comment': 1,
                     'date': 1,
                     'pay': 1,
                     'receive': 1,
                     'trade_id': 1,
-                    'trade_details': 1,
                     'createdAt': 1,
                     'updatedAt': 1
                 }
@@ -1619,7 +2110,7 @@ async def get_general_expenses_summary(filter_expenses: ExpensesSearchModel,
     company_id = ObjectId(data.get("company_id"))
 
     expenses_search_pipeline = []
-    expenses_search_pipeline.insert(0, {'$match': {'company_id': company_id}})
+    expenses_search_pipeline.insert(0, {'$match': {'company_id': company_id, 'trade_id': None}})
 
     now = security.now_utc()
     date_field = "date"
@@ -1873,7 +2364,7 @@ async def get_general_expenses_summary(filter_expenses: ExpensesSearchModel,
         }
     })
 
-    cursor = await all_general_expenses_collection.aggregate(expenses_search_pipeline)
+    cursor = await all_trades_items_collection.aggregate(expenses_search_pipeline)
     result = await cursor.to_list(None)
 
     summary = result[0] if result else {
@@ -1965,7 +2456,9 @@ async def add_new_general_expenses(general: GeneralExpensesModel,
             raise HTTPException(status_code=400, detail="Date is required")
         item_id = parse_object_id(general.item, "item")
         account_name_id = parse_object_id(general.account_name, "account_name")
-        trade_id = data.get("trade_id", None)
+        trade_id = optional_object_id(general.trade_id, "trade_id")
+        if trade_id is not None:
+            await ensure_trade_belongs_to_company(trade_id, company_id)
 
         capital_dict = {
             "company_id": company_id,
@@ -1983,7 +2476,6 @@ async def add_new_general_expenses(general: GeneralExpensesModel,
         result = await all_trades_items_collection.insert_one(capital_dict)
 
         new_capital_or_outstanding = await get_general_expenses_details(result.inserted_id, company_id)
-        print(new_capital_or_outstanding)
         serialized = general_expenses_serialize(new_capital_or_outstanding)
         await manager.send_to_company(str(company_id), {
             "type": "general_expenses_created",
@@ -2039,6 +2531,10 @@ async def update_generale_expenses(type_id: str, general: GeneralExpensesModel,
             update_data["item"] = parse_object_id(update_data["item"], "item")
         if "account_name" in update_data:
             update_data["account_name"] = parse_object_id(update_data["account_name"], "account_name")
+        if "trade_id" in update_data:
+            update_data["trade_id"] = optional_object_id(update_data["trade_id"], "trade_id")
+            if update_data["trade_id"] is not None:
+                await ensure_trade_belongs_to_company(update_data["trade_id"], company_id)
         if "pay" in update_data:
             update_data["pay"] = zero_if_none(update_data["pay"])
         if "receive" in update_data:
@@ -2119,6 +2615,7 @@ async def add_new_trade(trade: CarTradingModel, data: dict = Depends(security.ge
             "color_out": trade.color_out if trade.color_out else "",
             "car_brand": trade.car_brand if trade.car_brand else "",
             "car_model": trade.car_model if trade.car_model else "",
+            "trim": trade.trim.strip() if trade.trim else "",
             "specification": trade.specification if trade.specification else "",
             "engine_size": trade.engine_size if trade.engine_size else "",
             "year": trade.year if trade.year else "",
@@ -2282,6 +2779,8 @@ async def update_trade(trade_id: str, trade: CarTradingModel,
             raise HTTPException(status_code=400, detail="Car brand is required")
         if "car_model" in updated_trade and updated_trade["car_model"] in (None, ""):
             raise HTTPException(status_code=400, detail="Car model is required")
+        if "trim" in updated_trade:
+            updated_trade["trim"] = updated_trade["trim"].strip() if updated_trade["trim"] else ""
 
         updated_trade["updatedAt"] = security.now_utc()
         result = await all_trades_collection.update_one(
@@ -2572,6 +3071,7 @@ async def search_engine_for_car_trading(
                 "car_brand": {"$ifNull": [{"$arrayElemAt": ["$car_brand_detail.name", 0]}, ""]},
                 "car_model_id": {"$ifNull": ["$car_model", ""]},
                 "car_model": {"$ifNull": [{"$arrayElemAt": ["$car_model_detail.name", 0]}, ""]},
+                "trim": {"$ifNull": ["$trim", ""]},
                 "year_id": {"$ifNull": ["$year", ""]},
                 "year": list_name("year"),
                 "status": {"$ifNull": ["$status", ""]},
@@ -3613,3 +4113,45 @@ async def get_last_changes(data_filter: LastChangesFilter, data: dict = Depends(
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+
+
+@router.post("/migrate_all_general_expenses_to_trade_items")
+async def migrate_all_general_expenses_to_trade_items(data: dict = Depends(security.get_current_user)):
+    try:
+        inserted_count = 0
+        skipped_count = 0
+        failed = []
+
+        cursor = all_general_expenses_collection.find({})
+        async for expense in cursor:
+            expense_id = expense.get("_id")
+            if expense_id is None:
+                failed.append({"_id": "", "error": "Missing _id"})
+                continue
+
+            existing = await all_trades_items_collection.find_one(
+                {"_id": expense_id},
+                {"_id": 1},
+            )
+            if existing:
+                skipped_count += 1
+                continue
+
+            trade_item = dict(expense)
+            trade_item["trade_id"] = None
+
+            try:
+                await all_trades_items_collection.insert_one(trade_item)
+                inserted_count += 1
+            except Exception as error:
+                failed.append({"_id": str(expense_id), "error": str(error)})
+
+        return {
+            "message": "General expenses migration completed",
+            "inserted": inserted_count,
+            "skipped": skipped_count,
+            "failed": failed,
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Migration error: {str(e)}")
