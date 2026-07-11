@@ -67,6 +67,7 @@ class GeneralExpensesModel(BaseModel):
     receive: Optional[float] = None
     account_name: Optional[str] = None
     comment: Optional[str] = None
+    trade_id: Optional[str] = None
     date: Optional[datetime] = None
 
 
@@ -278,6 +279,8 @@ def serialize(document: dict) -> dict:
 def general_expenses_serialize(document: dict) -> dict:
     document["_id"] = str(document["_id"])
     document["company_id"] = str(document["company_id"])
+    if document.get("trade_id"):
+        document["trade_id"] = str(document["trade_id"])
     if document.get("item"):
         document["item"] = str(document["item"])
     if document.get("item_id"):
@@ -1031,17 +1034,19 @@ async def add_new_capital_or_outstanding(add_type: str, capital: CapitalModel,
             "createdAt": security.now_utc(),
             "updatedAt": security.now_utc(),
         }
+        result = None
         if add_type == "capitals":
             result = await all_capitals_collection.insert_one(capital_dict)
         elif add_type == "outstanding":
             result = await all_outstanding_collection.insert_one(capital_dict)
-        new_capital_or_outstanding = await get_capital_or_outstanding_details(result.inserted_id, add_type, company_id)
-        serialized = serialize(new_capital_or_outstanding)
-        await manager.send_to_company(str(company_id), {
-            "type": "capital_created" if add_type == "capitals" else "outstanding_created",
-            "data": serialized
-        })
-        return {"message": f"{add_type.capitalize()} created successfully", "data": serialized}
+        if result:
+            new_capital_or_outstanding = await get_capital_or_outstanding_details(result.inserted_id, add_type, company_id)
+            serialized = serialize(new_capital_or_outstanding)
+            await manager.send_to_company(str(company_id), {
+                "type": "capital_created" if add_type == "capitals" else "outstanding_created",
+                "data": serialized
+            })
+            return {"message": f"{add_type.capitalize()} created successfully", "data": serialized}
 
     except HTTPException:
         raise
@@ -1178,70 +1183,206 @@ async def get_all_general_expenses(data: dict = Depends(security.get_current_use
     company_id = ObjectId(data.get("company_id"))
 
     pipeline = [
-        {"$match": {"company_id": company_id}},
         {
-            "$sort": {
-                "date": 1
+            '$match': {
+                'company_id': company_id
             }
-        },
-        {
-            "$lookup": {
-                "from": "all_lists_values",
-                "localField": "item",
-                "foreignField": "_id",
-                "as": "items",
+        }, {
+            '$sort': {
+                'date': -1
             }
-        },
-        {
-            "$unwind": {
-                "path": "$items",
-                "preserveNullAndEmptyArrays": True
+        }, {
+            '$lookup': {
+                'from': 'all_lists_values',
+                'localField': 'item',
+                'foreignField': '_id',
+                'as': 'items'
             }
-        },
-        {
-            "$lookup": {
-                "from": "all_lists_values",
-                "localField": "account_name",
-                "foreignField": "_id",
-                "as": "account_name_details",
+        }, {
+            '$unwind': {
+                'path': '$items',
+                'preserveNullAndEmptyArrays': True
             }
-        },
-        {
-            "$unwind": {
-                "path": "$account_name_details",
-                "preserveNullAndEmptyArrays": True
+        }, {
+            '$lookup': {
+                'from': 'all_lists_values',
+                'localField': 'account_name',
+                'foreignField': '_id',
+                'as': 'account_name_details'
             }
-        },
-        {
-            "$project": {
-                "_id": 1,
-                "item": {"$ifNull": ["$items.name", ""]},
-                "item_id": {"$ifNull": ["$items._id", ""]},
-                "account_name": {"$ifNull": ["$account_name_details.name", ""]},
-                "account_name_id": {"$ifNull": ["$account_name_details._id", ""]},
-                "company_id": 1,
-                "comment": 1,
-                "date": 1,
-                "pay": 1,
-                "receive": 1,
-                "createdAt": 1,
-                "updatedAt": 1,
+        }, {
+            '$unwind': {
+                'path': '$account_name_details',
+                'preserveNullAndEmptyArrays': True
             }
-        },
-        {
-            "$facet": {
-                "general_expenses": [{"$match": {}}],
-                "totals": [
-                    {
-                        "$group": {
-                            "_id": None,
-                            "total_pay": {"$sum": {"$ifNull": ["$pay", 0]}},
-                            "total_receive": {"$sum": {"$ifNull": ["$receive", 0]}},
+        }, {
+            '$lookup': {
+                'from': 'all_trades',
+                'localField': 'trade_id',
+                'foreignField': '_id',
+                'as': 'trade_details'
+            }
+        }, {
+            '$unwind': {
+                'path': '$trade_details',
+                'preserveNullAndEmptyArrays': True
+            }
+        }, {
+            '$lookup': {
+                'from': 'all_brands',
+                'localField': 'trade_details.car_brand',
+                'foreignField': '_id',
+                'as': 'car_brand_details'
+            }
+        }, {
+            '$unwind': {
+                'path': '$car_brand_details',
+                'preserveNullAndEmptyArrays': True
+            }
+        }, {
+            '$lookup': {
+                'from': 'all_brand_models',
+                'localField': 'trade_details.car_model',
+                'foreignField': '_id',
+                'as': 'car_model_details'
+            }
+        }, {
+            '$unwind': {
+                'path': '$car_model_details',
+                'preserveNullAndEmptyArrays': True
+            }
+        }, {
+            '$addFields': {
+                'mileage_text': {
+                    '$convert': {
+                        'input': '$trade_details.mileage',
+                        'to': 'string',
+                        'onError': '',
+                        'onNull': ''
+                    }
+                }
+            }
+        }, {
+            '$addFields': {
+                'car': {
+                    '$trim': {
+                        'input': {
+                            '$concat': [
+                                {
+                                    '$ifNull': [
+                                        '$car_brand_details.name', ''
+                                    ]
+                                }, {
+                                    '$cond': [
+                                        {
+                                            '$and': [
+                                                {
+                                                    '$ne': [
+                                                        {
+                                                            '$ifNull': [
+                                                                '$car_brand_details.name', ''
+                                                            ]
+                                                        }, ''
+                                                    ]
+                                                }, {
+                                                    '$ne': [
+                                                        {
+                                                            '$ifNull': [
+                                                                '$car_model_details.name', ''
+                                                            ]
+                                                        }, ''
+                                                    ]
+                                                }
+                                            ]
+                                        }, ' ', ''
+                                    ]
+                                }, {
+                                    '$ifNull': [
+                                        '$car_model_details.name', ''
+                                    ]
+                                }, {
+                                    '$cond': [
+                                        {
+                                            '$ne': [
+                                                '$mileage_text', ''
+                                            ]
+                                        }, {
+                                            '$concat': [
+                                                ' - ', '$mileage_text', ' km'
+                                            ]
+                                        }, ''
+                                    ]
+                                }
+                            ]
                         }
-                    },
+                    }
+                }
+            }
+        }, {
+            '$project': {
+                '_id': 1,
+                'item': {
+                    '$ifNull': [
+                        '$items.name', ''
+                    ]
+                },
+                'item_id': {
+                    '$ifNull': [
+                        '$items._id', ''
+                    ]
+                },
+                'account_name': {
+                    '$ifNull': [
+                        '$account_name_details.name', ''
+                    ]
+                },
+                'account_name_id': {
+                    '$ifNull': [
+                        '$account_name_details._id', ''
+                    ]
+                },
+                'company_id': 1,
+                'comment': 1,
+                'date': 1,
+                'pay': 1,
+                'car': 1,
+                'receive': 1,
+                'createdAt': 1,
+                'updatedAt': 1
+            }
+        }, {
+            '$facet': {
+                'general_expenses': [
                     {
-                        "$addFields": {
-                            "total_net": {"$subtract": ["$total_receive", "$total_pay"]}
+                        '$match': {}
+                    }
+                ],
+                'totals': [
+                    {
+                        '$group': {
+                            '_id': None,
+                            'total_pay': {
+                                '$sum': {
+                                    '$ifNull': [
+                                        '$pay', 0
+                                    ]
+                                }
+                            },
+                            'total_receive': {
+                                '$sum': {
+                                    '$ifNull': [
+                                        '$receive', 0
+                                    ]
+                                }
+                            }
+                        }
+                    }, {
+                        '$addFields': {
+                            'total_net': {
+                                '$subtract': [
+                                    '$total_receive', '$total_pay'
+                                ]
+                            }
                         }
                     }
                 ]
@@ -1249,7 +1390,7 @@ async def get_all_general_expenses(data: dict = Depends(security.get_current_use
         }
     ]
 
-    cursor = await all_general_expenses_collection.aggregate(pipeline)
+    cursor = await all_trades_items_collection.aggregate(pipeline)
     results = await cursor.to_list(length=None)
     if not results:
         return {"capitals": [], "totals": {"total_pay": 0, "total_receive": 0, "total_net": 0}}
@@ -1273,51 +1414,194 @@ async def get_general_expenses_details(type_id: ObjectId, company_id: Optional[O
                 "$match": match_stage,
             },
             {
-                "$lookup": {
-                    "from": "all_lists_values",
-                    "localField": "item",
-                    "foreignField": "_id",
-                    "as": "items",
+                '$lookup': {
+                    'from': 'all_lists_values',
+                    'localField': 'item',
+                    'foreignField': '_id',
+                    'as': 'items'
                 }
-            },
-            {
-                "$unwind": {
-                    "path": "$items",
-                    "preserveNullAndEmptyArrays": True
+            }, {
+                '$unwind': {
+                    'path': '$items',
+                    'preserveNullAndEmptyArrays': True
                 }
-            },
-            {
-                "$lookup": {
-                    "from": "all_lists_values",
-                    "localField": "account_name",
-                    "foreignField": "_id",
-                    "as": "account_name_details",
+            }, {
+                '$lookup': {
+                    'from': 'all_lists_values',
+                    'localField': 'account_name',
+                    'foreignField': '_id',
+                    'as': 'account_name_details'
                 }
-            },
-            {
-                "$unwind": {
-                    "path": "$account_name_details",
-                    "preserveNullAndEmptyArrays": True
+            }, {
+                '$unwind': {
+                    'path': '$account_name_details',
+                    'preserveNullAndEmptyArrays': True
                 }
-            },
-            {
-                "$project": {
-                    "_id": 1,
-                    "item": {"$ifNull": ["$items.name", ""]},
-                    "item_id": {"$ifNull": ["$items._id", ""]},
-                    "account_name": {"$ifNull": ["$account_name_details.name", ""]},
-                    "account_name_id": {"$ifNull": ["$account_name_details._id", ""]},
-                    "company_id": 1,
-                    "comment": 1,
-                    "date": 1,
-                    "pay": 1,
-                    "receive": 1,
-                    "createdAt": 1,
-                    "updatedAt": 1,
+            }, {
+                '$lookup': {
+                    'from': 'all_trades',
+                    'localField': 'trade_id',
+                    'foreignField': '_id',
+                    'as': 'trade_details'
                 }
-            },
+            }, {
+                '$unwind': {
+                    'path': '$trade_details',
+                    'preserveNullAndEmptyArrays': True
+                }
+            }, {
+                '$lookup': {
+                    'from': 'all_brands',
+                    'localField': 'trade_details.car_brand',
+                    'foreignField': '_id',
+                    'as': 'car_brand_details'
+                }
+            }, {
+                '$unwind': {
+                    'path': '$car_brand_details',
+                    'preserveNullAndEmptyArrays': True
+                }
+            }, {
+                '$lookup': {
+                    'from': 'all_brand_models',
+                    'localField': 'trade_details.car_model',
+                    'foreignField': '_id',
+                    'as': 'car_model_details'
+                }
+            }, {
+                '$unwind': {
+                    'path': '$car_model_details',
+                    'preserveNullAndEmptyArrays': True
+                }
+            }, {
+                '$addFields': {
+                    'mileage_text': {
+                        '$convert': {
+                            'input': '$trade_details.mileage',
+                            'to': 'string',
+                            'onError': '',
+                            'onNull': ''
+                        }
+                    }
+                }
+            }, {
+                '$addFields': {
+                    'car': {
+                        '$trim': {
+                            'input': {
+                                '$concat': [
+                                    {
+                                        '$ifNull': [
+                                            '$car_brand_details.name', ''
+                                        ]
+                                    }, {
+                                        '$cond': [
+                                            {
+                                                '$and': [
+                                                    {
+                                                        '$ne': [
+                                                            {
+                                                                '$ifNull': [
+                                                                    '$car_brand_details.name', ''
+                                                                ]
+                                                            }, ''
+                                                        ]
+                                                    }, {
+                                                        '$ne': [
+                                                            {
+                                                                '$ifNull': [
+                                                                    '$car_model_details.name', ''
+                                                                ]
+                                                            }, ''
+                                                        ]
+                                                    }
+                                                ]
+                                            }, ' ', ''
+                                        ]
+                                    }, {
+                                        '$ifNull': [
+                                            '$car_model_details.name', ''
+                                        ]
+                                    }, {
+                                        '$cond': [
+                                            {
+                                                '$ne': [
+                                                    '$mileage_text', ''
+                                                ]
+                                            }, {
+                                                '$concat': [
+                                                    ' - ', '$mileage_text', ' km'
+                                                ]
+                                            }, ''
+                                        ]
+                                    }
+                                ]
+                            }
+                        }
+                    }
+                }
+            }, {
+                '$project': {
+                    '_id': 1,
+                    'item': {
+                        '$ifNull': [
+                            '$items.name', ''
+                        ]
+                    },
+                    'item_id': {
+                        '$ifNull': [
+                            '$items._id', None
+                        ]
+                    },
+                    'account_name': {
+                        '$ifNull': [
+                            '$account_name_details.name', ''
+                        ]
+                    },
+                    'account_name_id': {
+                        '$ifNull': [
+                            '$account_name_details._id', None
+                        ]
+                    },
+                    'car': 1,
+                    'car_brand': {
+                        '$ifNull': [
+                            '$car_brand_details.name', ''
+                        ]
+                    },
+                    'car_brand_id': {
+                        '$ifNull': [
+                            '$car_brand_details._id', None
+                        ]
+                    },
+                    'car_model': {
+                        '$ifNull': [
+                            '$car_model_details.name', ''
+                        ]
+                    },
+                    'car_model_id': {
+                        '$ifNull': [
+                            '$car_model_details._id', None
+                        ]
+                    },
+                    'mileage': {
+                        '$ifNull': [
+                            '$trade_details.mileage', None
+                        ]
+                    },
+                    'company_id': 1,
+                    'comment': 1,
+                    'date': 1,
+                    'pay': 1,
+                    'receive': 1,
+                    'trade_id': 1,
+                    'trade_details': 1,
+                    'createdAt': 1,
+                    'updatedAt': 1
+                }
+            }
         ]
-        cursor = await all_general_expenses_collection.aggregate(pipeline)
+        cursor = await all_trades_items_collection.aggregate(pipeline)
         result = await cursor.to_list(length=1)
         if not result:
             raise HTTPException(status_code=404, detail="General expenses not found")
@@ -1607,7 +1891,7 @@ async def get_general_expenses_summary(filter_expenses: ExpensesSearchModel,
         sell_item_conditions.append({'$lt': ['$$item.date', date_range["$lt"]]})
     if "$lte" in date_range:
         sell_item_conditions.append({'$lte': ['$$item.date', date_range["$lte"]]})
-    trade_net_pipeline = [
+    trade_net_pipeline: Any = [
         {'$match': {'company_id': company_id, 'status': 'Sold'}},
         {
             '$lookup': {
@@ -1681,9 +1965,12 @@ async def add_new_general_expenses(general: GeneralExpensesModel,
             raise HTTPException(status_code=400, detail="Date is required")
         item_id = parse_object_id(general.item, "item")
         account_name_id = parse_object_id(general.account_name, "account_name")
+        trade_id = data.get("trade_id", None)
+
         capital_dict = {
             "company_id": company_id,
             "item": item_id,
+            "trade_id": trade_id,
             "pay": zero_if_none(general.pay),
             "receive": zero_if_none(general.receive),
             "account_name": account_name_id,
@@ -1693,9 +1980,10 @@ async def add_new_general_expenses(general: GeneralExpensesModel,
             "updatedAt": security.now_utc()
         }
 
-        result = await all_general_expenses_collection.insert_one(capital_dict)
+        result = await all_trades_items_collection.insert_one(capital_dict)
 
         new_capital_or_outstanding = await get_general_expenses_details(result.inserted_id, company_id)
+        print(new_capital_or_outstanding)
         serialized = general_expenses_serialize(new_capital_or_outstanding)
         await manager.send_to_company(str(company_id), {
             "type": "general_expenses_created",
@@ -1714,7 +2002,7 @@ async def delete_general_expenses(type_id: str, data: dict = Depends(security.ge
     try:
         company_id = ObjectId(data.get("company_id"))
         type_object_id = parse_object_id(type_id, "type_id")
-        result = await all_general_expenses_collection.find_one_and_delete(
+        result = await all_trades_items_collection.find_one_and_delete(
             {"_id": type_object_id, "company_id": company_id},
         )
         if not result:
@@ -1758,7 +2046,7 @@ async def update_generale_expenses(type_id: str, general: GeneralExpensesModel,
 
         update_data["updatedAt"] = security.now_utc()
 
-        result = await all_general_expenses_collection.update_one(
+        result = await all_trades_items_collection.update_one(
             {"_id": type_object_id, "company_id": company_id},
             {"$set": update_data}
         )
@@ -1788,7 +2076,7 @@ async def update_generale_expenses(type_id: str, general: GeneralExpensesModel,
                 }
             }
         ]
-        cursor = await all_general_expenses_collection.aggregate(totals_pipeline)
+        cursor = await all_trades_items_collection.aggregate(totals_pipeline)
         totals_result = await cursor.to_list(length=1)
         totals = totals_result[0] if totals_result else {"pay": 0, "receive": 0, "net": 0}
 
