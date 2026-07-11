@@ -1622,7 +1622,7 @@ async def get_all_reporting_managers(
         company_id = ObjectId(data.get('company_id'))
 
         pipeline: Any = [
-            {"$match": {"company_id": company_id, "person_type": "Employee"}}
+            {"$match": {"company_id": company_id, }}
         ]
 
         # Add employer filter if employer_id exists
@@ -4396,7 +4396,6 @@ async def get_assignment_balances_depending_on_period(employee_id: str, period_m
                                                         "$normalized_balance_dimension",
                                                         [
                                                             "year to date",
-                                                            "yearr to date",
                                                             "ytd",
                                                         ],
                                                     ]
