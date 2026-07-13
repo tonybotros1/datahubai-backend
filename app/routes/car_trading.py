@@ -699,10 +699,20 @@ async def get_vehicle_analysis_details(data: dict = Depends(security.get_current
         company_id = ObjectId(data.get("company_id"))
         vehicle_analysis_pipeline = [
             {
+                '$match':{
+                    'company_id': company_id,
+                }
+            },
+            {
                 '$project': {
                     '_id': 1,
                     'car_brand': 1,
                     'car_model': 1,
+                    'status': {
+                        '$ifNull': [
+                            '$status', ''
+                        ]
+                    },
                     'trim': {
                         '$ifNull': [
                             '$trim', '$car_trim'
@@ -1057,6 +1067,7 @@ async def get_vehicle_analysis_details(data: dict = Depends(security.get_current
                             },
                             'model_name': '$model_name',
                             'trim': '$trim',
+                            'status': '$status',
                             'buy_price': '$buy_price',
                             'sell_price': '$sell_price',
                             'buy_sell_net': '$buy_sell_net',
@@ -4175,6 +4186,7 @@ async def get_cash_on_hand_or_bank_balance(data: dict = Depends(security.get_cur
                     '_id': None,
                     'all_accounts': {
                         '$push': {
+                            'account_id': '$account_id',
                             'account_name': '$account_name',
                             'account_display': '$account_display',
                             'final_net': '$final_net'
