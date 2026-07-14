@@ -699,7 +699,7 @@ async def get_vehicle_analysis_details(data: dict = Depends(security.get_current
         company_id = ObjectId(data.get("company_id"))
         vehicle_analysis_pipeline = [
             {
-                '$match':{
+                '$match': {
                     'company_id': company_id,
                 }
             },
@@ -3771,43 +3771,31 @@ async def get_cash_on_hand_or_bank_balance(data: dict = Depends(security.get_cur
                     'company_id': company_id
                 }
             }, {
-                '$lookup': {
-                    'from': 'all_trades_items',
-                    'localField': '_id',
-                    'foreignField': 'trade_id',
-                    'as': 'item'
-                }
-            }, {
-                '$unwind': '$item'
-            }, {
                 '$project': {
-                    'account_id': '$item.account_name',
-                    'cars_pay': {
-                        '$ifNull': [
-                            '$item.pay', 0
+                    'account_id': '$account_name',
+                    'total_cars_net': {
+                        '$subtract': [
+                            {
+                                '$ifNull': [
+                                    '$receive', 0
+                                ]
+                            }, {
+                                '$ifNull': [
+                                    '$pay', 0
+                                ]
+                            }
                         ]
                     },
-                    'cars_receive': {
-                        '$ifNull': [
-                            '$item.receive', 0
-                        ]
-                    },
-                    'capitals_pay': {
+                    'total_capitals_net': {
                         '$literal': 0
                     },
-                    'capitals_receive': {
+                    'total_outstanding_net': {
                         '$literal': 0
                     },
-                    'outstanding_pay': {
+                    'total_expenses_net': {
                         '$literal': 0
                     },
-                    'outstanding_receive': {
-                        '$literal': 0
-                    },
-                    'expenses_pay': {
-                        '$literal': 0
-                    },
-                    'expenses_receive': {
+                    'transfers_net': {
                         '$literal': 0
                     }
                 }
@@ -3822,32 +3810,29 @@ async def get_cash_on_hand_or_bank_balance(data: dict = Depends(security.get_cur
                         }, {
                             '$project': {
                                 'account_id': '$account_name',
-                                'cars_pay': {
+                                'total_cars_net': {
                                     '$literal': 0
                                 },
-                                'cars_receive': {
-                                    '$literal': 0
-                                },
-                                'capitals_pay': {
-                                    '$ifNull': [
-                                        '$pay', 0
+                                'total_capitals_net': {
+                                    '$subtract': [
+                                        {
+                                            '$ifNull': [
+                                                '$receive', 0
+                                            ]
+                                        }, {
+                                            '$ifNull': [
+                                                '$pay', 0
+                                            ]
+                                        }
                                     ]
                                 },
-                                'capitals_receive': {
-                                    '$ifNull': [
-                                        '$receive', 0
-                                    ]
-                                },
-                                'outstanding_pay': {
+                                'total_outstanding_net': {
                                     '$literal': 0
                                 },
-                                'outstanding_receive': {
+                                'total_expenses_net': {
                                     '$literal': 0
                                 },
-                                'expenses_pay': {
-                                    '$literal': 0
-                                },
-                                'expenses_receive': {
+                                'transfers_net': {
                                     '$literal': 0
                                 }
                             }
@@ -3865,76 +3850,30 @@ async def get_cash_on_hand_or_bank_balance(data: dict = Depends(security.get_cur
                         }, {
                             '$project': {
                                 'account_id': '$account_name',
-                                'cars_pay': {
+                                'total_cars_net': {
                                     '$literal': 0
                                 },
-                                'cars_receive': {
+                                'total_capitals_net': {
                                     '$literal': 0
                                 },
-                                'capitals_pay': {
-                                    '$literal': 0
-                                },
-                                'capitals_receive': {
-                                    '$literal': 0
-                                },
-                                'outstanding_pay': {
-                                    '$ifNull': [
-                                        '$pay', 0
+                                'total_outstanding_net': {
+                                    '$subtract': [
+                                        {
+                                            '$ifNull': [
+                                                '$receive', 0
+                                            ]
+                                        }, {
+                                            '$ifNull': [
+                                                '$pay', 0
+                                            ]
+                                        }
                                     ]
                                 },
-                                'outstanding_receive': {
-                                    '$ifNull': [
-                                        '$receive', 0
-                                    ]
-                                },
-                                'expenses_pay': {
+                                'total_expenses_net': {
                                     '$literal': 0
                                 },
-                                'expenses_receive': {
+                                'transfers_net': {
                                     '$literal': 0
-                                }
-                            }
-                        }
-                    ]
-                }
-            }, {
-                '$unionWith': {
-                    'coll': 'all_general_expenses',
-                    'pipeline': [
-                        {
-                            '$match': {
-                                'company_id': company_id
-                            }
-                        }, {
-                            '$project': {
-                                'account_id': '$account_name',
-                                'cars_pay': {
-                                    '$literal': 0
-                                },
-                                'cars_receive': {
-                                    '$literal': 0
-                                },
-                                'capitals_pay': {
-                                    '$literal': 0
-                                },
-                                'capitals_receive': {
-                                    '$literal': 0
-                                },
-                                'outstanding_pay': {
-                                    '$literal': 0
-                                },
-                                'outstanding_receive': {
-                                    '$literal': 0
-                                },
-                                'expenses_pay': {
-                                    '$ifNull': [
-                                        '$pay', 0
-                                    ]
-                                },
-                                'expenses_receive': {
-                                    '$ifNull': [
-                                        '$receive', 0
-                                    ]
                                 }
                             }
                         }
@@ -3950,84 +3889,46 @@ async def get_cash_on_hand_or_bank_balance(data: dict = Depends(security.get_cur
                             }
                         }, {
                             '$project': {
-                                'account_id': '$from_account',
-                                'cars_pay': {
-                                    '$literal': 0
-                                },
-                                'cars_receive': {
-                                    '$literal': 0
-                                },
-                                'capitals_pay': {
-                                    '$literal': 0
-                                },
-                                'capitals_receive': {
-                                    '$literal': 0
-                                },
-                                'outstanding_pay': {
-                                    '$literal': 0
-                                },
-                                'outstanding_receive': {
-                                    '$literal': 0
-                                },
-                                'expenses_pay': {
-                                    '$literal': 0
-                                },
-                                'expenses_receive': {
-                                    '$literal': 0
-                                },
-                                'transfers_net': {
-                                    '$multiply': [
-                                        {
+                                'entries': [
+                                    {
+                                        'account_id': '$from_account',
+                                        'transfers_net': {
+                                            '$multiply': [
+                                                {
+                                                    '$ifNull': [
+                                                        '$amount', 0
+                                                    ]
+                                                }, -1
+                                            ]
+                                        }
+                                    }, {
+                                        'account_id': '$to_account',
+                                        'transfers_net': {
                                             '$ifNull': [
                                                 '$amount', 0
                                             ]
-                                        }, -1
-                                    ]
-                                }
-                            }
-                        }
-                    ]
-                }
-            }, {
-                '$unionWith': {
-                    'coll': 'all_trades_transfers',
-                    'pipeline': [
-                        {
-                            '$match': {
-                                'company_id': company_id
+                                        }
+                                    }
+                                ]
                             }
                         }, {
+                            '$unwind': '$entries'
+                        }, {
                             '$project': {
-                                'account_id': '$to_account',
-                                'cars_pay': {
+                                'account_id': '$entries.account_id',
+                                'total_cars_net': {
                                     '$literal': 0
                                 },
-                                'cars_receive': {
+                                'total_capitals_net': {
                                     '$literal': 0
                                 },
-                                'capitals_pay': {
+                                'total_outstanding_net': {
                                     '$literal': 0
                                 },
-                                'capitals_receive': {
+                                'total_expenses_net': {
                                     '$literal': 0
                                 },
-                                'outstanding_pay': {
-                                    '$literal': 0
-                                },
-                                'outstanding_receive': {
-                                    '$literal': 0
-                                },
-                                'expenses_pay': {
-                                    '$literal': 0
-                                },
-                                'expenses_receive': {
-                                    '$literal': 0
-                                },
-                                'transfers_net': {
-                                    '$ifNull': [
-                                        '$amount', 0
-                                    ]
-                                }
+                                'transfers_net': '$entries.transfers_net'
                             }
                         }
                     ]
@@ -4035,67 +3936,28 @@ async def get_cash_on_hand_or_bank_balance(data: dict = Depends(security.get_cur
             }, {
                 '$group': {
                     '_id': '$account_id',
-                    'cars_pay': {
-                        '$sum': '$cars_pay'
-                    },
-                    'cars_receive': {
-                        '$sum': '$cars_receive'
-                    },
-                    'capitals_pay': {
-                        '$sum': '$capitals_pay'
-                    },
-                    'capitals_receive': {
-                        '$sum': '$capitals_receive'
-                    },
-                    'outstanding_pay': {
-                        '$sum': '$outstanding_pay'
-                    },
-                    'outstanding_receive': {
-                        '$sum': '$outstanding_receive'
-                    },
-                    'expenses_pay': {
-                        '$sum': '$expenses_pay'
-                    },
-                    'expenses_receive': {
-                        '$sum': '$expenses_receive'
-                    },
-                    'transfers_net': {
-                        '$sum': {
-                            '$ifNull': [
-                                '$transfers_net', 0
-                            ]
-                        }
-                    }
-                }
-            }, {
-                '$addFields': {
                     'total_cars_net': {
-                        '$subtract': [
-                            '$cars_receive', '$cars_pay'
-                        ]
+                        '$sum': '$total_cars_net'
                     },
                     'total_capitals_net': {
-                        '$subtract': [
-                            '$capitals_receive', '$capitals_pay'
-                        ]
+                        '$sum': '$total_capitals_net'
                     },
                     'total_outstanding_net': {
-                        '$subtract': [
-                            '$outstanding_receive', '$outstanding_pay'
-                        ]
+                        '$sum': '$total_outstanding_net'
                     },
                     'total_expenses_net': {
-                        '$subtract': [
-                            '$expenses_receive', '$expenses_pay'
-                        ]
+                        '$sum': '$total_expenses_net'
+                    },
+                    'transfers_net': {
+                        '$sum': '$transfers_net'
                     }
                 }
             }, {
-                '$addFields': {
+                '$set': {
                     'final_net': {
                         '$add': [
                             '$total_cars_net', '$total_capitals_net', '$total_outstanding_net', '$total_expenses_net',
-                            "$transfers_net"
+                            '$transfers_net'
                         ]
                     }
                 }
@@ -4107,7 +3969,7 @@ async def get_cash_on_hand_or_bank_balance(data: dict = Depends(security.get_cur
                     'as': 'account'
                 }
             }, {
-                '$addFields': {
+                '$set': {
                     'account_name': {
                         '$ifNull': [
                             {
@@ -4122,21 +3984,23 @@ async def get_cash_on_hand_or_bank_balance(data: dict = Depends(security.get_cur
                 '$project': {
                     '_id': 0,
                     'account_id': {
-                        '$toString': '$_id'
+                        '$convert': {
+                            'input': '$_id',
+                            'to': 'string',
+                            'onError': '',
+                            'onNull': ''
+                        }
                     },
                     'account_name': 1,
                     'total_cars_net': 1,
                     'total_capitals_net': 1,
                     'total_outstanding_net': 1,
                     'total_expenses_net': 1,
+                    'transfers_net': 1,
                     'final_net': 1
                 }
             }, {
-                '$sort': {
-                    'account_name': 1
-                }
-            }, {
-                '$addFields': {
+                '$set': {
                     'account_display': {
                         '$concat': [
                             {
@@ -4151,8 +4015,7 @@ async def get_cash_on_hand_or_bank_balance(data: dict = Depends(security.get_cur
                                                 }
                                             },
                                             'then': '💵 '
-                                        },
-                                        {
+                                        }, {
                                             'case': {
                                                 '$regexMatch': {
                                                     'input': '$account_name',
@@ -4161,8 +4024,7 @@ async def get_cash_on_hand_or_bank_balance(data: dict = Depends(security.get_cur
                                                 }
                                             },
                                             'then': '🏦 '
-                                        },
-                                        {
+                                        }, {
                                             'case': {
                                                 '$regexMatch': {
                                                     'input': '$account_name',
@@ -4175,13 +4037,15 @@ async def get_cash_on_hand_or_bank_balance(data: dict = Depends(security.get_cur
                                     ],
                                     'default': '📁 '
                                 }
-                            },
-                            '$account_name'
+                            }, '$account_name'
                         ]
                     }
                 }
-            }
-            , {
+            }, {
+                '$sort': {
+                    'account_name': 1
+                }
+            }, {
                 '$group': {
                     '_id': None,
                     'all_accounts': {
@@ -4204,7 +4068,7 @@ async def get_cash_on_hand_or_bank_balance(data: dict = Depends(security.get_cur
                 }
             }
         ]
-        cursor = await all_trades_collection.aggregate(cash_on_hand_pipeline)
+        cursor = await all_trades_items_collection.aggregate(cash_on_hand_pipeline)
         results = await cursor.to_list(length=1)
         result = results[0] if results else {"all_accounts": [], "total_final_net": 0}
         return {"totals": result}
@@ -4245,52 +4109,131 @@ async def get_last_changes(data_filter: LastChangesFilter, data: dict = Depends(
                 '$lookup': {
                     'from': 'all_trades_items',
                     'let': {
-                        'trade_id': '$_id'
+                        'current_trade_id': '$_id'
                     },
                     'pipeline': [
                         {
                             '$match': {
                                 '$expr': {
                                     '$eq': [
-                                        '$trade_id', '$$trade_id'
+                                        {
+                                            '$convert': {
+                                                'input': '$trade_id',
+                                                'to': 'string',
+                                                'onError': '',
+                                                'onNull': ''
+                                            }
+                                        }, {
+                                            '$convert': {
+                                                'input': '$$current_trade_id',
+                                                'to': 'string',
+                                                'onError': '',
+                                                'onNull': ''
+                                            }
+                                        }
                                     ]
                                 }
                             }
                         }, {
                             '$lookup': {
                                 'from': 'all_lists_values',
-                                'localField': 'item',
-                                'foreignField': '_id',
+                                'let': {
+                                    'current_item_id': '$item'
+                                },
+                                'pipeline': [
+                                    {
+                                        '$match': {
+                                            '$expr': {
+                                                '$eq': [
+                                                    {
+                                                        '$convert': {
+                                                            'input': '$_id',
+                                                            'to': 'string',
+                                                            'onError': '',
+                                                            'onNull': ''
+                                                        }
+                                                    }, {
+                                                        '$convert': {
+                                                            'input': '$$current_item_id',
+                                                            'to': 'string',
+                                                            'onError': '',
+                                                            'onNull': ''
+                                                        }
+                                                    }
+                                                ]
+                                            }
+                                        }
+                                    }, {
+                                        '$project': {
+                                            '_id': 0,
+                                            'name': 1
+                                        }
+                                    }
+                                ],
                                 'as': 'item_details'
                             }
                         }, {
-                            '$addFields': {
+                            '$lookup': {
+                                'from': 'all_lists_values',
+                                'let': {
+                                    'current_account_id': '$account_name'
+                                },
+                                'pipeline': [
+                                    {
+                                        '$match': {
+                                            '$expr': {
+                                                '$eq': [
+                                                    {
+                                                        '$convert': {
+                                                            'input': '$_id',
+                                                            'to': 'string',
+                                                            'onError': '',
+                                                            'onNull': ''
+                                                        }
+                                                    }, {
+                                                        '$convert': {
+                                                            'input': '$$current_account_id',
+                                                            'to': 'string',
+                                                            'onError': '',
+                                                            'onNull': ''
+                                                        }
+                                                    }
+                                                ]
+                                            }
+                                        }
+                                    }, {
+                                        '$project': {
+                                            '_id': 0,
+                                            'name': 1
+                                        }
+                                    }
+                                ],
+                                'as': 'account_details'
+                            }
+                        }, {
+                            '$project': {
+                                '_id': 1,
+                                'trade_id': 1,
+                                'comment': 1,
+                                'pay': 1,
+                                'receive': 1,
+                                'updatedAt': 1,
                                 'item_name': {
                                     '$ifNull': [
                                         {
                                             '$arrayElemAt': [
                                                 '$item_details.name', 0
                                             ]
-                                        }, None
+                                        }, '-'
                                     ]
-                                }
-                            }
-                        }, {
-                            '$lookup': {
-                                'from': 'all_lists_values',
-                                'localField': 'account_name',
-                                'foreignField': '_id',
-                                'as': 'account_name_details'
-                            }
-                        }, {
-                            '$addFields': {
-                                'account_name_name': {
+                                },
+                                'account_name_value': {
                                     '$ifNull': [
                                         {
                                             '$arrayElemAt': [
-                                                '$account_name_details.name', 0
+                                                '$account_details.name', 0
                                             ]
-                                        }, None
+                                        }, '-'
                                     ]
                                 }
                             }
@@ -4305,19 +4248,15 @@ async def get_last_changes(data_filter: LastChangesFilter, data: dict = Depends(
                 }
             }, {
                 '$addFields': {
-                    'updatedAt': {
-                        '$cond': [
-                            {
-                                '$gt': [
-                                    '$trade_items.updatedAt', '$updatedAt'
-                                ]
-                            }, '$trade_items.updatedAt', '$updatedAt'
+                    'effective_updatedAt': {
+                        '$ifNull': [
+                            '$trade_items.updatedAt', '$updatedAt'
                         ]
                     }
                 }
             }, {
                 '$match': {
-                    'updatedAt': {
+                    'effective_updatedAt': {
                         '$gte': from_date,
                         '$lt': to_date
                     }
@@ -4325,39 +4264,168 @@ async def get_last_changes(data_filter: LastChangesFilter, data: dict = Depends(
             }, {
                 '$lookup': {
                     'from': 'all_brands',
-                    'localField': 'car_brand',
-                    'foreignField': '_id',
+                    'let': {
+                        'current_brand_id': '$car_brand'
+                    },
+                    'pipeline': [
+                        {
+                            '$match': {
+                                '$expr': {
+                                    '$eq': [
+                                        {
+                                            '$convert': {
+                                                'input': '$_id',
+                                                'to': 'string',
+                                                'onError': '',
+                                                'onNull': ''
+                                            }
+                                        }, {
+                                            '$convert': {
+                                                'input': '$$current_brand_id',
+                                                'to': 'string',
+                                                'onError': '',
+                                                'onNull': ''
+                                            }
+                                        }
+                                    ]
+                                }
+                            }
+                        }, {
+                            '$project': {
+                                '_id': 0,
+                                'name': 1
+                            }
+                        }
+                    ],
                     'as': 'brand_details'
                 }
             }, {
                 '$lookup': {
                     'from': 'all_brand_models',
-                    'localField': 'car_model',
-                    'foreignField': '_id',
+                    'let': {
+                        'current_model_id': '$car_model'
+                    },
+                    'pipeline': [
+                        {
+                            '$match': {
+                                '$expr': {
+                                    '$eq': [
+                                        {
+                                            '$convert': {
+                                                'input': '$_id',
+                                                'to': 'string',
+                                                'onError': '',
+                                                'onNull': ''
+                                            }
+                                        }, {
+                                            '$convert': {
+                                                'input': '$$current_model_id',
+                                                'to': 'string',
+                                                'onError': '',
+                                                'onNull': ''
+                                            }
+                                        }
+                                    ]
+                                }
+                            }
+                        }, {
+                            '$project': {
+                                '_id': 0,
+                                'name': 1
+                            }
+                        }
+                    ],
                     'as': 'model_details'
                 }
             }, {
                 '$lookup': {
                     'from': 'all_lists_values',
-                    'localField': 'year',
-                    'foreignField': '_id',
+                    'let': {
+                        'current_year_id': '$year'
+                    },
+                    'pipeline': [
+                        {
+                            '$match': {
+                                '$expr': {
+                                    '$eq': [
+                                        {
+                                            '$convert': {
+                                                'input': '$_id',
+                                                'to': 'string',
+                                                'onError': '',
+                                                'onNull': ''
+                                            }
+                                        }, {
+                                            '$convert': {
+                                                'input': '$$current_year_id',
+                                                'to': 'string',
+                                                'onError': '',
+                                                'onNull': ''
+                                            }
+                                        }
+                                    ]
+                                }
+                            }
+                        }, {
+                            '$project': {
+                                '_id': 0,
+                                'name': 1
+                            }
+                        }
+                    ],
                     'as': 'year_details'
                 }
             }, {
-                '$addFields': {
+                '$project': {
+                    '_id': {
+                        '$convert': {
+                            'input': '$_id',
+                            'to': 'string',
+                            'onError': '',
+                            'onNull': ''
+                        }
+                    },
+                    'trade_item_id': {
+                        '$convert': {
+                            'input': '$trade_items._id',
+                            'to': 'string',
+                            'onError': None,
+                            'onNull': None
+                        }
+                    },
+                    'type': {
+                        '$literal': 'car'
+                    },
                     'brand_name': {
-                        '$arrayElemAt': [
-                            '$brand_details.name', 0
+                        '$ifNull': [
+                            {
+                                '$arrayElemAt': [
+                                    '$brand_details.name', 0
+                                ]
+                            }, '-'
                         ]
                     },
                     'model_name': {
-                        '$arrayElemAt': [
-                            '$model_details.name', 0
+                        '$ifNull': [
+                            {
+                                '$arrayElemAt': [
+                                    '$model_details.name', 0
+                                ]
+                            }, '-'
+                        ]
+                    },
+                    'year': {
+                        '$ifNull': [
+                            {
+                                '$arrayElemAt': [
+                                    '$year_details.name', 0
+                                ]
+                            }, '-'
                         ]
                     },
                     'description': {
                         '$ifNull': [
-                            '$trade_items.comment', 0
+                            '$trade_items.comment', ''
                         ]
                     },
                     'pay': {
@@ -4370,47 +4438,26 @@ async def get_last_changes(data_filter: LastChangesFilter, data: dict = Depends(
                             '$trade_items.receive', 0
                         ]
                     },
-                    'year': {
-                        '$arrayElemAt': [
-                            '$year_details.name', 0
-                        ]
-                    },
+                    'updatedAt': '$effective_updatedAt',
                     'item_name': {
                         '$ifNull': [
-                            '$trade_items.item_name', 0
+                            '$trade_items.item_name', '-'
                         ]
                     },
                     'account_name': {
                         '$ifNull': [
-                            '$trade_items.account_name_name', 0
+                            '$trade_items.account_name_value', '-'
                         ]
                     }
                 }
             }, {
-                '$project': {
-                    '_id': {
-                        '$toString': '$_id'
-                    },
-                    'type': {
-                        '$literal': 'car'
-                    },
-                    'brand_name': 1,
-                    'model_name': 1,
-                    'description': 1,
-                    'pay': 1,
-                    'receive': 1,
-                    'year': 1,
-                    'updatedAt': 1,
-                    'item_name': 1,
-                    'account_name': 1
-                }
-            }, {
                 '$unionWith': {
-                    'coll': 'all_general_expenses',
+                    'coll': 'all_trades_items',
                     'pipeline': [
                         {
                             '$match': {
                                 'company_id': company_id,
+                                'trade_id': None,
                                 'updatedAt': {
                                     '$gte': from_date,
                                     '$lt': to_date
@@ -4419,22 +4466,99 @@ async def get_last_changes(data_filter: LastChangesFilter, data: dict = Depends(
                         }, {
                             '$lookup': {
                                 'from': 'all_lists_values',
-                                'localField': 'item',
-                                'foreignField': '_id',
+                                'let': {
+                                    'current_item_id': '$item'
+                                },
+                                'pipeline': [
+                                    {
+                                        '$match': {
+                                            '$expr': {
+                                                '$eq': [
+                                                    {
+                                                        '$convert': {
+                                                            'input': '$_id',
+                                                            'to': 'string',
+                                                            'onError': '',
+                                                            'onNull': ''
+                                                        }
+                                                    }, {
+                                                        '$convert': {
+                                                            'input': '$$current_item_id',
+                                                            'to': 'string',
+                                                            'onError': '',
+                                                            'onNull': ''
+                                                        }
+                                                    }
+                                                ]
+                                            }
+                                        }
+                                    }, {
+                                        '$project': {
+                                            '_id': 0,
+                                            'name': 1
+                                        }
+                                    }
+                                ],
                                 'as': 'item_details'
                             }
                         }, {
                             '$lookup': {
                                 'from': 'all_lists_values',
-                                'localField': 'account_name',
-                                'foreignField': '_id',
-                                'as': 'account_name_details'
+                                'let': {
+                                    'current_account_id': '$account_name'
+                                },
+                                'pipeline': [
+                                    {
+                                        '$match': {
+                                            '$expr': {
+                                                '$eq': [
+                                                    {
+                                                        '$convert': {
+                                                            'input': '$_id',
+                                                            'to': 'string',
+                                                            'onError': '',
+                                                            'onNull': ''
+                                                        }
+                                                    }, {
+                                                        '$convert': {
+                                                            'input': '$$current_account_id',
+                                                            'to': 'string',
+                                                            'onError': '',
+                                                            'onNull': ''
+                                                        }
+                                                    }
+                                                ]
+                                            }
+                                        }
+                                    }, {
+                                        '$project': {
+                                            '_id': 0,
+                                            'name': 1
+                                        }
+                                    }
+                                ],
+                                'as': 'account_details'
                             }
                         }, {
                             '$project': {
-                                '_id': 0,
+                                '_id': {
+                                    '$convert': {
+                                        'input': '$_id',
+                                        'to': 'string',
+                                        'onError': '',
+                                        'onNull': ''
+                                    }
+                                },
+                                'trade_item_id': {
+                                    '$convert': {
+                                        'input': '$_id',
+                                        'to': 'string',
+                                        'onError': None,
+                                        'onNull': None
+                                    }
+                                },
                                 'type': {
-                                    '$literal': 'expenses'
+                                    '$literal': 'car'
                                 },
                                 'brand_name': {
                                     '$literal': '-'
@@ -4445,18 +4569,38 @@ async def get_last_changes(data_filter: LastChangesFilter, data: dict = Depends(
                                 'year': {
                                     '$literal': '-'
                                 },
-                                'description': '$comment',
-                                'pay': '$pay',
-                                'receive': '$receive',
+                                'description': {
+                                    '$ifNull': [
+                                        '$comment', ''
+                                    ]
+                                },
+                                'pay': {
+                                    '$ifNull': [
+                                        '$pay', 0
+                                    ]
+                                },
+                                'receive': {
+                                    '$ifNull': [
+                                        '$receive', 0
+                                    ]
+                                },
                                 'updatedAt': 1,
                                 'item_name': {
-                                    '$arrayElemAt': [
-                                        '$item_details.name', 0
+                                    '$ifNull': [
+                                        {
+                                            '$arrayElemAt': [
+                                                '$item_details.name', 0
+                                            ]
+                                        }, '-'
                                     ]
                                 },
                                 'account_name': {
-                                    '$arrayElemAt': [
-                                        '$account_name_details.name', 0
+                                    '$ifNull': [
+                                        {
+                                            '$arrayElemAt': [
+                                                '$account_details.name', 0
+                                            ]
+                                        }, '-'
                                     ]
                                 }
                             }
@@ -4478,20 +4622,92 @@ async def get_last_changes(data_filter: LastChangesFilter, data: dict = Depends(
                         }, {
                             '$lookup': {
                                 'from': 'all_lists_values',
-                                'localField': 'name',
-                                'foreignField': '_id',
+                                'let': {
+                                    'current_item_id': '$name'
+                                },
+                                'pipeline': [
+                                    {
+                                        '$match': {
+                                            '$expr': {
+                                                '$eq': [
+                                                    {
+                                                        '$convert': {
+                                                            'input': '$_id',
+                                                            'to': 'string',
+                                                            'onError': '',
+                                                            'onNull': ''
+                                                        }
+                                                    }, {
+                                                        '$convert': {
+                                                            'input': '$$current_item_id',
+                                                            'to': 'string',
+                                                            'onError': '',
+                                                            'onNull': ''
+                                                        }
+                                                    }
+                                                ]
+                                            }
+                                        }
+                                    }, {
+                                        '$project': {
+                                            '_id': 0,
+                                            'name': 1
+                                        }
+                                    }
+                                ],
                                 'as': 'item_details'
                             }
                         }, {
                             '$lookup': {
                                 'from': 'all_lists_values',
-                                'localField': 'account_name',
-                                'foreignField': '_id',
-                                'as': 'account_name_details'
+                                'let': {
+                                    'current_account_id': '$account_name'
+                                },
+                                'pipeline': [
+                                    {
+                                        '$match': {
+                                            '$expr': {
+                                                '$eq': [
+                                                    {
+                                                        '$convert': {
+                                                            'input': '$_id',
+                                                            'to': 'string',
+                                                            'onError': '',
+                                                            'onNull': ''
+                                                        }
+                                                    }, {
+                                                        '$convert': {
+                                                            'input': '$$current_account_id',
+                                                            'to': 'string',
+                                                            'onError': '',
+                                                            'onNull': ''
+                                                        }
+                                                    }
+                                                ]
+                                            }
+                                        }
+                                    }, {
+                                        '$project': {
+                                            '_id': 0,
+                                            'name': 1
+                                        }
+                                    }
+                                ],
+                                'as': 'account_details'
                             }
                         }, {
                             '$project': {
-                                '_id': 0,
+                                '_id': {
+                                    '$convert': {
+                                        'input': '$_id',
+                                        'to': 'string',
+                                        'onError': '',
+                                        'onNull': ''
+                                    }
+                                },
+                                'trade_item_id': {
+                                    '$literal': None
+                                },
                                 'type': {
                                     '$literal': 'outstanding'
                                 },
@@ -4504,18 +4720,38 @@ async def get_last_changes(data_filter: LastChangesFilter, data: dict = Depends(
                                 'year': {
                                     '$literal': '-'
                                 },
-                                'description': '$comment',
-                                'pay': '$pay',
-                                'receive': '$receive',
+                                'description': {
+                                    '$ifNull': [
+                                        '$comment', ''
+                                    ]
+                                },
+                                'pay': {
+                                    '$ifNull': [
+                                        '$pay', 0
+                                    ]
+                                },
+                                'receive': {
+                                    '$ifNull': [
+                                        '$receive', 0
+                                    ]
+                                },
                                 'updatedAt': 1,
                                 'item_name': {
-                                    '$arrayElemAt': [
-                                        '$item_details.name', 0
+                                    '$ifNull': [
+                                        {
+                                            '$arrayElemAt': [
+                                                '$item_details.name', 0
+                                            ]
+                                        }, '-'
                                     ]
                                 },
                                 'account_name': {
-                                    '$arrayElemAt': [
-                                        '$account_name_details.name', 0
+                                    '$ifNull': [
+                                        {
+                                            '$arrayElemAt': [
+                                                '$account_details.name', 0
+                                            ]
+                                        }, '-'
                                     ]
                                 }
                             }
@@ -4537,20 +4773,92 @@ async def get_last_changes(data_filter: LastChangesFilter, data: dict = Depends(
                         }, {
                             '$lookup': {
                                 'from': 'all_lists_values',
-                                'localField': 'name',
-                                'foreignField': '_id',
+                                'let': {
+                                    'current_item_id': '$name'
+                                },
+                                'pipeline': [
+                                    {
+                                        '$match': {
+                                            '$expr': {
+                                                '$eq': [
+                                                    {
+                                                        '$convert': {
+                                                            'input': '$_id',
+                                                            'to': 'string',
+                                                            'onError': '',
+                                                            'onNull': ''
+                                                        }
+                                                    }, {
+                                                        '$convert': {
+                                                            'input': '$$current_item_id',
+                                                            'to': 'string',
+                                                            'onError': '',
+                                                            'onNull': ''
+                                                        }
+                                                    }
+                                                ]
+                                            }
+                                        }
+                                    }, {
+                                        '$project': {
+                                            '_id': 0,
+                                            'name': 1
+                                        }
+                                    }
+                                ],
                                 'as': 'item_details'
                             }
                         }, {
                             '$lookup': {
                                 'from': 'all_lists_values',
-                                'localField': 'account_name',
-                                'foreignField': '_id',
-                                'as': 'account_name_details'
+                                'let': {
+                                    'current_account_id': '$account_name'
+                                },
+                                'pipeline': [
+                                    {
+                                        '$match': {
+                                            '$expr': {
+                                                '$eq': [
+                                                    {
+                                                        '$convert': {
+                                                            'input': '$_id',
+                                                            'to': 'string',
+                                                            'onError': '',
+                                                            'onNull': ''
+                                                        }
+                                                    }, {
+                                                        '$convert': {
+                                                            'input': '$$current_account_id',
+                                                            'to': 'string',
+                                                            'onError': '',
+                                                            'onNull': ''
+                                                        }
+                                                    }
+                                                ]
+                                            }
+                                        }
+                                    }, {
+                                        '$project': {
+                                            '_id': 0,
+                                            'name': 1
+                                        }
+                                    }
+                                ],
+                                'as': 'account_details'
                             }
                         }, {
                             '$project': {
-                                '_id': 0,
+                                '_id': {
+                                    '$convert': {
+                                        'input': '$_id',
+                                        'to': 'string',
+                                        'onError': '',
+                                        'onNull': ''
+                                    }
+                                },
+                                'trade_item_id': {
+                                    '$literal': None
+                                },
                                 'type': {
                                     '$literal': 'capital'
                                 },
@@ -4563,18 +4871,38 @@ async def get_last_changes(data_filter: LastChangesFilter, data: dict = Depends(
                                 'year': {
                                     '$literal': '-'
                                 },
-                                'description': '$comment',
-                                'pay': '$pay',
-                                'receive': '$receive',
+                                'description': {
+                                    '$ifNull': [
+                                        '$comment', ''
+                                    ]
+                                },
+                                'pay': {
+                                    '$ifNull': [
+                                        '$pay', 0
+                                    ]
+                                },
+                                'receive': {
+                                    '$ifNull': [
+                                        '$receive', 0
+                                    ]
+                                },
                                 'updatedAt': 1,
                                 'item_name': {
-                                    '$arrayElemAt': [
-                                        '$item_details.name', 0
+                                    '$ifNull': [
+                                        {
+                                            '$arrayElemAt': [
+                                                '$item_details.name', 0
+                                            ]
+                                        }, '-'
                                     ]
                                 },
                                 'account_name': {
-                                    '$arrayElemAt': [
-                                        '$account_name_details.name', 0
+                                    '$ifNull': [
+                                        {
+                                            '$arrayElemAt': [
+                                                '$account_details.name', 0
+                                            ]
+                                        }, '-'
                                     ]
                                 }
                             }
@@ -4596,45 +4924,161 @@ async def get_last_changes(data_filter: LastChangesFilter, data: dict = Depends(
                         }, {
                             '$lookup': {
                                 'from': 'all_lists_values',
-                                'localField': 'from_account',
-                                'foreignField': '_id',
+                                'let': {
+                                    'current_account_id': '$from_account'
+                                },
+                                'pipeline': [
+                                    {
+                                        '$match': {
+                                            '$expr': {
+                                                '$eq': [
+                                                    {
+                                                        '$convert': {
+                                                            'input': '$_id',
+                                                            'to': 'string',
+                                                            'onError': '',
+                                                            'onNull': ''
+                                                        }
+                                                    }, {
+                                                        '$convert': {
+                                                            'input': '$$current_account_id',
+                                                            'to': 'string',
+                                                            'onError': '',
+                                                            'onNull': ''
+                                                        }
+                                                    }
+                                                ]
+                                            }
+                                        }
+                                    }, {
+                                        '$project': {
+                                            '_id': 0,
+                                            'name': 1
+                                        }
+                                    }
+                                ],
                                 'as': 'from_details'
                             }
                         }, {
                             '$lookup': {
                                 'from': 'all_lists_values',
-                                'localField': 'to_account',
-                                'foreignField': '_id',
+                                'let': {
+                                    'current_account_id': '$to_account'
+                                },
+                                'pipeline': [
+                                    {
+                                        '$match': {
+                                            '$expr': {
+                                                '$eq': [
+                                                    {
+                                                        '$convert': {
+                                                            'input': '$_id',
+                                                            'to': 'string',
+                                                            'onError': '',
+                                                            'onNull': ''
+                                                        }
+                                                    }, {
+                                                        '$convert': {
+                                                            'input': '$$current_account_id',
+                                                            'to': 'string',
+                                                            'onError': '',
+                                                            'onNull': ''
+                                                        }
+                                                    }
+                                                ]
+                                            }
+                                        }
+                                    }, {
+                                        '$project': {
+                                            '_id': 0,
+                                            'name': 1
+                                        }
+                                    }
+                                ],
                                 'as': 'to_details'
                             }
                         }, {
                             '$project': {
                                 'entries': [
                                     {
+                                        '_id': {
+                                            '$concat': [
+                                                {
+                                                    '$convert': {
+                                                        'input': '$_id',
+                                                        'to': 'string',
+                                                        'onError': '',
+                                                        'onNull': ''
+                                                    }
+                                                }, '-from'
+                                            ]
+                                        },
+                                        'trade_item_id': None,
                                         'type': 'transfer',
                                         'brand_name': '-',
                                         'model_name': '-',
                                         'year': '-',
-                                        'description': '$comment',
-                                        'pay': '$amount',
+                                        'description': {
+                                            '$ifNull': [
+                                                '$comment', ''
+                                            ]
+                                        },
+                                        'pay': {
+                                            '$ifNull': [
+                                                '$amount', 0
+                                            ]
+                                        },
                                         'receive': 0,
-                                        'updatedAt': "$updatedAt",
+                                        'updatedAt': '$updatedAt',
                                         'item_name': '-',
                                         'account_name': {
-                                            '$first': '$from_details.name'
+                                            '$ifNull': [
+                                                {
+                                                    '$arrayElemAt': [
+                                                        '$from_details.name', 0
+                                                    ]
+                                                }, '-'
+                                            ]
                                         }
                                     }, {
+                                        '_id': {
+                                            '$concat': [
+                                                {
+                                                    '$convert': {
+                                                        'input': '$_id',
+                                                        'to': 'string',
+                                                        'onError': '',
+                                                        'onNull': ''
+                                                    }
+                                                }, '-to'
+                                            ]
+                                        },
+                                        'trade_item_id': None,
                                         'type': 'transfer',
                                         'brand_name': '-',
                                         'model_name': '-',
                                         'year': '-',
-                                        'description': '$comment',
+                                        'description': {
+                                            '$ifNull': [
+                                                '$comment', ''
+                                            ]
+                                        },
                                         'pay': 0,
-                                        'receive': '$amount',
-                                        'updatedAt': "$updatedAt",
+                                        'receive': {
+                                            '$ifNull': [
+                                                '$amount', 0
+                                            ]
+                                        },
+                                        'updatedAt': '$updatedAt',
                                         'item_name': '-',
                                         'account_name': {
-                                            '$first': '$to_details.name'
+                                            '$ifNull': [
+                                                {
+                                                    '$arrayElemAt': [
+                                                        '$to_details.name', 0
+                                                    ]
+                                                }, '-'
+                                            ]
                                         }
                                     }
                                 ]
