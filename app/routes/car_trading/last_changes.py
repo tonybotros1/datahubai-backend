@@ -490,7 +490,7 @@ async def get_last_changes(data_filter: LastChangesFilter, data: dict = Depends(
                                     }
                                 },
                                 'type': {
-                                    '$literal': 'car'
+                                    '$literal': 'expenses'
                                 },
                                 'brand_name': {
                                     '$literal': '-'

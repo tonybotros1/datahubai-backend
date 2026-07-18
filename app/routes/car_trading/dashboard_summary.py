@@ -195,6 +195,28 @@ def _date_bucket(field: str, period: dict[str, Any]) -> dict:
     }
 
 
+def _responsibility_name(id_field: str) -> dict:
+    return {
+        "$let": {
+            "vars": {
+                "person": {
+                    "$arrayElemAt": [
+                        {
+                            "$filter": {
+                                "input": "$responsibility_details",
+                                "as": "detail",
+                                "cond": {"$eq": ["$$detail._id", f"${id_field}"]},
+                            }
+                        },
+                        0,
+                    ]
+                }
+            },
+            "in": {"$ifNull": ["$$person.name", "Unassigned"]},
+        }
+    }
+
+
 def _vehicle_base_pipeline(company_id: ObjectId, status: Optional[str]) -> list[dict]:
     trade_match: dict[str, Any] = {"company_id": company_id}
     if status and status.strip().lower() in {"new", "sold"}:
@@ -321,10 +343,18 @@ def _vehicle_base_pipeline(company_id: ObjectId, status: Optional[str]) -> list[
         {
             "$lookup": {
                 "from": "all_lists_values",
-                "localField": "invested_by",
-                "foreignField": "_id",
-                "pipeline": [{"$project": {"_id": 0, "name": 1}}],
-                "as": "capital_by_detail",
+                "let": {
+                    "ids": ["$invested_by", "$bought_by", "$sold_by"],
+                },
+                "pipeline": [
+                    {
+                        "$match": {
+                            "$expr": {"$in": ["$_id", "$$ids"]},
+                        }
+                    },
+                    {"$project": {"name": 1}},
+                ],
+                "as": "responsibility_details",
             }
         },
         {
@@ -339,12 +369,64 @@ def _vehicle_base_pipeline(company_id: ObjectId, status: Optional[str]) -> list[
                 "status": {"$ifNull": ["$status", ""]},
                 "vin": {"$ifNull": ["$vin", ""]},
                 "trim": {"$ifNull": ["$trim", ""]},
-                "capital_by_name": {
-                    "$ifNull": [
-                        {"$arrayElemAt": ["$capital_by_detail.name", 0]},
-                        "Unassigned",
-                    ]
+                "capital_by_name": _responsibility_name("invested_by"),
+                "bought_by_name": _responsibility_name("bought_by"),
+                "sold_by_name": _responsibility_name("sold_by"),
+            }
+        },
+    ]
+
+
+def _people_financial_summary(
+    id_field: str,
+    name_field: str,
+    item_match: dict,
+) -> list[dict]:
+    return [
+        {
+            "$match": {
+                id_field: {"$nin": [None, ""]},
+                name_field: {"$ne": "Unassigned"},
+            }
+        },
+        {"$unwind": "$financial_items"},
+        {"$match": item_match},
+        {
+            "$group": {
+                "_id": {
+                    "id": f"${id_field}",
+                    "name": f"${name_field}",
                 },
+                "paid": {"$sum": "$financial_items.pay_value"},
+                "received": {"$sum": "$financial_items.receive_value"},
+                "items": {"$sum": 1},
+                "cars": {"$addToSet": "$_id"},
+            }
+        },
+        {
+            "$set": {
+                "net": {"$subtract": ["$received", "$paid"]},
+                "car_count": {"$size": "$cars"},
+            }
+        },
+        {"$sort": {"_id.name": 1}},
+        {
+            "$project": {
+                "_id": 0,
+                "id": {
+                    "$convert": {
+                        "input": "$_id.id",
+                        "to": "string",
+                        "onError": "",
+                        "onNull": "",
+                    }
+                },
+                "name": "$_id.name",
+                "paid": 1,
+                "received": 1,
+                "net": 1,
+                "items": 1,
+                "car_count": 1,
             }
         },
     ]
@@ -436,7 +518,7 @@ def _vehicle_facet(period: dict[str, Any]) -> dict[str, list[dict]]:
             {"$limit": 8},
             {"$project": {"_id": 0, "name": "$_id", "cars": 1, "sales": 1, "profit": 1}},
         ],
-        "capital_by_summary": [
+        "capital_by_status_summary": [
             {
                 "$match": {
                     "invested_by": {"$nin": [None, ""]},
@@ -450,6 +532,7 @@ def _vehicle_facet(period: dict[str, Any]) -> dict[str, list[dict]]:
                     "_id": {
                         "id": "$invested_by",
                         "name": "$capital_by_name",
+                        "status": "$status",
                     },
                     "paid": {"$sum": "$financial_items.pay_value"},
                     "received": {"$sum": "$financial_items.receive_value"},
@@ -476,6 +559,7 @@ def _vehicle_facet(period: dict[str, Any]) -> dict[str, list[dict]]:
                         }
                     },
                     "name": "$_id.name",
+                    "status": "$_id.status",
                     "paid": 1,
                     "received": 1,
                     "net": 1,
@@ -484,6 +568,16 @@ def _vehicle_facet(period: dict[str, Any]) -> dict[str, list[dict]]:
                 }
             },
         ],
+        "bought_by_summary": _people_financial_summary(
+            "bought_by",
+            "bought_by_name",
+            capital_item_match,
+        ),
+        "sold_by_summary": _people_financial_summary(
+            "sold_by",
+            "sold_by_name",
+            capital_item_match,
+        ),
         "inventory_summary": [
             {"$match": {"status": "New"}},
             {
@@ -655,6 +749,48 @@ async def _vehicle_summary(company_id: ObjectId, filters: DashboardSummaryFilter
     cursor = await all_trades_collection.aggregate(pipeline, allowDiskUse=True)
     rows = await cursor.to_list(length=1)
     return rows[0] if rows else {}
+
+
+def _capital_by_status_breakdown(rows: list[dict]) -> dict[str, list[dict]]:
+    grouped: dict[str, dict[str, dict[str, Any]]] = {
+        "all": {},
+        "new": {},
+        "sold": {},
+    }
+
+    def add_row(bucket: str, row: dict) -> None:
+        capital_id = str(row.get("id") or "").strip()
+        name = str(row.get("name") or "").strip()
+        if not capital_id or not name:
+            return
+        current = grouped[bucket].setdefault(
+            capital_id,
+            {
+                "id": capital_id,
+                "name": name,
+                "paid": 0.0,
+                "received": 0.0,
+                "net": 0.0,
+                "items": 0,
+                "car_count": 0,
+            },
+        )
+        current["paid"] += _number(row.get("paid"))
+        current["received"] += _number(row.get("received"))
+        current["net"] = current["received"] - current["paid"]
+        current["items"] += _integer(row.get("items"))
+        current["car_count"] += _integer(row.get("car_count"))
+
+    for row in rows:
+        add_row("all", row)
+        status = str(row.get("status") or "").strip().lower()
+        if status in {"new", "sold"}:
+            add_row(status, row)
+
+    return {
+        bucket: sorted(values.values(), key=lambda row: row["name"].lower())
+        for bucket, values in grouped.items()
+    }
 
 
 async def _general_expenses_summary(company_id: ObjectId, period: dict) -> dict:
@@ -1081,6 +1217,9 @@ async def get_dashboard_summary(
         }
 
         brand_rows = vehicle.get("brand_performance", [])
+        capital_by_status = _capital_by_status_breakdown(
+            vehicle.get("capital_by_status_summary", [])
+        )
         response_period = {
             "label": period["label"],
             "range": period["range"],
@@ -1101,7 +1240,10 @@ async def get_dashboard_summary(
             "position": position,
             "trends": _combine_trends(vehicle, expenses),
             "brand_performance": brand_rows,
-            "capital_by_summary": vehicle.get("capital_by_summary", []),
+            "capital_by_summary": capital_by_status["all"],
+            "capital_by_status_summary": capital_by_status,
+            "bought_by_summary": vehicle.get("bought_by_summary", []),
+            "sold_by_summary": vehicle.get("sold_by_summary", []),
             "expense_breakdown": expenses.get("breakdown", []),
             "accounts": accounts,
             "inventory_aging": vehicle.get("inventory_aging", []),
