@@ -730,6 +730,8 @@ async def search_engine_for_car_trading(
         await ensure_car_trading_indexes()
         company_id = ObjectId(data.get("company_id"))
         match_stage: Any = {"company_id": company_id}
+        if filter_trades.trade_id:
+            match_stage["_id"] = filter_trades.trade_id
         if filter_trades.car_brand:
             match_stage["car_brand"] = filter_trades.car_brand
         if filter_trades.car_model:

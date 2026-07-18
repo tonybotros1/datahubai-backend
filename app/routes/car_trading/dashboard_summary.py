@@ -385,6 +385,7 @@ def _people_financial_summary(
     return [
         {
             "$match": {
+                "status": "Sold",
                 id_field: {"$nin": [None, ""]},
                 name_field: {"$ne": "Unassigned"},
             }

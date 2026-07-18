@@ -59,6 +59,7 @@ class CarTradingItemsModel(BaseModel):
 
 
 class CarTradingSearch(BaseModel):
+    trade_id: Optional[PyObjectId] = None
     car_brand: Optional[PyObjectId] = None
     car_model: Optional[PyObjectId] = None
     specification: Optional[PyObjectId] = None
