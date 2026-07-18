@@ -1,5 +1,7 @@
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 
+from bson import ObjectId
 from app.database import get_collection
 from app.widgets import upload_images
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -13,6 +15,7 @@ from app.routes import brands_and_models, users, countries_and_cities, functions
     payroll_elements, public_holidays, leave_types, payroll, payroll_runs, balances, loan_and_advances_types
 
 from app.routes.manzel_healthcare_task import medication_reminder_system
+from app.routes import admin
 
 from app.websocket_config import manager
 
@@ -65,6 +68,7 @@ app.add_middleware(
 
 # Routers
 app.include_router(auth.router, prefix="/auth", tags=["Authentication"])
+app.include_router(admin.router, prefix="/admin", tags=["Admin Session Control"])
 app.include_router(favourite_screens.router, prefix="/favourite_screens", tags=["Favourite screens"])
 app.include_router(upload_images.images, prefix="/upload-image", tags=["Images"])
 app.include_router(brands_and_models.router, prefix="/brands", tags=["Brands"])
@@ -121,16 +125,37 @@ app.include_router(loan_and_advances_types.router, prefix="/loan_and_advances_ty
 
 # نقطة نهاية WebSocket العامة
 @app.websocket("/ws/{company_id}/{user_id}")
-async def websocket_endpoint(websocket: WebSocket, company_id: str, user_id: str):
-    await manager.connect(websocket, company_id=company_id if company_id != "" else None,
-                          user_id=user_id if user_id is not "" else None)
+async def websocket_endpoint(
+        websocket: WebSocket,
+        company_id: str,
+        user_id: str,
+        session_id: str = "",
+):
+    await manager.connect(
+        websocket,
+        company_id=company_id if company_id != "" else None,
+        user_id=user_id if user_id != "" else None,
+        session_id=session_id,
+        client_ip=(
+            websocket.headers.get("x-forwarded-for", "").split(",", 1)[0].strip()
+            or (websocket.client.host if websocket.client else "")
+        ),
+        user_agent=websocket.headers.get("user-agent", ""),
+    )
     try:
         while True:
-            # يمكنك معالجة الرسائل الواردة من العميل إذا لزم الأمر
             data = await websocket.receive_text()
+            manager.touch(websocket)
             await manager.broadcast({"echo": data})
     except WebSocketDisconnect:
+        pass
+    finally:
         manager.disconnect(websocket, user_id=user_id, company_id=company_id)
+        if ObjectId.is_valid(user_id) and ObjectId.is_valid(company_id):
+            await users_collection.update_one(
+                {"_id": ObjectId(user_id), "company_id": ObjectId(company_id)},
+                {"$set": {"last_seen_at": datetime.now(timezone.utc)}},
+            )
 
 
 @app.get("/")
