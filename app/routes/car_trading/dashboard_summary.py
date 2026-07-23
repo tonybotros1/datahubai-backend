@@ -569,6 +569,57 @@ def _vehicle_facet(period: dict[str, Any]) -> dict[str, list[dict]]:
                 }
             },
         ],
+        "new_car_capital_by": [
+            {
+                "$match": {
+                    "status": "New",
+                    "invested_by": {"$nin": [None, ""]},
+                    "capital_by_name": {"$ne": "Unassigned"},
+                }
+            },
+            {"$unwind": "$financial_items"},
+            {"$match": {"financial_items.item_name": "BUY"}},
+            {
+                "$group": {
+                    "_id": {
+                        "id": "$invested_by",
+                        "name": "$capital_by_name",
+                    },
+                    "paid": {"$sum": "$financial_items.pay_value"},
+                    "received": {"$sum": "$financial_items.receive_value"},
+                    "items": {"$sum": 1},
+                    "cars": {"$addToSet": "$_id"},
+                }
+            },
+            {
+                "$set": {
+                    "net": {"$subtract": ["$received", "$paid"]},
+                    "invested": {"$subtract": ["$paid", "$received"]},
+                    "car_count": {"$size": "$cars"},
+                }
+            },
+            {"$sort": {"_id.name": 1}},
+            {
+                "$project": {
+                    "_id": 0,
+                    "id": {
+                        "$convert": {
+                            "input": "$_id.id",
+                            "to": "string",
+                            "onError": "",
+                            "onNull": "",
+                        }
+                    },
+                    "name": "$_id.name",
+                    "paid": 1,
+                    "received": 1,
+                    "net": 1,
+                    "invested": 1,
+                    "items": 1,
+                    "car_count": 1,
+                }
+            },
+        ],
         "bought_by_summary": _people_financial_summary(
             "bought_by",
             "bought_by_name",
@@ -881,7 +932,13 @@ async def _general_expenses_summary(company_id: ObjectId, period: dict) -> dict:
     return rows[0] if rows else {}
 
 
-async def _money_collection_summary(collection: Any, company_id: ObjectId, period: dict, aging: bool) -> dict:
+async def _money_collection_summary(
+    collection: Any,
+    company_id: ObjectId,
+    period: dict,
+    aging: bool,
+    group_by_name: bool = False,
+) -> dict:
     current_match = _date_match("date", period["start"], period["end"])
     now = period["now"]
     facet: dict[str, list[dict]] = {
@@ -911,6 +968,58 @@ async def _money_collection_summary(collection: Any, company_id: ObjectId, perio
             {"$project": {"_id": 0}},
         ],
     }
+    if group_by_name:
+        facet["by_name"] = [
+            {"$match": {"name": {"$nin": [None, ""]}}},
+            {
+                "$group": {
+                    "_id": "$name",
+                    "count": {"$sum": 1},
+                    "paid": {"$sum": {"$ifNull": ["$pay", 0]}},
+                    "received": {"$sum": {"$ifNull": ["$receive", 0]}},
+                }
+            },
+            {
+                "$lookup": {
+                    "from": "all_lists_values",
+                    "localField": "_id",
+                    "foreignField": "_id",
+                    "pipeline": [{"$project": {"_id": 0, "name": 1}}],
+                    "as": "name_detail",
+                }
+            },
+            {
+                "$set": {
+                    "id": {
+                        "$convert": {
+                            "input": "$_id",
+                            "to": "string",
+                            "onError": "",
+                            "onNull": "",
+                        }
+                    },
+                    "name": {
+                        "$ifNull": [
+                            {"$arrayElemAt": ["$name_detail.name", 0]},
+                            "Unnamed",
+                        ]
+                    },
+                    "net": {"$subtract": ["$received", "$paid"]},
+                }
+            },
+            {"$sort": {"name": 1}},
+            {
+                "$project": {
+                    "_id": 0,
+                    "id": 1,
+                    "name": 1,
+                    "count": 1,
+                    "paid": 1,
+                    "received": 1,
+                    "net": 1,
+                }
+            },
+        ]
     if aging:
         facet["aging"] = [
             {"$match": {"date": {"$ne": None}}},
@@ -1146,7 +1255,16 @@ async def get_dashboard_summary(
         vehicle, expenses, capital, outstanding, accounts_result, changes = await asyncio.gather(
             _safe(_vehicle_summary(company_id, filters, period), {}),
             _safe(_general_expenses_summary(company_id, period), {}),
-            _safe(_money_collection_summary(all_capitals_collection, company_id, period, False), {}),
+            _safe(
+                _money_collection_summary(
+                    all_capitals_collection,
+                    company_id,
+                    period,
+                    False,
+                    group_by_name=True,
+                ),
+                {},
+            ),
             _safe(_money_collection_summary(all_outstanding_collection, company_id, period, True), {}),
             _safe(get_cash_on_hand_or_bank_balance(data), {"totals": {}}),
             _safe(_recent_changes(data, period), {"last_changes": []}),
@@ -1243,6 +1361,11 @@ async def get_dashboard_summary(
             "brand_performance": brand_rows,
             "capital_by_summary": capital_by_status["all"],
             "capital_by_status_summary": capital_by_status,
+            "capital_reconciliation": {
+                "capital_docs": capital.get("by_name", []),
+                "new_car_capital_by": vehicle.get("new_car_capital_by", []),
+                "all_accounts": position["cash_balance"],
+            },
             "bought_by_summary": vehicle.get("bought_by_summary", []),
             "sold_by_summary": vehicle.get("sold_by_summary", []),
             "expense_breakdown": expenses.get("breakdown", []),
