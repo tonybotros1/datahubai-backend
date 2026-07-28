@@ -18,6 +18,56 @@ from .models import CapitalModel
 router = APIRouter()
 
 
+@router.get("/get_used_capital_names")
+async def get_used_capital_names(data: dict = Depends(security.get_current_user)):
+    company_id = ObjectId(data.get("company_id"))
+    pipeline = [
+        {
+            "$match": {
+                "company_id": company_id,
+                "name": {"$nin": [None, ""]},
+            }
+        },
+        {
+            "$group": {
+                "_id": "$name",
+                "documents": {"$sum": 1},
+            }
+        },
+        {
+            "$lookup": {
+                "from": "all_lists_values",
+                "localField": "_id",
+                "foreignField": "_id",
+                "pipeline": [{"$project": {"name": 1}}],
+                "as": "details",
+            }
+        },
+        {
+            "$set": {
+                "name": {
+                    "$ifNull": [
+                        {"$arrayElemAt": ["$details.name", 0]},
+                        "",
+                    ]
+                }
+            }
+        },
+        {"$match": {"name": {"$ne": ""}}},
+        {
+            "$project": {
+                "_id": {"$toString": "$_id"},
+                "name": 1,
+                "documents": 1,
+            }
+        },
+        {"$sort": {"name": 1}},
+    ]
+    cursor = await all_capitals_collection.aggregate(pipeline)
+    values = await cursor.to_list(length=None)
+    return {"values": values}
+
+
 @router.get("/get_all_capitals_or_outstanding/{get_type}")
 async def get_all_capitals_or_outstanding(get_type: str, data: dict = Depends(security.get_current_user)):
     company_id = ObjectId(data.get("company_id"))
