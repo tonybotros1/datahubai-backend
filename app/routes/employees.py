@@ -372,7 +372,7 @@ details_pipeline = [
     }, {
         '$addFields': {
             'all_ids': [
-                '$employer', '$department', '$job_title', '$location', '$gender', '$martial_status'
+                '$employer', '$department', '$job_title', '$location', '$gender', '$martial_status', '$reporting_manager'
             ]
         }
     }, {
@@ -413,14 +413,16 @@ details_pipeline = [
             'foreignField': '_id',
             'as': 'legislation_details'
         }
-    }, {
-        '$lookup': {
-            'from': 'employees',
-            'localField': 'reporting_manager',
-            'foreignField': '_id',
-            'as': 'reporting_manager_details'
-        }
-    }, {
+    },
+    # {
+    #     '$lookup': {
+    #         'from': 'employees',
+    #         'localField': 'reporting_manager',
+    #         'foreignField': '_id',
+    #         'as': 'reporting_manager_details'
+    #     }
+    # },
+    {
         '$lookup': {
             'from': 'payroll',
             'localField': 'payroll',
@@ -1583,11 +1585,23 @@ details_pipeline = [
                 ]
             },
             'reporting_manager_name': {
-                '$ifNull': [
-                    {
-                        '$first': '$reporting_manager_details.full_name'
-                    }, None
-                ]
+                '$let': {
+                    'vars': {
+                        'match': {
+                            '$first': {
+                                '$filter': {
+                                    'input': '$lookup_data',
+                                    'cond': {
+                                        '$eq': [
+                                            '$$this._id', '$reporting_manager'
+                                        ]
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    'in': '$$match.name'
+                }
             },
             'payroll_name': {
                 '$ifNull': [
