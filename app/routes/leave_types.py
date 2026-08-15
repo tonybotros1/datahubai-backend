@@ -12,6 +12,7 @@ from app.websocket_config import manager
 
 router = APIRouter()
 leave_types_collection = get_collection("leave_types")
+payroll_elements_collection = get_collection("payroll_elements")
 
 leave_types_pipeline = [
     {
@@ -195,7 +196,7 @@ async def search_engine_for_leave_types(
 async def get_all_leave_types_for_lov(data: dict = Depends(security.get_current_user)):
     try:
         company_id = ObjectId(data.get("company_id"))
-        results = await leave_types_collection.find({"company_id": company_id} ,{
+        results = await leave_types_collection.find({"company_id": company_id}, {
             "name": 1,
             "type": 1
         }).to_list(None)
@@ -207,4 +208,24 @@ async def get_all_leave_types_for_lov(data: dict = Depends(security.get_current_
 
     except Exception as e:
         print(e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/get_leave_payroll_elements_for_lov")
+async def get_leave_payroll_elements_for_lov(data: dict = Depends(security.get_current_user)):
+    try:
+        company_id = ObjectId(data.get("company_id"))
+        results = await payroll_elements_collection.find({"company_id": company_id, "is_indirect": True},
+                                                         {"_id": 1, "name": 1, "key": 11, "is_recurring": 1,
+                                                          "function": 1, "entry_value_name": 1, "comments": 1}).sort(
+            {"name": 1}).to_list(None)
+        return {
+            "elements": jsonable_encoder(
+                results,
+                custom_encoder={ObjectId: str}
+            )
+        }
+
+
+    except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
