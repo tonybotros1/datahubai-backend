@@ -917,6 +917,7 @@ async def py_annual_leave_entitlement_ff(employee_hire_date: datetime, employee_
 async def py_annual_leave_ff(leave_id: ObjectId, employee_id: ObjectId, period_start_date: datetime,
                              period_end_date: datetime,
                              based_element_id: ObjectId, leave_start_date: datetime, leave_end_date: datetime,
+
                              is_pay_in_advanced: bool, user_data: dict,
                              based_value: Optional[float] = None):
     try:
