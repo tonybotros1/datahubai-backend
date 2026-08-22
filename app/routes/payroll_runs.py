@@ -46,7 +46,6 @@ legislations_collection = get_collection("legislations")
 
 payroll_elements_based_elements_collection = get_collection("payroll_elements_based_elements")
 
-
 MAX_PAYSLIP_PDF_SIZE = 5 * 1024 * 1024
 email_address_adapter = TypeAdapter(EmailStr)
 
@@ -84,22 +83,22 @@ def _send_payslip_messages(
         message["Reply-To"] = company_email
         message["Subject"] = f"Payslip - {safe_period_name}"
         message.set_content(
-                f"Dear {employee_name},\n\n"
-                f"Please find attached your payslip for {safe_period_name}.\n\n"
-                f"Regards,\n{safe_company_name}"
+            f"Dear {employee_name},\n\n"
+            f"Please find attached your payslip for {safe_period_name}.\n\n"
+            f"Regards,\n{safe_company_name}"
         )
         message.add_alternative(
-                f"<p>Dear {html.escape(employee_name)},</p>"
-                f"<p>Please find attached your payslip for "
-                f"<strong>{html.escape(safe_period_name)}</strong>.</p>"
-                f"<p>Regards,<br>{html.escape(safe_company_name)}</p>",
-                subtype="html",
+            f"<p>Dear {html.escape(employee_name)},</p>"
+            f"<p>Please find attached your payslip for "
+            f"<strong>{html.escape(safe_period_name)}</strong>.</p>"
+            f"<p>Regards,<br>{html.escape(safe_company_name)}</p>",
+            subtype="html",
         )
         message.add_attachment(
-                item["pdf"],
-                maintype="application",
-                subtype="pdf",
-                filename=f"Payslip - {_safe_file_name(employee_name)}.pdf",
+            item["pdf"],
+            maintype="application",
+            subtype="pdf",
+            filename=f"Payslip - {_safe_file_name(employee_name)}.pdf",
         )
         raw_message = base64.urlsafe_b64encode(
             message.as_bytes()
@@ -607,6 +606,7 @@ async def payroll_run(run: PayrollRunModel, data: dict = Depends(security.get_cu
                             if is_within_period(element_start, element_end, period_start_date, period_end_date):
                                 value = await py_social_security_employee_ff(ObjectId(current_employee_id),
                                                                              employee_payroll.get("name"), legislation,
+                                                                             period_end_date,
                                                                              employee_element_value(
                                                                                  employee_payroll.get("name"),
                                                                                  current_employee_id),
@@ -1256,6 +1256,7 @@ async def py_nonrecurring_ff(period_start_date: datetime, period_end_date: datet
 
 # ==== PY_SOCIAL_SECURITY_EMPLOYEE_FF ====
 async def py_social_security_employee_ff(employee_id: ObjectId, based_element_id: ObjectId, legislation: ObjectId,
+                                         period_end_date: datetime,
                                          based_value: Optional[float] = None,
                                          legislation_document: Optional[dict] = None):
     try:
@@ -1269,8 +1270,20 @@ async def py_social_security_employee_ff(employee_id: ObjectId, based_element_id
         if not legislation_doc:
             raise HTTPException(status_code=404, detail="Legislation not found")
         # No. of working hours
-        social_security_employee_percentage = legislation_doc.get("social_security_employee_percentage", 0) / 100
-        social_security_ceiling = legislation_doc.get("social_security_ceiling", 0)
+        ceiling = 0
+        social_security_employee_percentage = 0
+        social_security_ceilings: list = legislation_doc.get("social_security_ceilings")
+        for social_security_ceiling in social_security_ceilings:
+            if social_security_ceiling is None:
+                continue
+            start_date = social_security_ceiling.get("start_date")
+            end_date = social_security_ceiling.get("end_date")
+            if (start_date <= period_end_date) and (end_date is None or end_date >= period_end_date):
+                ceiling = social_security_ceiling.get("ceiling", 0)
+                social_security_employee_percentage = social_security_ceiling.get("employee_percentage", 0)
+
+        social_security_employee_percentage = social_security_employee_percentage / 100
+        social_security_ceiling = ceiling
         if not social_security_ceiling or social_security_ceiling == 0:
             social_security_ceiling = value
 

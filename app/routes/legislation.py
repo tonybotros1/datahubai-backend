@@ -1,4 +1,5 @@
 from typing import Optional, Any, List
+from datetime import datetime
 from bson import ObjectId
 from fastapi import APIRouter, HTTPException, Depends
 from fastapi.encoders import jsonable_encoder
@@ -17,6 +18,14 @@ class IncomeTaxBracketModel(BaseModel):
     percentage: Optional[float] = None
 
 
+class SocialSecurityCeilingModel(BaseModel):
+    employee_percentage: Optional[float] = None
+    employer_percentage: Optional[float] = None
+    ceiling: Optional[float] = None
+    start_date: Optional[datetime] = None
+    end_date: Optional[datetime] = None
+
+
 class LegislationModel(BaseModel):
     name: Optional[str] = None
     weekend: Optional[List[str]] = None
@@ -31,6 +40,9 @@ class LegislationModel(BaseModel):
     social_security_employee_percentage: Optional[float] = None
     social_security_employer_percentage: Optional[float] = None
     social_security_ceiling: Optional[float] = None
+    social_security_ceiling_start_date: Optional[datetime] = None
+    social_security_ceiling_end_date: Optional[datetime] = None
+    social_security_ceilings: Optional[List[SocialSecurityCeilingModel]] = None
     service_tax_percentage: Optional[float] = None
     income_tax_percentage: Optional[float] = None
     income_tax_ceiling: Optional[float] = None
@@ -59,7 +71,6 @@ async def get_all_legislations(data: dict = Depends(security.get_current_user)):
 
 
     except Exception as e:
-        print(e)
         raise HTTPException(status_code=500, detail=f"str{e}")
 
 
@@ -84,7 +95,6 @@ async def add_new_legislation(leg: LegislationModel, data: dict = Depends(securi
         return {"message": "added successfully!", "new_leg": leg}
 
     except Exception as e:
-        print(e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -108,7 +118,6 @@ async def update_legislation(leg_id: str, leg: LegislationModel, data: dict = De
         return {"message": "updated successfully!", "updated_leg": leg}
 
     except Exception as e:
-        print(e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -157,7 +166,6 @@ async def search_engine_for_legislations(
         ]
         cursor = await legislations_collection.aggregate(legislations_elements_pipeline)
         legislations_elements = await cursor.to_list(None)
-        print(legislations_elements)
         return {"legislations_elements": legislations_elements if legislations_elements else []}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
