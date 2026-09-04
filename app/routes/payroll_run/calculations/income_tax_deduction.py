@@ -20,7 +20,7 @@ async def py_income_tax_deduction_ff(element_value: float, employee_id: ObjectId
     try:
         value = based_value
         if value is None:
-            value = await get_employee_element_value(based_element_id, employee_id)
+            value = await get_employee_element_value(based_element_id, employee_id, period_start_date, period_end_date)
         income_tax_exemption = element_value
         taxable_income_before_exemption = (value or 0)
 

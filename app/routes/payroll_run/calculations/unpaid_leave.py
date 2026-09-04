@@ -20,7 +20,7 @@ async def py_unpaid_leave_ff(leave_id: ObjectId, employee_id: ObjectId, period_s
     try:
         value = based_value
         if value is None:
-            value = await get_employee_element_value(based_element_id, employee_id)
+            value = await get_employee_element_value(based_element_id, employee_id,period_start_date, period_end_date)
         period_days = get_period_days(period_start_date, period_end_date)
 
         date1 = max(period_start_date, leave_start_date)

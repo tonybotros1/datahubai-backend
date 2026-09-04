@@ -25,7 +25,7 @@ async def py_maternity_leave_ff(leave_id: ObjectId, employee_id: ObjectId, perio
     try:
         value = based_value
         if value is None:
-            value = await get_employee_element_value(based_element_id, employee_id)
+            value = await get_employee_element_value(based_element_id, employee_id, period_start_date, period_end_date)
         period_days = get_period_days(period_start_date, period_end_date)
 
         legislation_doc = legislation_document

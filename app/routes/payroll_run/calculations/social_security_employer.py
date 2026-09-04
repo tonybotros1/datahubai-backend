@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Optional
 
 from bson import ObjectId
@@ -8,6 +9,7 @@ from ..collections import legislations_collection
 
 
 async def py_social_security_employer_ff(employee_id: ObjectId, based_element_id: ObjectId, legislation: ObjectId,
+                                         period_start_date: datetime, period_end_date: datetime,
                                          based_value: Optional[float] = None,
                                          legislation_document: Optional[dict] = None):
     try:

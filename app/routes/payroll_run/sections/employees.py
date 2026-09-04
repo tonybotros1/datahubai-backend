@@ -8,7 +8,7 @@ from ..collections import employees_collection
 from .context import PayrollPeriod
 
 
-async def load_payroll_employees(
+async def get_payroll_employees(
     payroll_id: Optional[ObjectId],
     employee_id: Optional[ObjectId],
     period: PayrollPeriod,

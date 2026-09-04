@@ -21,9 +21,9 @@ from .context import PayrollPeriod, PayrollRunContext
 
 
 async def calculate_employee_payroll_elements(
-    employee: dict,
-    period: PayrollPeriod,
-    context: PayrollRunContext,
+        employee: dict,
+        period: PayrollPeriod,
+        context: PayrollRunContext,
 ) -> list[dict]:
     current_employee_id = employee.get("_id")
     employee_hire_date = employee.get("hire_date") or datetime.min
@@ -126,6 +126,7 @@ async def calculate_employee_payroll_elements(
                     if is_within_period(element_start, element_end, period_start_date, period_end_date):
                         value = await py_social_security_employee_ff(ObjectId(current_employee_id),
                                                                      employee_payroll.get("name"), legislation,
+                                                                     period_start_date,
                                                                      period_end_date,
                                                                      employee_element_value(
                                                                          employee_payroll.get("name"),
@@ -142,6 +143,7 @@ async def calculate_employee_payroll_elements(
                     if is_within_period(element_start, element_end, period_start_date, period_end_date):
                         value = await py_social_security_employer_ff(ObjectId(current_employee_id),
                                                                      employee_payroll.get("name"), legislation,
+                                                                     period_start_date,period_end_date,
                                                                      employee_element_value(
                                                                          employee_payroll.get("name"),
                                                                          current_employee_id),
@@ -157,6 +159,7 @@ async def calculate_employee_payroll_elements(
                     if is_within_period(element_start, element_end, period_start_date, period_end_date):
                         value = await py_service_tax_ff(ObjectId(current_employee_id),
                                                         employee_payroll.get("name"), legislation,
+                                                        period_start_date,period_end_date,
                                                         employee_element_value(
                                                             employee_payroll.get("name"),
                                                             current_employee_id),

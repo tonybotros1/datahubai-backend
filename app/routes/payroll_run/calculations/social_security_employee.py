@@ -4,18 +4,21 @@ from typing import Optional
 from bson import ObjectId
 from fastapi import HTTPException
 
-from app.routes.payroll_runs_widgets.helpers_functions import get_employee_element_value
-from ..collections import legislations_collection
+from ..collections import legislations_collection, employees_payrolls_collection, \
+    payroll_elements_based_elements_collection
 
 
-async def py_social_security_employee_ff(employee_id: ObjectId, based_element_id: ObjectId, legislation: ObjectId,
-                                         period_end_date: datetime,
+async def py_social_security_employee_ff(employee_id: ObjectId, main_payroll_element_id: ObjectId,
+                                         legislation: ObjectId,
+                                         period_start_date: datetime, period_end_date: datetime,
                                          based_value: Optional[float] = None,
                                          legislation_document: Optional[dict] = None):
     try:
-        value = based_value
-        if value is None:
-            value = await get_employee_element_value(based_element_id, employee_id)
+        # value = based_value
+        # if value is None:
+        value = await get_employee_element_value(main_payroll_element_id, employee_id,
+                                                 period_end_date)
+        print(value)
 
         legislation_doc = legislation_document
         if legislation_doc is None:
@@ -45,3 +48,52 @@ async def py_social_security_employee_ff(employee_id: ObjectId, based_element_id
 
     except Exception as e:
         raise e
+
+
+# this element gets the based element for the social security employee then get the value of each one from the employee payroll elements:
+# if the end date was within the current year then if there was more than one value then gets the one with min end date
+async def get_employee_element_value(element_id: ObjectId, employee_id: ObjectId,
+                                     period_end_date: datetime) -> float:
+    try:
+        current_year_start = datetime(period_end_date.year, 1, 1)
+        next_year_start = datetime(period_end_date.year + 1, 1, 1)
+
+        payroll_element_based_elements_docs = await payroll_elements_based_elements_collection.find(
+            {"payroll_element_id": element_id}).to_list(length=None)
+
+        if len(payroll_element_based_elements_docs) == 0:
+            raise HTTPException(status_code=404, detail="no value found for this element")
+
+        total_value = 0.0
+        for element in payroll_element_based_elements_docs:
+            element_id = element.get("name")
+            element_type = (element.get("type") or "Add").strip().lower()
+            employee_payroll_elements_docs = await employees_payrolls_collection.find(
+                {"employee_id": ObjectId(employee_id), "name": ObjectId(element_id),
+                 "start_date": {"$lte": period_end_date},
+                 "$or": [
+                     {
+                         "end_date": {
+                             "$gte": current_year_start,
+                             "$lt": next_year_start,
+                         }
+                     },
+                     {"end_date": None},
+                 ], }).to_list(length=None)
+            selected_element = min(
+                employee_payroll_elements_docs,
+                key=lambda doc: (
+                    doc.get("end_date") is None,
+                    doc.get("end_date") or datetime.max,
+                ),
+                default=None,
+            )
+            element_value = float(selected_element.get("value", 0) or 0) if selected_element else 0.0
+
+            if element_type == "subtract":
+                total_value -= element_value
+            else:
+                total_value += element_value
+        return total_value
+    except Exception:
+        raise

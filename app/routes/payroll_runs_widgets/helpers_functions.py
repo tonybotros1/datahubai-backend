@@ -72,7 +72,8 @@ def get_period_days(period_start_date: datetime, period_end_date: datetime):
 
 
 # ==== GET_ELEMENT_VALUE ====
-async def get_employee_element_value(element_id: ObjectId, employee_id: ObjectId) -> float:
+async def get_employee_element_value(element_id: ObjectId, employee_id: ObjectId, period_start_date: datetime,
+                                     period_end_date: datetime) -> float:
     try:
         employee_payroll_element_doc = await employees_payrolls_collection.find_one({"_id": ObjectId(element_id)})
         if employee_payroll_element_doc:
@@ -102,7 +103,12 @@ async def get_employee_element_value(element_id: ObjectId, employee_id: ObjectId
             element_id = element.get("name")
             element_type = (element.get("type") or "Add").strip().lower()
             employee_payroll_elements_docs = await employees_payrolls_collection.find(
-                {"employee_id": ObjectId(employee_id), "name": ObjectId(element_id)}).to_list(length=None)
+                {"employee_id": ObjectId(employee_id), "name": ObjectId(element_id),
+                 "start_date": {"$lte": period_end_date},
+                 "$or": [
+                     {"end_date": {"$gte": period_start_date}},
+                     {"end_date": None},
+                 ], }).to_list(length=None)
             element_total = sum(
                 float(doc.get("value", 0) or 0)
                 for doc in employee_payroll_elements_docs

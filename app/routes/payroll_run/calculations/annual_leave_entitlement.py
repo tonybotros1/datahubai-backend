@@ -17,7 +17,7 @@ async def py_annual_leave_entitlement_ff(employee_hire_date: datetime, employee_
     try:
         value = based_value
         if value is None:
-            value = await get_employee_element_value(based_element_id, employee_id)
+            value = await get_employee_element_value(based_element_id, employee_id, period_start_date, period_end_date)
         date1 = max(employee_hire_date, element_start, period_start_date)
         date2 = min(employee_end_date, element_end, period_end_date)
         if date2 < date1:

@@ -19,7 +19,7 @@ async def py_gratuity_accrual_ff(employee_id: ObjectId, employee_hire_date: date
     try:
         basic_salary = based_value
         if basic_salary is None:
-            basic_salary = await get_employee_element_value(based_element_id, employee_id)
+            basic_salary = await get_employee_element_value(based_element_id, employee_id, period_start_date, period_end_date)
         legislation_doc = legislation_document
         if legislation_doc is None:
             legislation_doc = await legislations_collection.find_one({"_id": legislation})

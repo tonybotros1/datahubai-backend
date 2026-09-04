@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Optional
 
 from bson import ObjectId
@@ -11,12 +12,13 @@ from ..collections import legislations_collection
 
 
 async def py_service_tax_ff(employee_id: ObjectId, based_element_id: ObjectId, legislation: ObjectId,
+                            period_start_date: datetime, period_end_date: datetime,
                             based_value: Optional[float] = None,
                             legislation_document: Optional[dict] = None):
     try:
         value = based_value
         if value is None:
-            value = await get_employee_element_value(based_element_id, employee_id)
+            value = await get_employee_element_value(based_element_id, employee_id, period_start_date, period_end_date)
 
         legislation_doc = legislation_document
         if legislation_doc is None:

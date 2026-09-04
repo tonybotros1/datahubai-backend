@@ -7,7 +7,7 @@ from ..collections import payroll_period_details_collection
 from .context import PayrollPeriod
 
 
-async def load_payroll_period(period_id: ObjectId) -> PayrollPeriod:
+async def get_payroll_period_start_date_and_end_date(period_id: ObjectId) -> PayrollPeriod:
     period_document = await payroll_period_details_collection.find_one({"_id": period_id})
     period_start_date = period_document.get("start_date")
     period_end_date = period_document.get("end_date")

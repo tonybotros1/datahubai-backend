@@ -18,7 +18,7 @@ async def py_overtime_normal_ff(employee_id: ObjectId, period_start_date: dateti
     try:
         value = based_value
         if value is None:
-            value = await get_employee_element_value(based_element_id, employee_id)
+            value = await get_employee_element_value(based_element_id, employee_id, period_start_date, period_end_date)
         # No. of Month Days
         period_days = get_period_days(period_start_date, period_end_date)
 
