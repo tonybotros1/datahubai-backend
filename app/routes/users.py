@@ -13,6 +13,34 @@ users_collection = get_collection("sys-users")
 refresh_tokens_collection = get_collection("refresh_tokens")
 companies_collection = get_collection("companies")
 
+HR_SCREEN_ROUTES = {
+    "legislation": "/legislation",
+    "defination": "/defination",
+    "employees": "/employees",
+    "publicholidays": "/publicholidays",
+    "leavetypes": "/leavetypes",
+    "payroll": "/payroll",
+    "payrollruns": "/payrollruns",
+    "balances": "/balances",
+    "loanandadvancestypes": "/loanandadvancestypes",
+}
+
+
+def normalize_hr_screen_access(routes: Optional[List[str]]) -> Optional[List[str]]:
+    if routes is None:
+        return None
+    normalized = []
+    for route in routes:
+        key = "".join(
+            character
+            for character in str(route).lower()
+            if character.isalnum()
+        )
+        canonical = HR_SCREEN_ROUTES.get(key)
+        if canonical and canonical not in normalized:
+            normalized.append(canonical)
+    return normalized
+
 
 def serializer(user: dict) -> dict:
     user["_id"] = str(user["_id"])
@@ -34,6 +62,7 @@ class UserCreate(BaseModel):
     branches: Optional[List[str]] = None
     primary_branch: Optional[str] = None
     expiry_date: Optional[datetime] = None
+    hr_screen_access: Optional[List[str]] = None
 
 
 # For updating a user (all fields optional)
@@ -46,6 +75,7 @@ class UserUpdate(BaseModel):
     branches: Optional[List[str]] = None
     primary_branch: Optional[str] = None
     expiry_date: Optional[datetime] = None
+    hr_screen_access: Optional[List[str]] = None
 
 
 class ChangePasswordModel(BaseModel):
@@ -66,6 +96,7 @@ async def get_all_users(data: dict = Depends(security.get_current_user)):
             "primary_branch": 1,
             "status": 1,
             "is_admin": 1,
+            "hr_screen_access": 1,
             "expiry_date": 1,
             "createdAt": 1,
             "updatedAt": 1}).to_list(None)
@@ -112,6 +143,7 @@ async def add_new_user(user: UserCreate, data: dict = Depends(security.get_curre
             "roles": roles_list,
             "branches": branches_list,
             'is_admin': user.is_admin,
+            "hr_screen_access": normalize_hr_screen_access(user.hr_screen_access),
             "primary_branch": ObjectId(user.primary_branch) if user.primary_branch else None,
             "expiry_date": user.expiry_date,
             "status": True,
@@ -174,6 +206,10 @@ async def update_user(
             user_data["branches"] = [ObjectId(branch) for branch in user_data["branches"]]
         if "primary_branch" in user_data and user_data["primary_branch"]:
             user_data["primary_branch"] = ObjectId(user_data["primary_branch"])
+        if "hr_screen_access" in user_data:
+            user_data["hr_screen_access"] = normalize_hr_screen_access(
+                user_data["hr_screen_access"]
+            )
 
         user_data["updatedAt"] = security.now_utc()
 
@@ -188,6 +224,7 @@ async def update_user(
                 "roles": 1,
                 "branches": 1,
                 'is_admin': 1,
+                "hr_screen_access": 1,
                 "primary_branch": 1,
                 "status": 1,
                 "expiry_date": 1,
