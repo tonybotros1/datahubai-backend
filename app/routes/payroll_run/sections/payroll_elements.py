@@ -143,7 +143,8 @@ async def calculate_employee_payroll_elements(
                     if is_within_period(element_start, element_end, period_start_date, period_end_date):
                         value = await py_social_security_employer_ff(ObjectId(current_employee_id),
                                                                      employee_payroll.get("name"), legislation,
-                                                                     period_start_date,period_end_date,
+                                                                     period_start_date,
+                                                                     period_end_date,
                                                                      employee_element_value(
                                                                          employee_payroll.get("name"),
                                                                          current_employee_id),

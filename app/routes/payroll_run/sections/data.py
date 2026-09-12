@@ -24,12 +24,13 @@ async def load_payroll_run_context(
     all_employees: list[dict],
     period_id: Optional[ObjectId],
     element_id: Optional[ObjectId],
-    period: PayrollPeriod, # has the period start date and period end date
+    period: PayrollPeriod,  # has the period start date and period end date
 ) -> PayrollRunContext:
     period_start_date = period.start_date
     period_end_date = period.end_date
 
-    employee_ids = [employee["_id"] for employee in all_employees] # all employees ids for the selected payroll (like Datahub AI payroll)
+    # all employees ids for the selected payroll (like Datahub AI payroll)
+    employee_ids = [employee["_id"] for employee in all_employees]
 
     payroll_element_filter: Any = {
         "employee_id": {"$in": employee_ids},
@@ -56,7 +57,6 @@ async def load_payroll_run_context(
         },
     ).to_list(None)
 
-
     # This gets the leave elements in [employee screen] for the employees related to the selected payroll (like Datahub AI payroll)
     leaves_task = employees_leaves_collection.find(
         {
@@ -82,13 +82,18 @@ async def load_payroll_run_context(
             "employee_id": {"$in": employee_ids},
             "deduction_date": {"$lte": period_end_date},
         },
-        {"_id": 1, "employee_id": 1, "total_amount": 1, "monthly_installment": 1, "type": 1},
+        {"_id": 1, "employee_id": 1, "total_amount": 1,
+            "monthly_installment": 1, "type": 1},
     ).to_list(None)
-
 
     # This gets all payroll elements in [employee screen] for the employees related to the selected payroll (like Datahub AI payroll) in all time without period filter
     payroll_elements_for_selected_employee_all_the_time = employees_payrolls_collection.find(
-        {"employee_id": {"$in": employee_ids}},
+        {"employee_id": {"$in": employee_ids},
+         "start_date": {"$lte": period_end_date},
+         "$or": [
+            {"end_date": {"$gte": period_start_date}},
+            {"end_date": None},
+        ], },
         {"employee_id": 1, "name": 1, "value": 1},
     ).to_list(None)
 
@@ -102,36 +107,33 @@ async def load_payroll_run_context(
     # ==================================================================================
     # This assign each payroll element to its employee                                #=
     # ==================================================================================
-    payroll_elements_by_employee = {employee_id: [] for employee_id in employee_ids}  #=
-                                                                                      #=
-    for payroll_element in all_payroll_elements:                                      #=
-        payroll_elements_by_employee.setdefault(                                      #=
-            payroll_element["employee_id"], []                                        #=
-        ).append(payroll_element)                                                     #=
+    payroll_elements_by_employee = {employee_id: []
+                                    for employee_id in employee_ids}  # =
+    # =
+    for payroll_element in all_payroll_elements:  # =
+        payroll_elements_by_employee.setdefault(  # =
+            payroll_element["employee_id"], []  # =
+        ).append(payroll_element)  # =
     # ==================================================================================
-
-
 
     # ==============================================================================
     # This assign each leave element to its employee                              #=
     # ==============================================================================
-    leaves_by_employee = {employee_id: [] for employee_id in employee_ids}        #=
-                                                                                  #=
-    for leave in all_employee_leaves:                                             #=
-        leaves_by_employee.setdefault(leave["employee_id"], []).append(leave)     #=
+    leaves_by_employee = {employee_id: [] for employee_id in employee_ids}  # =
+    # =
+    for leave in all_employee_leaves:  # =
+        leaves_by_employee.setdefault(
+            leave["employee_id"], []).append(leave)  # =
     # ==============================================================================
-
-
 
     # ==============================================================================
     # This assign each loan element to its employee                               #=
     # ==============================================================================
-    loans_by_employee = {employee_id: [] for employee_id in employee_ids}         #=
-                                                                                  #=
-    for loan in all_employee_loans:                                               #=
-        loans_by_employee.setdefault(loan["employee_id"], []).append(loan)        #=
+    loans_by_employee = {employee_id: [] for employee_id in employee_ids}  # =
+    # =
+    for loan in all_employee_loans:  # =
+        loans_by_employee.setdefault(loan["employee_id"], []).append(loan)  # =
     # ==============================================================================
-
 
     leave_type_ids = {
         leave.get("leave_type")
@@ -148,12 +150,11 @@ async def load_payroll_run_context(
     candidate_element_ids = {
         document["_id"]
         for document in (
-                all_payroll_elements
-                + all_employee_leaves
-                + all_employee_loans
+            all_payroll_elements
+            + all_employee_leaves
+            + all_employee_loans
         )
     }
-
 
     processed_task = payroll_runs_employees_elements_collection.find(
         {
@@ -209,9 +210,10 @@ async def load_payroll_run_context(
         if document.get("element_id")
     }
 
-    leave_types_by_id = {document["_id"]: document for document in leave_type_documents}
+    leave_types_by_id = {
+        document["_id"]: document for document in leave_type_documents}
 
-    loan_types_by_id = {document["_id"]: document for document in loan_type_documents}
+    loan_types_by_id = {document["_id"]                        : document for document in loan_type_documents}
 
     payroll_definition_ids = {
         payroll_element.get("name")
@@ -224,7 +226,6 @@ async def load_payroll_run_context(
         for document in leave_type_documents + loan_type_documents
         if document.get("based_element")
     )
-
 
     legislation_ids = {
         employee.get("legislation")
@@ -267,11 +268,12 @@ async def load_payroll_run_context(
     employee_payrolls_by_id = {}
 
     for employee_value in all_employee_values:
-        employee_payrolls_by_id[employee_value["name"]] = employee_value  # this was ['_id']
+        employee_payrolls_by_id[employee_value["name"]
+                                ] = employee_value  # this was ['_id']
         key = (employee_value.get("employee_id"), employee_value.get("name"))
         employee_values_by_name[key] = (
-                employee_values_by_name.get(key, 0)
-                + float(employee_value.get("value", 0) or 0)
+            employee_values_by_name.get(key, 0)
+            + float(employee_value.get("value", 0) or 0)
         )
 
     based_elements_by_payroll = {}
@@ -280,6 +282,7 @@ async def load_payroll_run_context(
         based_elements_by_payroll.setdefault(
             based_element.get("payroll_element_id"), []
         ).append(based_element)
+
     def employee_element_value(payroll_element_id: ObjectId, current_employee_id: ObjectId) -> float:
         # Here the payroll_element_id is the id pf payroll element from payroll elements screen
 

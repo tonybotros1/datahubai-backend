@@ -18,14 +18,12 @@ async def py_social_security_employee_ff(employee_id: ObjectId, main_payroll_ele
         # if value is None:
         value = await get_employee_element_value(main_payroll_element_id, employee_id,
                                                  period_end_date)
-        print(value)
-
         legislation_doc = legislation_document
         if legislation_doc is None:
             legislation_doc = await legislations_collection.find_one({"_id": legislation})
         if not legislation_doc:
             raise HTTPException(status_code=404, detail="Legislation not found")
-        # No. of working hours
+
         ceiling = 0
         social_security_employee_percentage = 0
         social_security_ceilings: list = legislation_doc.get("social_security_ceilings")
