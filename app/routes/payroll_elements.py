@@ -296,7 +296,8 @@ async def get_payroll_elements_for_lov(data: dict = Depends(security.get_current
         company_id = ObjectId(data.get("company_id"))
         results = await payroll_elements_collection.find({"company_id": company_id, "is_indirect": False},
                                                          {"_id": 1, "name": 1, "key": 11, "is_recurring": 1,
-                                                          "function": 1, "entry_value_name": 1, "comments": 1}).sort(
+                                                          "is_entry_value": 1, "function": 1,
+                                                          "entry_value_name": 1, "comments": 1}).sort(
             {"name": 1}).to_list(None)
         return {
             "elements": jsonable_encoder(

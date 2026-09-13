@@ -45,12 +45,6 @@ async def py_social_security_employer_ff(employee_id: ObjectId, main_payroll_ele
         print(social_security_employer)
         return round(social_security_employer, 2)
 
-        # social_security_ceiling = legislation_doc.get("social_security_ceiling", 0)
-        # if not social_security_ceiling or social_security_ceiling == 0:
-        #     social_security_ceiling = value
-        #
-        # social_security_employer = social_security_employer_percentage * min(value, social_security_ceiling)
-        # return round(social_security_employer, 2)
 
     except Exception as e:
         raise e
