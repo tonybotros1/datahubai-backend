@@ -1,8 +1,8 @@
 from datetime import datetime
-from typing import Optional
+from typing import Literal, Optional
 
 from bson import ObjectId
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from pydantic_core import core_schema
 
 
@@ -102,6 +102,7 @@ class CarTradingModel(BaseModel):
     engine_size: Optional[PyObjectId] = None
     year: Optional[PyObjectId] = None
     vin: Optional[str] = None
+    engine_number: Optional[str] = None
     bought_from: Optional[PyObjectId] = None
     sold_to: Optional[PyObjectId] = None
     note: Optional[str] = None
@@ -128,6 +129,8 @@ class LastChangesFilter(BaseModel):
 
 class PurchaseAgreementModel(BaseModel):
     trade_id: Optional[str] = None
+    agreement_type: Literal["buy", "sell"] = "sell"
+    payment_method: Literal["", "cash", "bank_transfer", "cheque", "other"] = ""
     agreement_date: Optional[datetime] = None
     agreement_note: Optional[str] = None
     buyer_name: Optional[str] = None
@@ -139,8 +142,8 @@ class PurchaseAgreementModel(BaseModel):
     seller_phone: Optional[str] = None
     seller_email: Optional[str] = None
     note: Optional[str] = None
-    agreement_amount: Optional[float] = None
-    agreement_down_payment: Optional[float] = None
+    agreement_amount: Optional[float] = Field(default=None, ge=0, allow_inf_nan=False)
+    agreement_down_payment: Optional[float] = Field(default=None, ge=0, allow_inf_nan=False)
 
 
 class TransferModel(BaseModel):

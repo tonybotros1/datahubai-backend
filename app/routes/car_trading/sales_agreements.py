@@ -1,3 +1,5 @@
+import math
+
 from bson import ObjectId
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.encoders import jsonable_encoder
@@ -16,6 +18,36 @@ from .common import (
 from .models import PurchaseAgreementModel
 
 router = APIRouter()
+
+
+def normalize_agreement(document: dict) -> dict:
+    """Read legacy agreements as sales without a bulk database migration."""
+    normalized = dict(document)
+    normalized.pop("profit_margin_scheme", None)
+    for key, default in (
+        ("agreement_type", "sell"),
+        ("payment_method", ""),
+        ("agreement_amount", 0),
+        ("agreement_down_payment", 0),
+    ):
+        if normalized.get(key) is None:
+            normalized[key] = default
+    return normalized
+
+
+def validate_agreement_values(document: dict):
+    require_payload_field(document, "agreement_date", "Agreement date")
+    require_payload_field(document, "seller_name", "Seller name")
+    require_payload_field(document, "buyer_name", "Buyer name")
+    amount = document.get("agreement_amount")
+    paid = zero_if_none(document.get("agreement_down_payment"))
+    if amount is None or not math.isfinite(amount) or amount <= 0:
+        raise HTTPException(status_code=400, detail="Agreement amount must be greater than zero")
+    if not math.isfinite(paid) or paid < 0 or paid > amount:
+        raise HTTPException(
+            status_code=400,
+            detail="Amount paid must be between zero and the agreement amount",
+        )
 
 
 @router.get("/get_purchase_agreement_for_current_trade/{trade_id}")
@@ -51,7 +83,7 @@ async def get_purchase_agreement_for_current_trade(trade_id: str,
         ]
         cursor = await all_trades_purchase_agreement_items_collection.aggregate(purchase_agreement_items_pipeline)
         results = await cursor.to_list(None)
-        return {'purchase_agreement_items': results if results else []}
+        return {'purchase_agreement_items': [normalize_agreement(item) for item in results]}
 
     except HTTPException:
         raise
@@ -70,9 +102,8 @@ async def add_purchase_agreement_item(purchase_agreement_item: PurchaseAgreement
             "trade_id",
         )
         await ensure_trade_belongs_to_company(trade_id, company_id)
-        require_payload_field(purchase_agreement_item_dict, "agreement_date", "Agreement date")
-        require_payload_field(purchase_agreement_item_dict, "seller_name", "Seller name")
-        require_payload_field(purchase_agreement_item_dict, "buyer_name", "Buyer name")
+        purchase_agreement_item_dict = normalize_agreement(purchase_agreement_item_dict)
+        validate_agreement_values(purchase_agreement_item_dict)
         new_purchase_agreement_counter = await create_custom_counter("CMP", "CM", data=data,
                                                                      description='Compass Motors Purchase Agreement')
 
@@ -102,7 +133,7 @@ async def add_purchase_agreement_item(purchase_agreement_item: PurchaseAgreement
             "type": "purchase_agreement_item_created",
             "data": encoded_data
         })
-        return {"message": "Sales agreement added successfully", "data": encoded_data}
+        return {"message": "Agreement added successfully", "data": encoded_data}
 
     except HTTPException:
         raise
@@ -138,13 +169,19 @@ async def update_purchase_agreement_item(purchase_item_id: str, purchase_agreeme
         ]
         purchase_agreement_item_dict = purchase_agreement_item.model_dump(exclude_unset=True)
         purchase_agreement_item_dict.pop("trade_id", None)
-        require_payload_field(purchase_agreement_item_dict, "agreement_date", "Agreement date")
-        require_payload_field(purchase_agreement_item_dict, "seller_name", "Seller name")
-        require_payload_field(purchase_agreement_item_dict, "buyer_name", "Buyer name")
+        existing = await all_trades_purchase_agreement_items_collection.find_one(
+            {"_id": purchase_item_id, "company_id": company_id}
+        )
+        if not existing:
+            raise HTTPException(status_code=404, detail="Purchase Agreement Item not found")
+        merged = normalize_agreement({**existing, **purchase_agreement_item_dict})
+        validate_agreement_values(merged)
 
         purchase_agreement_item_dict.update({
-            "agreement_amount": zero_if_none(purchase_agreement_item_dict.get("agreement_amount")),
-            "agreement_down_payment": zero_if_none(purchase_agreement_item_dict.get("agreement_down_payment")),
+            "agreement_type": merged["agreement_type"],
+            "payment_method": merged["payment_method"],
+            "agreement_amount": merged["agreement_amount"],
+            "agreement_down_payment": merged["agreement_down_payment"],
             "updatedAt": security.now_utc(),
         })
 
@@ -162,12 +199,12 @@ async def update_purchase_agreement_item(purchase_item_id: str, purchase_agreeme
         if not result:
             raise HTTPException(status_code=404, detail="Purchase Agreement Item not found")
 
-        encoded_data = jsonable_encoder(result[0])
+        encoded_data = jsonable_encoder(normalize_agreement(result[0]))
         await manager.send_to_company(str(company_id), {
             "type": "purchase_agreement_item_updated",
             "data": encoded_data
         })
-        return {"message": "Sales agreement updated successfully", "data": encoded_data}
+        return {"message": "Agreement updated successfully", "data": encoded_data}
 
     except HTTPException:
         raise

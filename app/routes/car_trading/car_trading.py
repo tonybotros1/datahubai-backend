@@ -487,6 +487,7 @@ async def get_all_cars(data: dict = Depends(security.get_current_user)):
                             '$engine_size_name', ''
                         ]
                     },
+                    'engine_number': {'$ifNull': ['$engine_number', '']},
                     'mileage': {
                         '$ifNull': [
                             '$mileage', None
@@ -544,6 +545,7 @@ async def add_new_trade(trade: CarTradingModel, data: dict = Depends(security.ge
             "engine_size": trade.engine_size if trade.engine_size else "",
             "year": trade.year if trade.year else "",
             "vin": trade.vin if trade.vin else "",
+            "engine_number": trade.engine_number.strip() if trade.engine_number else "",
             "status": "New",
             "bought_from": trade.bought_from if trade.bought_from else "",
             "sold_to": trade.sold_to if trade.sold_to else "",
@@ -705,6 +707,10 @@ async def update_trade(trade_id: str, trade: CarTradingModel,
             raise HTTPException(status_code=400, detail="Car model is required")
         if "trim" in updated_trade:
             updated_trade["trim"] = updated_trade["trim"].strip() if updated_trade["trim"] else ""
+        if "engine_number" in updated_trade:
+            updated_trade["engine_number"] = (
+                updated_trade["engine_number"].strip() if updated_trade["engine_number"] else ""
+            )
 
         updated_trade["updatedAt"] = security.now_utc()
         result = await all_trades_collection.update_one(
@@ -1011,6 +1017,7 @@ async def search_engine_for_car_trading(
                 "engine_size": list_name("engine_size"),
                 "mileage": {"$ifNull": ["$mileage", 0]},
                 "vin": {"$ifNull": ["$vin", ""]},
+                "engine_number": {"$ifNull": ["$engine_number", ""]},
                 "bought_from_id": {"$ifNull": ["$bought_from", ""]},
                 "bought_from": list_name("bought_from"),
                 "sold_to_id": {"$ifNull": ["$sold_to", ""]},

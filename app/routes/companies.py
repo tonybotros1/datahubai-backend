@@ -869,7 +869,10 @@ async def get_current_company_details(data: dict = Depends(security.get_current_
                             '$project': {
                                 '_id': 1,
                                 'country': 1,
-                                'city': 1
+                                'city': 1,
+                                'email': 1,
+                                'phone_number': 1,
+                                'address': 1
                             }
                         }
                     ],
@@ -1030,6 +1033,21 @@ async def get_current_company_details(data: dict = Depends(security.get_current_
                     'subunit_name': {
                         '$ifNull': [
                             '$country_details.subunit_name', None
+                        ]
+                    },
+                    'owner_email': {
+                        '$ifNull': [
+                            '$user_details.email', None
+                        ]
+                    },
+                    'owner_phone': {
+                        '$ifNull': [
+                            '$user_details.phone_number', None
+                        ]
+                    },
+                    'owner_address': {
+                        '$ifNull': [
+                            '$user_details.address', None
                         ]
                     },
                     'is_admin': {
