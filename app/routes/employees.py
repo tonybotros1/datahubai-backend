@@ -143,7 +143,11 @@ async def delete_attachments_for_documents(document_ids: list[ObjectId], company
 
 class EmployeesModel(BaseModel):
     name: Optional[str] = None
+    company_name: Optional[str] = None
     gender: Optional[str] = None
+    national_id: Optional[str] = None
+    social_security_registration_number: Optional[str] = None
+    income_tax_registration_number: Optional[str] = None
     nationality: Optional[str] = None
     date_of_birth: Optional[datetime] = None
     martial_status: Optional[str] = None
@@ -1711,15 +1715,20 @@ async def get_all_employees(data: dict = Depends(security.get_current_user)):
 
 
 @router.post("/create_employee")
-async def create_employee(full_name: str = Form(None), country_of_birth: str = Form(None),
-                          place_of_birth: str = Form(None), date_of_birth: Optional[str] = Form(None),
-                          gender: str = Form(None), martial_status: str = Form(None), person_type: str = Form(None),
+async def create_employee(full_name: str = Form(None), company_name: Optional[str] = Form(None),
+                          country_of_birth: str = Form(None),
+                          place_of_birth: str = Form(None),
+                          social_security_registration_number: Optional[str] = Form(None),
+                          date_of_birth: Optional[str] = Form(None),
+                          gender: str = Form(None), national_id: Optional[str] = Form(None),
+                          martial_status: str = Form(None), person_type: str = Form(None),
                           employer: str = Form(None), department: str = Form(None),
                           job_title: str = Form(None), location: str = Form(None),
                           hire_date: Optional[str] = Form(None),
                           end_date: Optional[str] = Form(None), reporting_manager: str = Form(None),
                           payroll: str = Form(None),
                           legislation: str = Form(None),
+                          income_tax_registration_number: Optional[str] = Form(None),
                           person_image: UploadFile = File(None), data: dict = Depends(security.get_current_user)):
     try:
         company_id = ObjectId(data.get("company_id"))
@@ -1736,11 +1745,17 @@ async def create_employee(full_name: str = Form(None), country_of_birth: str = F
         employee_dict = {
             "company_id": company_id,
             "full_name": full_name,
+            "company_name": company_name.strip() if company_name else None,
             "country_of_birth": ObjectId(country_of_birth) if country_of_birth else None,
             "legislation": ObjectId(legislation) if legislation else None,
             "place_of_birth": place_of_birth,
+            "social_security_registration_number": (
+                social_security_registration_number.strip()
+                if social_security_registration_number else None
+            ),
             "date_of_birth": parsed_date_of_birth,
             "gender": ObjectId(gender) if gender else None,
+            "national_id": national_id.strip() if national_id else None,
             "martial_status": ObjectId(martial_status) if martial_status else None,
             "person_type": person_type,
             "employer": ObjectId(employer) if employer else None,
@@ -1751,6 +1766,10 @@ async def create_employee(full_name: str = Form(None), country_of_birth: str = F
             "hire_date": parsed_hire_date,
             "end_date": parsed_end_date,
             "reporting_manager": ObjectId(reporting_manager) if reporting_manager else None,
+            "income_tax_registration_number": (
+                income_tax_registration_number.strip()
+                if income_tax_registration_number else None
+            ),
             "createdAt": security.now_utc(),
             "updatedAt": security.now_utc(),
             "people_counter": new_people_counter['final_counter'] if new_people_counter[
@@ -1775,15 +1794,20 @@ async def create_employee(full_name: str = Form(None), country_of_birth: str = F
 
 
 @router.patch("/update_employee/{employee_id}")
-async def update_employee(employee_id: str, full_name: str = Form(None), country_of_birth: str = Form(None),
-                          place_of_birth: str = Form(None), date_of_birth: Optional[str] = Form(None),
-                          gender: str = Form(None), martial_status: str = Form(None), person_type: str = Form(None),
+async def update_employee(employee_id: str, full_name: str = Form(None),
+                          company_name: Optional[str] = Form(None), country_of_birth: str = Form(None),
+                          place_of_birth: str = Form(None),
+                          social_security_registration_number: Optional[str] = Form(None),
+                          date_of_birth: Optional[str] = Form(None),
+                          gender: str = Form(None), national_id: Optional[str] = Form(None),
+                          martial_status: str = Form(None), person_type: str = Form(None),
                           employer: str = Form(None), department: str = Form(None),
                           job_title: str = Form(None), location: str = Form(None),
                           hire_date: Optional[str] = Form(None),
                           end_date: Optional[str] = Form(None), reporting_manager: str = Form(None),
                           payroll: str = Form(None),
                           legislation: str = Form(None),
+                          income_tax_registration_number: Optional[str] = Form(None),
                           person_image: UploadFile = File(None), data: dict = Depends(security.get_current_user)):
     try:
         company_id = ObjectId(data.get("company_id"))
@@ -1793,11 +1817,17 @@ async def update_employee(employee_id: str, full_name: str = Form(None), country
         parsed_end_date = parse_optional_form_datetime(end_date, "end_date")
         employee_dict = {
             "full_name": full_name,
+            "company_name": company_name.strip() if company_name else None,
             "country_of_birth": ObjectId(country_of_birth) if country_of_birth else None,
             "place_of_birth": place_of_birth,
+            "social_security_registration_number": (
+                social_security_registration_number.strip()
+                if social_security_registration_number else None
+            ),
             "date_of_birth": parsed_date_of_birth,
             "legislation": ObjectId(legislation) if legislation else None,
             "gender": ObjectId(gender) if gender else None,
+            "national_id": national_id.strip() if national_id else None,
             "martial_status": ObjectId(martial_status) if martial_status else None,
             "person_type": person_type,
             "employer": ObjectId(employer) if employer else None,
@@ -1808,6 +1838,10 @@ async def update_employee(employee_id: str, full_name: str = Form(None), country
             "hire_date": parsed_hire_date,
             "end_date": parsed_end_date,
             "reporting_manager": ObjectId(reporting_manager) if reporting_manager else None,
+            "income_tax_registration_number": (
+                income_tax_registration_number.strip()
+                if income_tax_registration_number else None
+            ),
             "updatedAt": security.now_utc(),
         }
         if person_image:
