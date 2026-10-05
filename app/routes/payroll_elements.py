@@ -41,6 +41,35 @@ class BasedElementsModel(BaseModel):
     type: Optional[str] = None
 
 
+async def ensure_unique_based_element(
+    payroll_element_id: ObjectId,
+    based_element_id: Optional[ObjectId],
+    company_id: ObjectId,
+    *,
+    exclude_id: Optional[ObjectId] = None,
+) -> None:
+    if based_element_id is None:
+        return
+
+    duplicate_filter: dict[str, Any] = {
+        "company_id": company_id,
+        "payroll_element_id": payroll_element_id,
+        "name": based_element_id,
+    }
+    if exclude_id is not None:
+        duplicate_filter["_id"] = {"$ne": exclude_id}
+
+    duplicate = await payroll_elements_based_elements_collection.find_one(
+        duplicate_filter,
+        {"_id": 1},
+    )
+    if duplicate:
+        raise HTTPException(
+            status_code=409,
+            detail="This based element is already added.",
+        )
+
+
 payroll_element_details_pipeline = [
     {
         '$lookup': {
@@ -350,10 +379,16 @@ async def add_new_based_element(payroll_element_id: str, element: BasedElementsM
     try:
         company_id = ObjectId(data.get("company_id"))
         payroll_element_id = ObjectId(payroll_element_id)
+        based_element_id = ObjectId(element.name) if element.name else None
+        await ensure_unique_based_element(
+            payroll_element_id,
+            based_element_id,
+            company_id,
+        )
         element_dict = {
             "payroll_element_id": payroll_element_id,
             "company_id": company_id,
-            "name": ObjectId(element.name) if element.name else None,
+            "name": based_element_id,
             "type": element.type,
             "createdAt": security.now_utc(),
             "updatedAt": security.now_utc(),
@@ -369,16 +404,33 @@ async def add_new_based_element(payroll_element_id: str, element: BasedElementsM
 
 @router.patch("/update_based_element/{element_id}")
 async def update_based_element(element_id: str, element: BasedElementsModel,
-                               _: dict = Depends(security.get_current_user)):
+                               data: dict = Depends(security.get_current_user)):
     try:
+        company_id = ObjectId(data.get("company_id"))
         element_id = ObjectId(element_id)
+        existing_element = await payroll_elements_based_elements_collection.find_one(
+            {"_id": element_id, "company_id": company_id},
+            {"payroll_element_id": 1},
+        )
+        if not existing_element:
+            raise HTTPException(status_code=404, detail="Based element not found")
+
+        based_element_id = ObjectId(element.name) if element.name else None
+        await ensure_unique_based_element(
+            existing_element["payroll_element_id"],
+            based_element_id,
+            company_id,
+            exclude_id=element_id,
+        )
         element_dict = {
-            "name": ObjectId(element.name) if element.name else None,
+            "name": based_element_id,
             "type": element.type,
             "updatedAt": security.now_utc(),
         }
-        result = await payroll_elements_based_elements_collection.update_one({"_id": element_id},
-                                                                             {"$set": element_dict})
+        result = await payroll_elements_based_elements_collection.update_one(
+            {"_id": element_id, "company_id": company_id},
+            {"$set": element_dict},
+        )
         if result.matched_count == 0:
             raise HTTPException(status_code=500, detail="Failed updating element")
         # return {"updated_based_element_id": str(result.inserted_id)}
