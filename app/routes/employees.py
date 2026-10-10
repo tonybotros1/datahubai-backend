@@ -2102,10 +2102,36 @@ async def get_payroll_details(payroll_id: ObjectId):
 
 class EmployeePayrollModel(BaseModel):
     name: Optional[str] = None
+    type: Optional[str] = None
     value: Optional[float] = None
     start_date: Optional[datetime] = None
     end_date: Optional[datetime] = None
     notes: Optional[str] = None
+
+
+async def prepare_employee_payroll(payroll: dict, company_id: ObjectId) -> None:
+    element_id_value = payroll.get("name")
+    if not element_id_value:
+        raise HTTPException(status_code=400, detail="Payroll element is required")
+
+    try:
+        element_id = ObjectId(element_id_value)
+    except (InvalidId, TypeError):
+        raise HTTPException(status_code=400, detail="Invalid payroll element")
+
+    element = await payroll_elements_collection.find_one(
+        {"_id": element_id, "company_id": company_id},
+        {"has_type": 1},
+    )
+    if not element:
+        raise HTTPException(status_code=404, detail="Payroll element not found")
+
+    entered_type = str(payroll.get("type") or "").strip()
+    if element.get("has_type") is True and not entered_type:
+        raise HTTPException(status_code=400, detail="Type is required")
+
+    payroll["name"] = element_id
+    payroll["type"] = entered_type if element.get("has_type") is True else ""
 
 
 class PayrollFilterModel(BaseModel):
@@ -2119,7 +2145,7 @@ async def add_new_employee_payroll(employee_id: str, payroll: EmployeePayrollMod
         company_id = ObjectId(data.get("company_id"))
         payroll = payroll.model_dump(exclude_unset=True)
         payroll['company_id'] = company_id
-        payroll['name'] = ObjectId(payroll['name']) if payroll['name'] else None
+        await prepare_employee_payroll(payroll, company_id)
         payroll['employee_id'] = ObjectId(employee_id) if employee_id else None
         payroll['value'] = payroll['value']
         payroll['start_date'] = payroll['start_date']
@@ -2134,6 +2160,8 @@ async def add_new_employee_payroll(employee_id: str, payroll: EmployeePayrollMod
             raise HTTPException(status_code=500, detail="Failed to create new payroll document")
         added_payroll = await get_payroll_details(new_payroll.inserted_id)
         return {"new_payroll": added_payroll}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -2144,7 +2172,7 @@ async def update_employee_payroll(payroll_id: str, payroll: EmployeePayrollModel
     try:
         company_id = ObjectId(data.get("company_id"))
         payroll = payroll.model_dump(exclude_unset=True)
-        payroll['name'] = ObjectId(payroll['name']) if payroll['name'] else None
+        await prepare_employee_payroll(payroll, company_id)
         payroll['value'] = payroll['value']
         payroll['start_date'] = payroll['start_date']
         payroll['end_date'] = payroll['end_date']

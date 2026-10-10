@@ -25,6 +25,7 @@ class PayrollElementsModel(BaseModel):
     is_entry_value: Optional[bool] = None
     is_standard_link: Optional[bool] = None
     is_indirect: Optional[bool] = None
+    has_type: Optional[bool] = False
     entry_value_name: Optional[str] = None
 
 
@@ -326,7 +327,8 @@ async def get_payroll_elements_for_lov(data: dict = Depends(security.get_current
         results = await payroll_elements_collection.find({"company_id": company_id, "is_indirect": False},
                                                          {"_id": 1, "name": 1, "key": 11, "is_recurring": 1,
                                                           "is_entry_value": 1, "function": 1,
-                                                          "entry_value_name": 1, "comments": 1}).sort(
+                                                          "entry_value_name": 1, "comments": 1,
+                                                          "has_type": 1}).sort(
             {"name": 1}).to_list(None)
         return {
             "elements": jsonable_encoder(
