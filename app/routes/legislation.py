@@ -1,6 +1,7 @@
 from typing import Optional, Any, List
 from datetime import datetime
 from bson import ObjectId
+from bson.errors import InvalidId
 from fastapi import APIRouter, HTTPException, Depends
 from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel
@@ -10,6 +11,9 @@ from app.websocket_config import manager
 
 router = APIRouter()
 legislations_collection = get_collection("legislations")
+employees_collection = get_collection("employees")
+employees_payrolls_collection = get_collection("employees_payrolls")
+payroll_elements_collection = get_collection("payroll_elements")
 
 
 class IncomeTaxBracketModel(BaseModel):
@@ -169,3 +173,196 @@ async def search_engine_for_legislations(
         return {"legislations_elements": legislations_elements if legislations_elements else []}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/{legislation_id}/social_security_employee_values")
+async def get_social_security_employee_values(
+        legislation_id: str,
+        data: dict = Depends(security.get_current_user)
+):
+    """Return employee-entered ceilings for the Social Security Employee element."""
+    try:
+        company_id = ObjectId(data.get("company_id"))
+        legislation_object_id = ObjectId(legislation_id)
+    except (InvalidId, TypeError):
+        raise HTTPException(status_code=400, detail="Invalid legislation")
+
+    legislation = await legislations_collection.find_one({
+        "_id": legislation_object_id,
+        "company_id": company_id,
+    }, {"_id": 1})
+    if not legislation:
+        raise HTTPException(status_code=404, detail="Legislation not found")
+
+    social_security_elements = await payroll_elements_collection.find({
+        "company_id": company_id,
+        "function": {
+            "$regex": "^PY_SOCIAL_SECURITY_EMPLOYEE_FF$",
+            "$options": "i",
+        },
+    }, {"_id": 1}).to_list(None)
+    element_ids = [element["_id"] for element in social_security_elements]
+    if not element_ids:
+        return {"employee_values": []}
+
+    pipeline = [
+        {
+            "$match": {
+                "company_id": company_id,
+                "name": {"$in": element_ids},
+            }
+        },
+        {
+            "$set": {
+                "has_override": {
+                    "$and": [
+                        {"$ne": [{"$type": "$value"}, "missing"]},
+                        {"$ne": ["$value", None]},
+                    ]
+                }
+            }
+        },
+        {
+            "$lookup": {
+                "from": "employees",
+                "let": {"employee_id": "$employee_id"},
+                "pipeline": [
+                    {
+                        "$match": {
+                            "$expr": {
+                                "$and": [
+                                    {"$eq": ["$_id", "$$employee_id"]},
+                                    {"$eq": ["$company_id", company_id]},
+                                    {"$eq": ["$legislation", legislation_object_id]},
+                                ]
+                            }
+                        }
+                    },
+                    {
+                        "$project": {
+                            "full_name": 1,
+                            "people_counter": 1,
+                            "social_security_registration_number": 1,
+                        }
+                    },
+                ],
+                "as": "employee",
+            }
+        },
+        {"$unwind": "$employee"},
+        {
+            "$lookup": {
+                "from": "payroll_elements",
+                "let": {"element_id": "$name"},
+                "pipeline": [
+                    {
+                        "$match": {
+                            "$expr": {
+                                "$and": [
+                                    {"$eq": ["$_id", "$$element_id"]},
+                                    {"$eq": ["$company_id", company_id]},
+                                ]
+                            }
+                        }
+                    },
+                    {"$project": {"name": 1}},
+                ],
+                "as": "payroll_element",
+            }
+        },
+        {
+            "$project": {
+                "_id": {"$toString": "$_id"},
+                "employee_id": {"$toString": "$employee_id"},
+                "employee_name": "$employee.full_name",
+                "employee_number": "$employee.people_counter",
+                "social_security_registration_number": (
+                    "$employee.social_security_registration_number"
+                ),
+                "payroll_element_name": {
+                    "$ifNull": [
+                        {"$first": "$payroll_element.name"},
+                        "Social Security Employee",
+                    ]
+                },
+                "value": 1,
+                "has_override": 1,
+                "start_date": 1,
+                "end_date": 1,
+            }
+        },
+        {"$sort": {"has_override": -1, "employee_name": 1, "start_date": -1}},
+    ]
+    cursor = await employees_payrolls_collection.aggregate(pipeline)
+    employee_values = await cursor.to_list(None)
+    return {
+        "employee_values": jsonable_encoder(
+            employee_values,
+            custom_encoder={ObjectId: str},
+        )
+    }
+
+
+@router.patch(
+    "/{legislation_id}/social_security_employee_values/{assignment_id}/clear_override"
+)
+async def clear_social_security_employee_override(
+        legislation_id: str,
+        assignment_id: str,
+        data: dict = Depends(security.get_current_user)
+):
+    try:
+        company_id = ObjectId(data.get("company_id"))
+        legislation_object_id = ObjectId(legislation_id)
+        assignment_object_id = ObjectId(assignment_id)
+    except (InvalidId, TypeError):
+        raise HTTPException(status_code=400, detail="Invalid social security assignment")
+
+    legislation = await legislations_collection.find_one({
+        "_id": legislation_object_id,
+        "company_id": company_id,
+    }, {"_id": 1})
+    if not legislation:
+        raise HTTPException(status_code=404, detail="Legislation not found")
+
+    assignment = await employees_payrolls_collection.find_one({
+        "_id": assignment_object_id,
+        "company_id": company_id,
+    }, {"employee_id": 1, "name": 1})
+    if not assignment:
+        raise HTTPException(status_code=404, detail="Social security assignment not found")
+
+    element = await payroll_elements_collection.find_one({
+        "_id": assignment.get("name"),
+        "company_id": company_id,
+        "function": {
+            "$regex": "^PY_SOCIAL_SECURITY_EMPLOYEE_FF$",
+            "$options": "i",
+        },
+    }, {"_id": 1})
+    if not element:
+        raise HTTPException(status_code=404, detail="Social security assignment not found")
+
+    employee = await employees_collection.find_one({
+        "_id": assignment.get("employee_id"),
+        "company_id": company_id,
+        "legislation": legislation_object_id,
+    }, {"_id": 1})
+    if not employee:
+        raise HTTPException(status_code=404, detail="Social security assignment not found")
+
+    result = await employees_payrolls_collection.update_one(
+        {
+            "_id": assignment_object_id,
+            "company_id": company_id,
+            "employee_id": assignment.get("employee_id"),
+            "name": assignment.get("name"),
+        },
+        {
+            "$unset": {"value": ""},
+            "$set": {"updatedAt": security.now_utc()},
+        },
+    )
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Social security assignment not found")
+    return {"cleared_assignment_id": str(assignment_object_id)}
