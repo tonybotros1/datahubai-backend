@@ -177,12 +177,42 @@ payroll_runs_details_pipeline = [
                                     'as': 'element_details'
                                 }
                             }, {
+                                '$lookup': {
+                                    'from': 'employees_payrolls',
+                                    'localField': 'element_id',
+                                    'foreignField': '_id',
+                                    'pipeline': [
+                                        {
+                                            '$project': {
+                                                '_id': 0,
+                                                'type': 1,
+                                                'type_name': 1
+                                            }
+                                        }
+                                    ],
+                                    'as': 'employee_payroll_details'
+                                }
+                            }, {
                                 '$set': {
                                     'element_name': {
                                         '$first': '$element_details.name'
                                     },
                                     'element_type': {
                                         '$first': '$element_details.type'
+                                    },
+                                    'employee_type': {
+                                        '$ifNull': [
+                                            '$employee_type',
+                                            {
+                                                '$ifNull': [
+                                                    {
+                                                        '$first': '$employee_payroll_details.type_name'
+                                                    }, {
+                                                        '$first': '$employee_payroll_details.type'
+                                                    }
+                                                ]
+                                            }
+                                        ]
                                     }
                                 }
                             }, {
@@ -193,6 +223,7 @@ payroll_runs_details_pipeline = [
                                     'value': 1,
                                     'element_name': 1,
                                     'element_type': 1,
+                                    'employee_type': 1,
                                     'priority': 1,
                                     'payment': {
                                         '$cond': [

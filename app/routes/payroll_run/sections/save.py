@@ -106,6 +106,7 @@ async def save_payroll_run(
                         "element_id": element["element_id"],
                         "value": value,
                         "payroll_element_id": element["payroll_element_id"],
+                        "employee_type": element.get("employee_type", ""),
                         "run_id": run_id,
                         "number": element["number"],
                         "period_id": period_id,

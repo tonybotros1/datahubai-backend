@@ -53,6 +53,8 @@ async def load_payroll_run_context(
             "start_date": 1,
             "end_date": 1,
             "name": 1,
+            "type": 1,
+            "type_name": 1,
             "value": 1,
         },
     ).to_list(None)

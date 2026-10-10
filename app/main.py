@@ -28,6 +28,7 @@ company_mail_oauth_states_collection = get_collection("company_mail_oauth_states
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    await employees.migrate_employee_payroll_type_values()
     await companies_collection.create_index("company_name", unique=True)
     await users_collection.create_index("email", unique=True)
     await currencies_collection.create_index(

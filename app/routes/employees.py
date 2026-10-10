@@ -37,6 +37,104 @@ public_holidays_collection = get_collection("public_holidays")
 payroll_elements_collection = get_collection("payroll_elements")
 leave_types_collection = get_collection("leave_types")
 balances_collection = get_collection("balances")
+all_lists_collection = get_collection("all_lists")
+all_lists_values_collection = get_collection("all_lists_values")
+
+PAYROLL_ELEMENT_TYPES_CODE = "PAYROLL_ELEMENT_TYPES"
+PAYROLL_ELEMENT_TYPES_NAME = "Payroll Element Types"
+
+
+async def ensure_employee_payroll_types_list() -> ObjectId:
+    existing = await all_lists_collection.find_one(
+        {"code": PAYROLL_ELEMENT_TYPES_CODE},
+        {"_id": 1, "status": 1},
+    )
+    if existing:
+        if existing.get("status") is not True:
+            await all_lists_collection.update_one(
+                {"_id": existing["_id"]},
+                {"$set": {"status": True, "updatedAt": security.now_utc()}},
+            )
+        return existing["_id"]
+
+    now = security.now_utc()
+    result = await all_lists_collection.insert_one({
+        "name": PAYROLL_ELEMENT_TYPES_NAME,
+        "code": PAYROLL_ELEMENT_TYPES_CODE,
+        "mastered_by": "",
+        "status": True,
+        "createdAt": now,
+        "updatedAt": now,
+    })
+    return result.inserted_id
+
+
+async def _resolve_employee_payroll_type(
+    raw_value: Any,
+    company_id: ObjectId,
+    list_id: ObjectId,
+) -> tuple[ObjectId, str]:
+    value = str(raw_value or "").strip()
+    if not value:
+        raise HTTPException(status_code=400, detail="Type is required")
+
+    if ObjectId.is_valid(value):
+        value_document = await all_lists_values_collection.find_one(
+            {
+                "_id": ObjectId(value),
+                "company_id": company_id,
+                "list_id": list_id,
+                "status": True,
+            },
+            {"name": 1},
+        )
+        if not value_document:
+            raise HTTPException(status_code=400, detail="Invalid Type")
+        return value_document["_id"], str(value_document.get("name") or "").strip()
+
+    # The original Compass client still sends free text. Normalize it into the
+    # same company list so both clients continue to use one stored structure.
+    value_document = await all_lists_values_collection.find_one(
+        {"company_id": company_id, "list_id": list_id, "name": value},
+        {"name": 1},
+    )
+    if value_document:
+        return value_document["_id"], str(value_document.get("name") or value).strip()
+
+    now = security.now_utc()
+    result = await all_lists_values_collection.insert_one({
+        "name": value,
+        "company_id": company_id,
+        "mastered_by": "",
+        "list_id": list_id,
+        "status": True,
+        "createdAt": now,
+        "updatedAt": now,
+    })
+    return result.inserted_id, value
+
+
+async def migrate_employee_payroll_type_values() -> None:
+    list_id = await ensure_employee_payroll_types_list()
+    legacy_assignments = await employees_payrolls_collection.find(
+        {"type": {"$type": "string", "$ne": ""}},
+        {"company_id": 1, "type": 1},
+    ).to_list(None)
+
+    for assignment in legacy_assignments:
+        company_id = assignment.get("company_id")
+        type_name = str(assignment.get("type") or "").strip()
+        if not isinstance(company_id, ObjectId) or not type_name:
+            continue
+        type_id, normalized_name = await _resolve_employee_payroll_type(
+            type_name,
+            company_id,
+            list_id,
+        )
+        await employees_payrolls_collection.update_one(
+            {"_id": assignment["_id"]},
+            {"$set": {"type": type_id, "type_name": normalized_name}},
+        )
 
 
 def serializer(doc: dict) -> dict:
@@ -478,6 +576,13 @@ details_pipeline = [
                         'as': 'name_details'
                     }
                 }, {
+                    '$lookup': {
+                        'from': 'all_lists_values',
+                        'localField': 'type',
+                        'foreignField': '_id',
+                        'as': 'type_details'
+                    }
+                }, {
                     '$addFields': {
                         'name_value': {
                             '$ifNull': [
@@ -491,11 +596,31 @@ details_pipeline = [
                         },
                         'name': {
                             '$toString': '$name'
+                        },
+                        'type_id': {
+                            '$toString': '$type'
+                        },
+                        'type_name': {
+                            '$ifNull': [
+                                {
+                                    '$first': '$type_details.name'
+                                }, {
+                                    '$ifNull': [
+                                        '$type_name',
+                                        {'$toString': '$type'}
+                                    ]
+                                }
+                            ]
                         }
+                    }
+                }, {
+                    '$set': {
+                        'type': '$type_name'
                     }
                 }, {
                     '$project': {
                         'name_details': 0,
+                        'type_details': 0,
                         'company_id': 0,
                         'employee_id': 0
                     }
@@ -2055,6 +2180,13 @@ employee_payroll_pipeline = [
             'as': 'name_details'
         }
     }, {
+        '$lookup': {
+            'from': 'all_lists_values',
+            'localField': 'type',
+            'foreignField': '_id',
+            'as': 'type_details'
+        }
+    }, {
         '$addFields': {
             '_id': {
                 '$toString': '$_id'
@@ -2068,6 +2200,21 @@ employee_payroll_pipeline = [
             'employee_id': {
                 '$toString': '$employee_id'
             },
+            'type_id': {
+                '$toString': '$type'
+            },
+            'type_name': {
+                '$ifNull': [
+                    {
+                        '$first': '$type_details.name'
+                    }, {
+                        '$ifNull': [
+                            '$type_name',
+                            {'$toString': '$type'}
+                        ]
+                    }
+                ]
+            },
             'name_value': {
                 '$ifNull': [
                     {
@@ -2077,8 +2224,13 @@ employee_payroll_pipeline = [
             }
         }
     }, {
+        '$set': {
+            'type': '$type_name'
+        }
+    }, {
         '$project': {
-            'name_details': 0
+            'name_details': 0,
+            'type_details': 0
         }
     }
 ]
@@ -2126,12 +2278,21 @@ async def prepare_employee_payroll(payroll: dict, company_id: ObjectId) -> None:
     if not element:
         raise HTTPException(status_code=404, detail="Payroll element not found")
 
-    entered_type = str(payroll.get("type") or "").strip()
-    if element.get("has_type") is True and not entered_type:
-        raise HTTPException(status_code=400, detail="Type is required")
-
     payroll["name"] = element_id
-    payroll["type"] = entered_type if element.get("has_type") is True else ""
+    if element.get("has_type") is True:
+        if not str(payroll.get("type") or "").strip():
+            raise HTTPException(status_code=400, detail="Type is required")
+        list_id = await ensure_employee_payroll_types_list()
+        type_id, type_name = await _resolve_employee_payroll_type(
+            payroll.get("type"),
+            company_id,
+            list_id,
+        )
+        payroll["type"] = type_id
+        payroll["type_name"] = type_name
+    else:
+        payroll["type"] = ""
+        payroll["type_name"] = ""
 
 
 class PayrollFilterModel(BaseModel):

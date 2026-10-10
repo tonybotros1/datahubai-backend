@@ -40,6 +40,14 @@ async def calculate_employee_payroll_elements(
     elements_values_maps = {current_employee_id: []}
 
     payroll_elements = payroll_elements_by_employee.get(current_employee_id, [])
+    employee_types_by_assignment_id = {
+        payroll_element["_id"]: str(
+            payroll_element.get("type_name")
+            or payroll_element.get("type")
+            or ""
+        ).strip()
+        for payroll_element in payroll_elements
+    }
 
     for employee_payroll in payroll_elements:
         if not employee_payroll:
@@ -206,4 +214,11 @@ async def calculate_employee_payroll_elements(
                                 "number": 0
                             })
 
-    return elements_values_maps[current_employee_id]
+    calculated_elements = elements_values_maps[current_employee_id]
+    for calculated_element in calculated_elements:
+        calculated_element["employee_type"] = employee_types_by_assignment_id.get(
+            calculated_element.get("element_id"),
+            "",
+        )
+
+    return calculated_elements
