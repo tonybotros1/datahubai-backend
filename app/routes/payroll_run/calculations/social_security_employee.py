@@ -12,8 +12,10 @@ async def py_social_security_employee_ff(employee_id: ObjectId, main_payroll_ele
                                          legislation: ObjectId,
                                          period_start_date: datetime, period_end_date: datetime,
                                          based_value: Optional[float] = None,
+                                         element_value: Optional[float] = None,
                                          legislation_document: Optional[dict] = None):
     try:
+
         # value = based_value
         # if value is None:
         value = await get_employee_element_value(main_payroll_element_id, employee_id,
@@ -24,7 +26,7 @@ async def py_social_security_employee_ff(employee_id: ObjectId, main_payroll_ele
         if not legislation_doc:
             raise HTTPException(status_code=404, detail="Legislation not found")
 
-        ceiling = 0
+        ceiling = element_value
         social_security_employee_percentage = 0
         social_security_ceilings: list = legislation_doc.get("social_security_ceilings")
         for social_security_ceiling in social_security_ceilings:
@@ -33,7 +35,8 @@ async def py_social_security_employee_ff(employee_id: ObjectId, main_payroll_ele
             start_date = social_security_ceiling.get("start_date")
             end_date = social_security_ceiling.get("end_date")
             if (start_date <= period_end_date) and (end_date is None or end_date >= period_end_date):
-                ceiling = social_security_ceiling.get("ceiling", 0)
+                if ceiling is None: # added by me in 10/10/2026 override the current value need to control screen
+                    ceiling = social_security_ceiling.get("ceiling", 0)
                 social_security_employee_percentage = social_security_ceiling.get("employee_percentage", 0)
 
         social_security_employee_percentage = social_security_employee_percentage / 100

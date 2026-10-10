@@ -139,6 +139,7 @@ async def calculate_employee_payroll_elements(
                                                                      employee_element_value(
                                                                          employee_payroll.get("name"),
                                                                          current_employee_id),
+                                                                     element_value,
                                                                      legislation_document)
                         if value:
                             elements_values_maps[current_employee_id].append({
