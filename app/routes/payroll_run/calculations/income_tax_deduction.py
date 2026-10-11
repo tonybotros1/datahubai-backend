@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Optional
+from typing import Optional, List
 
 from bson import ObjectId
 from fastapi import HTTPException
@@ -16,11 +16,17 @@ async def py_income_tax_deduction_ff(element_value: float, employee_id: ObjectId
                                      legislation: ObjectId,
                                      period_start_date: datetime, period_end_date: datetime,
                                      based_value: Optional[float] = None,
+                                     employee_elements: List[dict] = None,
                                      legislation_document: Optional[dict] = None):
     try:
+        deducted_amount_from_the_salary_because_of_the_leaves = 0
+        for element in employee_elements:
+            deducted_amount_from_the_salary_because_of_the_leaves += element['value'] if 'value' in element else 0
+
         value = based_value
         if value is None:
             value = await get_employee_element_value(based_element_id, employee_id, period_start_date, period_end_date)
+        value = value - deducted_amount_from_the_salary_because_of_the_leaves
         income_tax_exemption = element_value
         taxable_income_before_exemption = (value or 0)
 

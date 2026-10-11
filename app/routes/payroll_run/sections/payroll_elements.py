@@ -1,6 +1,7 @@
 """Calculate regular payroll elements for one employee."""
 
 from datetime import datetime
+from typing import List
 
 from bson import ObjectId
 
@@ -24,6 +25,7 @@ async def calculate_employee_payroll_elements(
         employee: dict,
         period: PayrollPeriod,
         context: PayrollRunContext,
+        employee_elements: List[dict],
 ) -> list[dict]:
     current_employee_id = employee.get("_id")
     employee_hire_date = employee.get("hire_date") or datetime.min
@@ -140,6 +142,7 @@ async def calculate_employee_payroll_elements(
                                                                          employee_payroll.get("name"),
                                                                          current_employee_id),
                                                                      element_value,
+                                                                     employee_elements,
                                                                      legislation_document)
                         if value:
                             elements_values_maps[current_employee_id].append({
@@ -169,7 +172,7 @@ async def calculate_employee_payroll_elements(
                     if is_within_period(element_start, element_end, period_start_date, period_end_date):
                         value = await py_service_tax_ff(ObjectId(current_employee_id),
                                                         employee_payroll.get("name"), legislation,
-                                                        period_start_date,period_end_date,
+                                                        period_start_date, period_end_date,
                                                         employee_element_value(
                                                             employee_payroll.get("name"),
                                                             current_employee_id),
@@ -189,6 +192,7 @@ async def calculate_employee_payroll_elements(
                                                                  employee_element_value(
                                                                      employee_payroll.get("name"),
                                                                      current_employee_id),
+                                                                 employee_elements,
                                                                  legislation_document)
                         if value:
                             elements_values_maps[current_employee_id].append({

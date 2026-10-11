@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Optional
+from typing import Optional, List
 
 from bson import ObjectId
 from fastapi import HTTPException
@@ -13,13 +13,18 @@ async def py_social_security_employee_ff(employee_id: ObjectId, main_payroll_ele
                                          period_start_date: datetime, period_end_date: datetime,
                                          based_value: Optional[float] = None,
                                          element_value: Optional[float] = None,
+                                         employee_elements: List[dict] = None,
                                          legislation_document: Optional[dict] = None):
     try:
+        deducted_amount_from_the_salary_because_of_the_leaves = 0
+        for element in employee_elements:
+            deducted_amount_from_the_salary_because_of_the_leaves += element['value'] if 'value' in element else 0
 
         # value = based_value
         # if value is None:
         value = await get_employee_element_value(main_payroll_element_id, employee_id,
-                                                 period_end_date)
+                                                 period_end_date) - deducted_amount_from_the_salary_because_of_the_leaves
+
         legislation_doc = legislation_document
         if legislation_doc is None:
             legislation_doc = await legislations_collection.find_one({"_id": legislation})
@@ -35,7 +40,7 @@ async def py_social_security_employee_ff(employee_id: ObjectId, main_payroll_ele
             start_date = social_security_ceiling.get("start_date")
             end_date = social_security_ceiling.get("end_date")
             if (start_date <= period_end_date) and (end_date is None or end_date >= period_end_date):
-                if ceiling is None: # added by me in 10/10/2026 override the current value need to control screen
+                if ceiling is None or ceiling == 0:  # added by me in 10/10/2026 override the current value
                     ceiling = social_security_ceiling.get("ceiling", 0)
                 social_security_employee_percentage = social_security_ceiling.get("employee_percentage", 0)
 

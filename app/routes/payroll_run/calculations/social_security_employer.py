@@ -42,7 +42,6 @@ async def py_social_security_employer_ff(employee_id: ObjectId, main_payroll_ele
             social_security_ceiling = value
 
         social_security_employer = social_security_employer_percentage * min(value, social_security_ceiling)
-        print(social_security_employer)
         return round(social_security_employer, 2)
 
 
