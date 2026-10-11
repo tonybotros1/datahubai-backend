@@ -4154,6 +4154,24 @@ class EmployeeLeavesModel(BaseModel):
     pay_in_advance: Optional[bool] = False
 
 
+EMPLOYEE_LEAVE_STATUSES = {
+    "new": "New",
+    "posted": "Posted",
+    "cancelled": "Cancelled",
+}
+
+
+def normalize_employee_leave_status(value: Any, default: str = "New") -> str:
+    normalized = str(value or default).strip().lower()
+    status = EMPLOYEE_LEAVE_STATUSES.get(normalized)
+    if status is None:
+        raise HTTPException(
+            status_code=422,
+            detail="Leave status must be New, Posted, or Cancelled",
+        )
+    return status
+
+
 employee_leave_details_pipeline = [
     {
         '$lookup': {
@@ -4348,7 +4366,7 @@ async def add_new_employee_leave(employee_id: str, leave_data: EmployeeLeavesMod
             leave_data['leave_type'] = ObjectId(leave_data['leave_type']) if leave_data['leave_type'] else None
 
         leave_data['company_id'] = company_id
-        leave_data['status'] = "New"
+        leave_data['status'] = normalize_employee_leave_status(leave_data.get('status'))
         leave_data['employee_id'] = ObjectId(employee_id)
         leave_data['createdAt'] = security.now_utc()
         leave_data['updatedAt'] = security.now_utc()
@@ -4359,6 +4377,8 @@ async def add_new_employee_leave(employee_id: str, leave_data: EmployeeLeavesMod
         added_leave = await get_employee_leave_details(added_leave_details.inserted_id)
         return {"new_leave": added_leave}
 
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -4370,19 +4390,49 @@ async def update_employee_leave(leave_id: str, leave_data: EmployeeLeavesModel,
         if not leave_id:
             raise HTTPException(status_code=404, detail="Leave ID not found")
         company_id = ObjectId(data.get("company_id"))
+        leave_object_id = ObjectId(leave_id)
+        existing_leave = await employees_leaves_collection.find_one(
+            {"_id": leave_object_id, "company_id": company_id},
+            {"status": 1},
+        )
+        if not existing_leave:
+            raise HTTPException(status_code=404, detail="Employee leave not found")
+        current_status = normalize_employee_leave_status(existing_leave.get('status'))
+        if current_status != "New":
+            raise HTTPException(
+                status_code=409,
+                detail="Only new employee leaves can be changed",
+            )
+
         leave_data = leave_data.model_dump(exclude_unset=True)
+        leave_data['status'] = normalize_employee_leave_status(
+            leave_data.get('status'),
+            default=current_status,
+        )
         if 'leave_type' in leave_data and leave_data.get('leave_type'):
             leave_data['leave_type'] = ObjectId(leave_data['leave_type']) if leave_data['leave_type'] else None
 
         leave_data['updatedAt'] = security.now_utc()
+        status_filter = (
+            {"status": existing_leave.get("status")}
+            if "status" in existing_leave
+            else {"status": {"$exists": False}}
+        )
         updated_leave_details = await employees_leaves_collection.update_one(
-            {"_id": ObjectId(leave_id), "company_id": company_id},
+            {
+                "_id": leave_object_id,
+                "company_id": company_id,
+                **status_filter,
+            },
             {"$set": leave_data},
         )
         if updated_leave_details.matched_count == 0:
-            raise HTTPException(status_code=404, detail="Employee leave not found")
+            raise HTTPException(
+                status_code=409,
+                detail="Employee leave status changed; refresh and try again",
+            )
 
-        updated_leave = await get_employee_leave_details(ObjectId(leave_id))
+        updated_leave = await get_employee_leave_details(leave_object_id)
         return {"update_leave": updated_leave}
 
     except HTTPException:

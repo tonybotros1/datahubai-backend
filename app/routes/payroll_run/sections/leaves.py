@@ -33,6 +33,7 @@ async def calculate_employee_leaves(
     elements_values_maps = {current_employee_id: []}
 
     employee_leaves = leaves_by_employee.get(current_employee_id, [])
+    print(employee_leaves)
 
     for leave in employee_leaves:
         # leave_id = leave.get("_id")
@@ -79,6 +80,7 @@ async def calculate_employee_leaves(
                     "number": l_days
                 })
             elif function.upper() == "PY_UNPAID_LEAVE_FF":
+                print('yes')
                 final_value, leave_days = await py_unpaid_leave_ff(leave_type, current_employee_id,
                                                                    period_start_date,
                                                                    period_end_date, based_element_id,

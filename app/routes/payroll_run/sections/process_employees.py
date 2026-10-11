@@ -31,6 +31,7 @@ async def process_payroll_employees(
             context,
             data,
         ))
+        print(employee_elements)
         employee_elements.extend(await calculate_employee_loans(
             employee,
             context,
