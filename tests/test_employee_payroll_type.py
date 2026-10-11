@@ -204,6 +204,7 @@ class EmployeePayrollTypeTests(unittest.IsolatedAsyncioTestCase):
                 {"_id": employee_id},
                 period,
                 context,
+                [],
             )
 
         self.assertEqual(results[0]["employee_type"], "Monthly")

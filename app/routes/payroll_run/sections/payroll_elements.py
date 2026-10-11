@@ -17,6 +17,7 @@ from ..calculations import (
     py_service_tax_ff,
     py_social_security_employee_ff,
     py_social_security_employer_ff,
+    py_x_percent_of_total_earnings,
 )
 from .context import PayrollPeriod, PayrollRunContext
 
@@ -40,6 +41,7 @@ async def calculate_employee_payroll_elements(
     payroll_definitions_by_id = context.payroll_definitions_by_id
     employee_element_value = context.employee_element_value
     elements_values_maps = {current_employee_id: []}
+    percent_of_total_earnings_elements = []
 
     payroll_elements = payroll_elements_by_employee.get(current_employee_id, [])
     employee_types_by_assignment_id = {
@@ -61,6 +63,19 @@ async def calculate_employee_payroll_elements(
             element_definition = payroll_definitions_by_id.get(employee_payroll.get("name"))
             element_function = element_definition.get("function") if element_definition else None
             if element_function:
+                if element_function.upper() in {
+                    "PY_X_PERCENT_OF_TOTAL_EARNINGS",
+                    "PY_X_PERCENT_OF_TOTAL_EARNINGS_FF",
+                }:
+                    if is_within_period(
+                        element_start,
+                        element_end,
+                        period_start_date,
+                        period_end_date,
+                    ):
+                        percent_of_total_earnings_elements.append(employee_payroll)
+                    continue
+
                 if element_function.upper() == "PY_INPUT_VALUE_FF":
                     value = await py_input_value_ff(employee_hire_date, employee_end_date, element_start,
                                                     element_value,
@@ -220,6 +235,21 @@ async def calculate_employee_payroll_elements(
                             })
 
     calculated_elements = elements_values_maps[current_employee_id]
+    current_employee_elements = [*employee_elements, *calculated_elements]
+    for employee_payroll in percent_of_total_earnings_elements:
+        value = await py_x_percent_of_total_earnings(
+            employee_payroll.get("value"),
+            current_employee_elements,
+            payroll_definitions_by_id,
+        )
+        if value:
+            calculated_elements.append({
+                "element_id": employee_payroll.get("_id"),
+                "value": value,
+                "payroll_element_id": employee_payroll.get("name"),
+                "number": 0,
+            })
+
     for calculated_element in calculated_elements:
         calculated_element["employee_type"] = employee_types_by_assignment_id.get(
             calculated_element.get("element_id"),

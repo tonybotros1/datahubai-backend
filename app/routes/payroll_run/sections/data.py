@@ -237,7 +237,7 @@ async def load_payroll_run_context(
 
     payroll_definitions_task = payroll_elements_collection.find(
         {"_id": {"$in": list(payroll_definition_ids)}},
-        {"function": 1},
+        {"function": 1, "type": 1},
     ).to_list(None)
 
     based_elements_task = payroll_elements_based_elements_collection.find(

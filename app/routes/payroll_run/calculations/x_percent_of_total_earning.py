@@ -1,50 +1,58 @@
-from datetime import datetime
-from typing import Optional, List
+import math
+from collections.abc import Mapping, Sequence
+from typing import Any, Optional
 
 from bson import ObjectId
 from fastapi import HTTPException
 
-from app.routes.payroll_runs_widgets.helpers_functions import (
-    calculate_progressive_income_tax,
-    get_employee_element_value,
-    income_tax_brackets,
-)
-from ..collections import legislations_collection
 
+async def py_x_percent_of_total_earnings(
+    percent_value: Optional[float],
+    employee_elements: Sequence[Mapping[str, Any]],
+    payroll_definitions_by_id: Mapping[ObjectId, Mapping[str, Any]],
+) -> float:
+    """Return a percentage of the employee's calculated earning elements.
 
-async def py_x_percent_of_total_earnings(percent_value: float, employee_id: ObjectId, based_element_id: ObjectId,
-                                     legislation: ObjectId,
-                                     period_start_date: datetime, period_end_date: datetime,
-                                     based_value: Optional[float] = None,
-                                     employee_elements: List[dict] = None,
-                                     legislation_document: Optional[dict] = None):
+    ``employee_elements`` contains values already calculated for the current
+    payroll run. Looking up each row's definition in the in-memory mapping
+    avoids a database query for every element.
+    """
     try:
-        deducted_amount_from_the_salary_because_of_the_leaves = 0
-        for element in employee_elements:
-            deducted_amount_from_the_salary_because_of_the_leaves += element['value'] if 'value' in element else 0
+        percentage = float(percent_value or 0)
+    except (TypeError, ValueError) as error:
+        raise HTTPException(
+            status_code=400,
+            detail="Percentage value must be a valid number",
+        ) from error
 
+    if not math.isfinite(percentage) or percentage < 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Percentage value must be a finite, non-negative number",
+        )
 
+    earning_values = []
+    for element in employee_elements:
+        definition = payroll_definitions_by_id.get(
+            element.get("payroll_element_id")
+        )
+        element_type = str((definition or {}).get("type") or "").strip().lower()
+        if element_type != "earning":
+            continue
 
-        # value = based_value
-        # if value is None:
-        #     value = await get_employee_element_value(based_element_id, employee_id, period_start_date, period_end_date)
-        # value = value - deducted_amount_from_the_salary_because_of_the_leaves
-        #
-        # taxable_income_before_exemption = (value or 0)
-        #
-        # legislation_doc = legislation_document
-        # if legislation_doc is None:
-        #     legislation_doc = await legislations_collection.find_one({"_id": legislation})
-        # if not legislation_doc:
-        #     raise HTTPException(status_code=404, detail="Legislation not found")
-        #
-        # taxable_amount = max(taxable_income_before_exemption - income_tax_exemption, 0) * 12
-        # income_tax = calculate_progressive_income_tax(
-        #     taxable_amount,
-        #     income_tax_brackets(legislation_doc),
-        # )
-        #
-        # return round(income_tax / 12, 2)
+        try:
+            value = float(element.get("value") or 0)
+        except (TypeError, ValueError) as error:
+            raise HTTPException(
+                status_code=400,
+                detail="Earning element value must be a valid number",
+            ) from error
+        if not math.isfinite(value):
+            raise HTTPException(
+                status_code=400,
+                detail="Earning element value must be finite",
+            )
+        earning_values.append(value)
 
-    except Exception as e:
-        raise e
+    total_earnings = math.fsum(earning_values)
+    return round(total_earnings * percentage / 100, 2)

@@ -15,5 +15,6 @@ from .sick_leave import py_sick_leave_ff
 from .social_security_employee import py_social_security_employee_ff
 from .social_security_employer import py_social_security_employer_ff
 from .unpaid_leave import py_unpaid_leave_ff
+from .x_percent_of_total_earning import py_x_percent_of_total_earnings
 
 __all__ = [name for name in globals() if name.startswith("py_")]
